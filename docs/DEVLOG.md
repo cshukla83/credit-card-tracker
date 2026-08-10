@@ -208,3 +208,146 @@ verified via `git log --stat` and `git log --oneline`.
 ### Next steps
 Set `git config user.name` / `user.email` explicitly if the auto-detected identity
 isn't correct. Begin building the PDF statement parser using `pdfplumber`.
+
+---
+
+## Session 3 — 2026-08-10
+
+### Goal
+Add support for opening a password-protected sample HDFC statement: install
+`python-dotenv`, store the statement's password in a git-ignored `.env` file, and
+write a script that loads it and extracts the first page's raw text with
+`pdfplumber`.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Add python-dotenv to requirements.txt and install it. Create a .env file in the
+> project root with a variable HDFC_SAMPLE_PASSWORD (I'll fill in the actual value
+> myself after — leave it as a placeholder). Confirm .env is already covered by
+> .gitignore. Then write a script that uses python-dotenv to load this password and
+> opens data/statements/hdfc_sample.pdf with pdfplumber using it, printing the first
+> page's raw text."
+
+**Pre-existing issue found and fixed:**
+The sample PDF actually existed at `data/statememts/HDFC-July2026-Statement.pdf` — the
+directory name was misspelled ("statememts") and the filename didn't match what was
+asked for. Confirmed with the user, then renamed both to match the intended path:
+`data/statements/hdfc_sample.pdf`.
+
+**Commands run:**
+
+```bash
+mv data/statememts data/statements
+mv data/statements/HDFC-July2026-Statement.pdf data/statements/hdfc_sample.pdf
+```
+Fixes the directory spelling and renames the statement file so the path matches what
+the script (and this session's instructions) expect.
+
+**`requirements.txt` change:**
+Added `python-dotenv` — a library that reads `KEY=value` pairs from a `.env` file and
+loads them into `os.environ`, so secrets like statement passwords don't need to be
+hardcoded or exported manually in the shell.
+
+```bash
+pip install -q python-dotenv
+```
+Installs the new dependency into the project's `venv`. Confirmed with `pip show
+python-dotenv` (version 1.2.2).
+
+**`.env` file created at the project root:**
+```
+HDFC_SAMPLE_PASSWORD=changeme
+```
+A new environment variable, `HDFC_SAMPLE_PASSWORD`, holding the password needed to
+open the sample HDFC PDF statement with `pdfplumber` (password-protected statement
+PDFs are common for Indian bank e-statements — typically some combination of
+name/DOB/account digits set by the bank). Left as a `changeme` placeholder — the real
+password is meant to be filled in locally by hand, not written by Claude Code, and is
+**not** recorded anywhere in this log.
+
+```bash
+git check-ignore -v .env
+```
+Confirms `.env` is matched by the `.env` rule already present in `.gitignore` (added
+in Session 2). Also confirmed with `git status --short`, which shows `.env` does not
+appear at all — proof it's excluded, not just untracked.
+
+**Code written — `read_statement.py`:**
+```python
+import os
+
+import pdfplumber
+from dotenv import load_dotenv
+
+load_dotenv()
+
+password = os.environ["HDFC_SAMPLE_PASSWORD"]
+pdf_path = "data/statements/hdfc_sample.pdf"
+
+with pdfplumber.open(pdf_path, password=password) as pdf:
+    first_page = pdf.pages[0]
+    print(first_page.extract_text())
+```
+- `load_dotenv()` reads the `.env` file in the current directory and populates
+  `os.environ` with its keys, so no separate config-loading code is needed.
+- `os.environ["HDFC_SAMPLE_PASSWORD"]` reads the password out of the environment
+  rather than hardcoding it in source.
+- `pdfplumber.open(pdf_path, password=password)` opens the (possibly encrypted)
+  statement PDF using that password.
+- `first_page.extract_text()` pulls the raw text layer off page 1 and prints it.
+
+**Verification:**
+```bash
+python -m py_compile read_statement.py
+```
+Confirmed the script has no syntax errors. Did **not** run it end-to-end: the `.env`
+password is still the `changeme` placeholder, so a real run would either fail (if the
+PDF is encrypted) or print real personal financial data from the statement straight
+into the terminal/session (if it isn't). Running it with the real password is left to
+be done locally, by hand.
+
+### Outcome
+`python-dotenv` installed and added to `requirements.txt`. `.env` created with a
+placeholder `HDFC_SAMPLE_PASSWORD` and confirmed to be git-ignored. Sample statement
+PDF relocated to the expected path. `read_statement.py` written and syntax-verified,
+ready to run once the real password is filled in locally.
+
+### Next steps
+Fill in the real `HDFC_SAMPLE_PASSWORD` value in `.env` (locally, not via Claude
+Code) and run `read_statement.py` to confirm the password and text extraction both
+work. Then move from printing raw text to actually parsing transactions out of it.
+
+---
+
+## Session 4 — 2026-08-10
+
+### Goal
+Fill in the real `HDFC_SAMPLE_PASSWORD` and verify `read_statement.py` end to end.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Update .env with the real HDFC statement password (provided separately, not
+> included in this log)." — followed by "yes, run it" once asked whether to execute
+> the script.
+
+Replaced the `changeme` placeholder in `.env` with the real password. Re-confirmed via
+`git status --short` that `.env` still did not appear (i.e. remains git-ignored) after
+the edit.
+
+```bash
+python read_statement.py
+```
+Ran the script with the real password against `data/statements/hdfc_sample.pdf`.
+
+### Outcome
+Success — the password correctly decrypted the PDF and `pdfplumber` extracted page 1's
+text. This verifies the full chain: `.env` → `python-dotenv` → `pdfplumber` password
+handling → text extraction. The actual extracted statement text (account details,
+transactions, balances) is **not** reproduced here, since it's real personal financial
+data — only the fact that the run succeeded is logged.
+
+### Next steps
+Move from printing raw text to actually parsing structured transactions (date,
+description, amount) out of the statement text.
