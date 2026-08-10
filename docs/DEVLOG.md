@@ -351,3 +351,55 @@ data — only the fact that the run succeeded is logged.
 ### Next steps
 Move from printing raw text to actually parsing structured transactions (date,
 description, amount) out of the statement text.
+
+---
+
+## Session 5 — 2026-08-10
+
+### Goal
+Fix and document a secret-handling mistake: the real HDFC statement password was
+logged verbatim in the Session 4 entry's "Prompt given to Claude Code" quote.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Append a new dated entry to docs/DEVLOG.md (Session 5) documenting that the real
+> HDFC statement password was accidentally logged verbatim in Session 4's DEVLOG
+> entry (now fixed via git commit --amend, confirmed removed from all git history via
+> git log --all -p). Do not include the actual password value anywhere in this entry.
+> Note the lesson: never include actual secret values in prompts when the instruction
+> is to log prompts verbatim — set secrets directly in .env by hand instead."
+
+**What went wrong:**
+In Session 4, the actual password value was included directly in the prompt text
+asking Claude Code to write it into `.env`. Because the DEVLOG convention is to quote
+the prompt given to Claude Code verbatim, that same prompt — including the plaintext
+password — was written into Session 4's DEVLOG entry and committed to git.
+
+**Fix applied:**
+- The Session 4 "Prompt given to Claude Code" quote was rewritten to describe the
+  action without reproducing the secret value.
+- The commit containing the leaked value was rewritten via `git commit --amend`.
+- Verified removal with:
+  ```bash
+  git log --all -p | grep -i "<password>"
+  ```
+  Confirmed no match across all commits/refs, and confirmed no match in the current
+  working tree.
+
+### Outcome
+The real password no longer appears anywhere in `docs/DEVLOG.md`, the current working
+tree, or any commit reachable via `git log --all -p`. `.env` (git-ignored, never
+committed) remains the only place the real value lives.
+
+### Lesson learned
+Never put an actual secret value inside a prompt when the instruction also asks for
+that prompt to be logged verbatim — the secret will get copied straight into the log
+(and, if committed, into git history) along with it. Instead, set secret values
+directly in `.env` by hand (outside of any prompt text), and phrase prompts to Claude
+Code in terms of *what* to do ("update .env with the real password") rather than
+including the value itself.
+
+### Next steps
+Move from printing raw text to actually parsing structured transactions (date,
+description, amount) out of the statement text.
