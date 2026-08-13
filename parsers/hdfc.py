@@ -13,13 +13,17 @@ _CURRENCY_RE = r"C\s*([\d,]+\.\d{2})"
 
 # Matches one transaction line as it comes out of pdfplumber's extract_text(),
 # e.g. "17/06/2026| 21:45 SOME MERCHANT C 216.00 l" or, when reward points were
-# earned, "...SOME MERCHANT + 80 C 2,438.00 l". A lone "+" with no digits before
-# the amount (no reward points earned that transaction) is also tolerated.
+# earned, "...SOME MERCHANT + 80 C 2,438.00 l". Reward points can also be negative
+# (points clawed back, e.g. on a merchant refund of a purchase that had earned
+# points): "...SOME MERCHANT - 65 + C 216.00 l". A lone "+" with no digits before
+# the amount is captured as credit_marker: in practice this bare "+" reliably
+# marks non-purchase lines (payments, refunds) even when the description carries
+# no recognizable keyword.
 _TXN_LINE_RE = re.compile(
     r"^(?P<date>\d{2}/\d{2}/\d{4})\|\s*(?P<time>\d{2}:\d{2})\s+"
     r"(?P<desc>.*?)\s*"
-    r"(?:\+\s*(?P<points>\d+)\s+)?"
-    r"(?:\+\s+)?"
+    r"(?:(?P<points_sign>[+-])\s*(?P<points>\d+)\s+)?"
+    r"(?:(?P<credit_marker>\+)\s+)?"
     r"C\s*(?P<amount>[\d,]+\.\d{2})\s+\S+\s*$"
 )
 
@@ -66,9 +70,16 @@ def extract_summary(pdf_path: str, password: str) -> dict:
     return summary
 
 
-def _classify(description: str, amount: float, credits_received_total: float | None) -> str:
+def _classify(
+    description: str,
+    amount: float,
+    credits_received_total: float | None,
+    has_credit_marker: bool,
+) -> str:
     upper_desc = description.upper()
     if any(keyword in upper_desc for keyword in CREDIT_KEYWORDS):
+        return "credit"
+    if has_credit_marker:
         return "credit"
     if credits_received_total is not None and abs(amount - credits_received_total) < 0.01:
         return "credit"
@@ -95,14 +106,20 @@ def parse(pdf_path: str, password: str) -> "list[Transaction]":
                 description = match.group("desc").strip()
                 amount = _to_float(match.group("amount"))
                 points = match.group("points")
+                points_sign = match.group("points_sign")
+                has_credit_marker = match.group("credit_marker") is not None
+
+                reward_points = int(points) if points else None
+                if reward_points is not None and points_sign == "-":
+                    reward_points = -reward_points
 
                 transactions.append(
                     Transaction(
                         date=date,
                         description=description,
                         amount=amount,
-                        type=_classify(description, amount, credits_received_total),
-                        reward_points=int(points) if points else None,
+                        type=_classify(description, amount, credits_received_total, has_credit_marker),
+                        reward_points=reward_points,
                     )
                 )
 

@@ -622,3 +622,147 @@ Try the parser against a second/different statement (or month) to see whether th
 regex and summary-box parsing generalize, or whether they're overfit to this one
 sample's exact layout. Consider what to do with transactions that don't match
 `_TXN_LINE_RE` at all (currently silently skipped).
+
+---
+
+## Session 9 — 2026-08-13
+
+### Goal
+Run the parser against a second sample statement (`hdfc_sample_2.pdf`) to test
+whether Session 8's regex and classifier generalize, and fix whatever breaks.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Run the existing parsers/hdfc.py against a second sample statement at
+> data/statements/hdfc_sample_2.pdf, using the same password from .env... Reuse
+> run_hdfc_parser.py's logic but point it at this new file, either by
+> parameterizing the script to accept a file path argument or creating a second
+> small script, whichever is cleaner. Report only: transaction count (debit vs
+> credit), and whether both totals reconcile... If reconciliation fails or the
+> transaction count looks wrong, investigate why... and report what needs to
+> change in the regex/classifier."
+
+**`run_hdfc_parser.py` change:**
+Parameterized rather than duplicated: added an optional positional `pdf_path`
+argument (via `argparse`, defaulting to the original sample) so the same script
+works against any statement file.
+
+**Initial result against `hdfc_sample_2.pdf`:** both debit and credit totals failed
+to reconcile.
+
+**Investigation (all done via local diagnostics — descriptions/amounts inspected
+locally, never printed to chat):**
+1. Checked for transaction-shaped lines (starting with a date) that the regex
+   failed to match at all — none found. Every date-prefixed line matched.
+2. Checked for any currency-bearing line missed entirely (outside known
+   summary/EMI-total rows) — none found on any of the 3 pages.
+3. Verified the summary box's column order/positions by testing the statement's
+   own arithmetic identity (`previous_dues − credits_received + purchases_debit +
+   finance_charges = total_amount_due`) against all orderings of the 4 extracted
+   summary amounts — confirmed `payments_credits_received` was being read from the
+   correct position.
+4. Computed the debit-side and credit-side reconciliation gaps and found they were
+   exactly equal in magnitude and opposite in sign — proof the total parsed amount
+   was correct, just split wrong between the two buckets (conservation check:
+   `sum(all parsed transactions) == purchases_debit + payments_credits_received`,
+   confirmed true).
+5. Searched combinations of debit-classified transactions for one whose amount (or
+   small sum of amounts) equalled the shortfall — found a single debit-classified
+   transaction whose amount exactly matched.
+6. Inspected that transaction's parsed fields (lengths/shapes only): its
+   `reward_points` was `None`, and its description ended in a stray digit token —
+   a sign the parser had absorbed something it should have treated as structured
+   data. Checking the two raw tokens immediately preceding the amount on that line
+   showed the reward-points-shaped digit and the `+` in **reversed order**
+   (`<digits> +` instead of the usual `+ <digits>`) compared to every other line.
+
+**Root cause:** the regex's second `+` alternative (matching a bare `+` directly
+before the amount, with no digits — previously only used to *tolerate*, not
+*classify*) is exactly the shape of a non-purchase (payment/refund) line: it's the
+same shape the one correctly-classified credit transaction has in Session 8's
+sample. This second statement has **two** such lines, but only one contains a
+recognizable keyword (`PAYMENT`); the other has no keyword and its amount doesn't
+individually equal the full credits-received total (since that total is the *sum*
+of both credit lines) — so it fell through both existing classification rules and
+landed in "debit". The amount-equality fallback is inherently fragile whenever a
+statement has more than one credit-type transaction, since no single transaction's
+amount will equal an aggregate total in that case.
+
+**Fix applied to `parsers/hdfc.py`:**
+- `_TXN_LINE_RE`'s bare-`+` alternative is now a named group (`credit_marker`)
+  instead of an unnamed, discarded one — its presence is now visible to the caller
+  instead of just being silently consumed.
+- `_classify()` gained a third rule: treat a bare `credit_marker` (with no reward
+  points captured) as a credit signal, checked after keywords and before the
+  amount-equality fallback.
+- `parse()` now passes `has_credit_marker` through to `_classify()`.
+
+**Re-verification after the fix:**
+```bash
+python run_hdfc_parser.py
+python run_hdfc_parser.py data/statements/hdfc_sample_2.pdf
+```
+```
+Transactions parsed: 26 (25 debit, 1 credit)
+Debit total reconciles with statement summary: yes
+Credit total reconciles with statement summary: yes
+
+Transactions parsed: 12 (10 debit, 2 credit)
+Debit total reconciles with statement summary: yes
+Credit total reconciles with statement summary: yes
+```
+The first statement's result is unchanged (its one credit line already had a
+keyword match, so the new rule doesn't affect it) — confirming the fix is additive,
+not a regression.
+
+### Outcome
+`hdfc_sample_2.pdf` now parses and reconciles correctly (10 debit, 2 credit), and
+`hdfc_sample.pdf` continues to reconcile as before. The classifier's amount-equality
+fallback is confirmed fragile for statements with multiple credit-type transactions;
+the structural bare-`+` marker turned out to be the more reliable signal, matching
+what was worked out analytically (before any code was written) back when discussing
+how to tell debits from credits in this statement format.
+
+### Correction: the "reversed token order" was actually a minus sign
+After reporting the above as a known limitation, it was clarified (by the account
+holder, who recognized the transaction) that this line isn't a token-order quirk at
+all: it's a **merchant refund** of an earlier purchase. The merchant name repeats
+(refunds show up under the original merchant, not as a distinctly labeled line,
+which is why no keyword ever catches it), and because the original purchase had
+earned reward points, the refund **claws those points back** — shown in the raw
+text as a minus sign before the points count: `MERCHANT − 65 + C <amount> l`. What
+looked like reversed token order (`['65', '+']`) was actually the last two tokens
+of a longer `- 65 +` sequence — the leading `-` had been getting silently absorbed
+into `description` because `_TXN_LINE_RE`'s points group only ever recognized a
+leading `+`.
+
+**Fix applied to `parsers/hdfc.py`:**
+- `_TXN_LINE_RE`'s points group is now sign-aware: `(?P<points_sign>[+-])\s*(?P<points>\d+)` instead of a hardcoded `\+`, so it captures `- 65` the same way it captures `+ 80`.
+- `parse()` now applies that sign, so `reward_points` comes out negative
+  (e.g. a clawback) instead of `None` with the digits stuck in `description`.
+
+**Re-verification:**
+```bash
+python run_hdfc_parser.py
+python run_hdfc_parser.py data/statements/hdfc_sample_2.pdf
+```
+Both statements still reconcile exactly as before (26 txns / 25 debit / 1 credit,
+and 12 txns / 10 debit / 2 credit respectively) — this fix only affects the
+`reward_points` and `description` fields, not classification or amounts. Confirmed
+the refund line's `reward_points` is now negative and its `description` no longer
+ends in a stray digit.
+
+### Outcome
+`hdfc_sample_2.pdf` parses and reconciles correctly (10 debit, 2 credit), with
+correctly signed reward points on the refund/clawback line, and `hdfc_sample.pdf`
+continues to reconcile as before. Two real gaps were found and fixed in this
+session: (1) the classifier's amount-equality fallback breaks whenever a statement
+has more than one credit-type transaction — fixed by using the structural bare-`+`
+marker as a classification signal; (2) the points-parsing regex assumed points are
+always non-negative — fixed by making the sign explicit in the regex instead of
+hardcoded.
+
+### Next steps
+Consider testing against a statement with zero credit transactions and one with
+more than two, to further stress-test the classifier and the points-sign handling.

@@ -1,3 +1,4 @@
+import argparse
 import os
 
 from dotenv import load_dotenv
@@ -6,7 +7,7 @@ from parsers.hdfc import extract_summary, parse
 
 load_dotenv()
 
-PDF_PATH = "data/statements/hdfc_sample.pdf"
+DEFAULT_PDF_PATH = "data/statements/hdfc_sample.pdf"
 PASSWORD = os.environ["HDFC_SAMPLE_PASSWORD"]
 
 
@@ -23,8 +24,12 @@ def _yes_no(value):
 
 
 def main():
-    transactions = parse(PDF_PATH, PASSWORD)
-    summary = extract_summary(PDF_PATH, PASSWORD)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("pdf_path", nargs="?", default=DEFAULT_PDF_PATH)
+    args = parser.parse_args()
+
+    transactions = parse(args.pdf_path, PASSWORD)
+    summary = extract_summary(args.pdf_path, PASSWORD)
 
     debits = [t for t in transactions if t["type"] == "debit"]
     credits = [t for t in transactions if t["type"] == "credit"]
