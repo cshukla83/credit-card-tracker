@@ -831,3 +831,104 @@ A fourth sample statement (`hdfc_sample_4.PDF`) is now also present in
 has an uppercase `.PDF` extension, which is fine for `pdfplumber`/the file system
 on macOS but worth being aware of if any future path-matching logic is added
 (e.g. globbing for `*.pdf` would miss it on a case-sensitive filesystem).
+
+---
+
+## Session 11 — 2026-08-13
+
+### Goal
+Run the parser against a fourth sample statement (`hdfc_sample_4.PDF`) — flagged in
+advance as likely using an older HDFC template — and make the parser handle
+whichever layout it turns out to be, not just report failure.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Run it against hdfc_sample_4.PDF too. the 4th statement structure is probably
+> different. this is an old statement. I think bank change the layout recently
+> hence the structure differs. but we should be able to do the job irrespective
+> of it."
+
+**Initial result:**
+```bash
+python run_hdfc_parser.py "data/statements/hdfc_sample_4.PDF"
+```
+```
+Transactions parsed: 0 (0 debit, 0 credit)
+Debit total reconciles with statement summary: unknown (summary total not found)
+Credit total reconciles with statement summary: unknown (summary total not found)
+```
+Zero transactions *and* failed summary extraction — a much bigger gap than Sessions
+9/10 (which were single-transaction misclassifications). This pointed at a
+structurally different template rather than a data edge case, matching the
+prediction.
+
+**Investigation:** dumped the statement's raw text to a local, git-ignored file
+(`data/exploration_output_4.txt`, same pattern as `explore_structure.py`'s output)
+and reviewed it locally. Confirmed a genuinely different layout, not a variant of
+the current one:
+- No currency-symbol prefix on amounts at all (current layout uses a "C" glyph
+  before every amount; this layout has bare numbers).
+- No `|` between date and time; time (when present — it's sometimes omitted
+  entirely) includes seconds, not just hours:minutes.
+- Reward points appear as a bare, unsigned integer token — no `+`/`-` prefix.
+- Credits are marked with a literal `Cr` suffix glued directly onto the amount
+  (no space) — an explicit, unambiguous marker, unlike the current layout's bare
+  `+` heuristic.
+- The summary box has no `=`/`_` line anchors — it's a labeled "Account Summary"
+  section followed by a line of five plain numbers.
+
+**Design decision:** rather than trying to make one regex/summary-parser handle
+both templates, added a second implementation and an auto-detecting dispatcher:
+- **`parsers/hdfc_legacy.py`** (new) — implements the same `parse()`/
+  `extract_summary()` contract from `parsers/base.py` for this older layout.
+  - `_TXN_LINE_RE` matches date, optional `HH:MM:SS` time, description, optional
+    bare reward-points integer, amount, optional glued-on `Cr` suffix.
+  - A guard rejects any regex match whose description contains no letters at
+    all — needed because the statement's own "Payment Due Date / Total Dues /
+    Minimum Amount Due" summary row (`08/03/2025 58,611.00 9,560.00`) is
+    date-prefixed and number-heavy enough that, without this check, it could be
+    misparsed as a real (nonsensical) transaction line.
+  - `extract_summary()` locates the 5-number "Account Summary" line by looking,
+    line by line, for the first line *after* the "Account Summary" header whose
+    tokens are all amount-shaped and number exactly five — avoiding both the
+    differently-sized "Past Dues" row (6 numbers) and a same-shaped 5-number GST
+    summary row that exists elsewhere in the document (excluded by only scanning
+    page 1, where the GST summary doesn't appear).
+  - Classification is just "credit if the `Cr` suffix is present, debit
+    otherwise" — deliberately *not* keyword-based here, since a legitimate
+    purchase line in this statement contains the word "PAYMENTS" as part of a
+    merchant-EMI description, which would have produced a false positive under
+    the current layout's keyword rule.
+- **`parsers/hdfc.py`** — renamed its existing implementation functions to
+  `_parse_current_layout()` / `_extract_summary_current_layout()` (unchanged
+  internally), added `_detect_layout()` (sniffs page 1 for `"PAYMENTS/CREDITS"`
+  vs `"Account Summary"` as landmark strings), and made `parse()` /
+  `extract_summary()` public dispatchers that pick the right implementation
+  based on detected layout. `run_hdfc_parser.py` needed no changes — it still
+  just calls `parse()`/`extract_summary()` from `parsers.hdfc`.
+
+**Re-verification after the fix:**
+```
+sample 1: 26 txns (25 debit, 1 credit) — reconciles: yes / yes
+sample 2: 12 txns (10 debit, 2 credit) — reconciles: yes / yes
+sample 3: 26 txns (25 debit, 1 credit) — reconciles: yes / yes
+sample 4: 22 txns (21 debit, 1 credit) — reconciles: yes / yes
+```
+Also spot-checked (locally, shapes/lengths only) that all 22 of sample 4's parsed
+transactions have letter-containing descriptions, confirming the summary-row guard
+correctly filtered out the one line it was designed to catch without rejecting any
+real transaction.
+
+### Outcome
+All four sample statements — spanning two structurally different HDFC layouts —
+now parse and reconcile correctly through the same public `parsers.hdfc.parse()` /
+`extract_summary()` entry points, with format detection happening automatically.
+No caller-facing changes were needed in `run_hdfc_parser.py`.
+
+### Next steps
+If a third layout ever shows up, the `_detect_layout()` landmark-string approach
+should extend cleanly (add a new landmark check and a new `parsers/hdfc_<name>.py`
+module). Consider whether `_detect_layout()`'s `ValueError` on an unrecognized
+layout is the right failure mode, or whether callers should get a clearer
+"unsupported statement format" message.

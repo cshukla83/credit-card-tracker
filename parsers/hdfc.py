@@ -5,6 +5,7 @@ from datetime import datetime
 
 import pdfplumber
 
+from parsers import hdfc_legacy
 from parsers.base import Transaction
 
 CREDIT_KEYWORDS = ("PAYMENT", "REFUND", "REVERSAL", "CASHBACK", "CREDIT")
@@ -32,11 +33,11 @@ def _to_float(amount_str: str) -> float:
     return float(amount_str.replace(",", ""))
 
 
-def extract_summary(pdf_path: str, password: str) -> dict:
+def _extract_summary_current_layout(pdf_path: str, password: str) -> dict:
     """Pull the page-1 summary box's key totals, used to cross-check parsed transactions.
 
-    Tailored to this statement's specific text-extraction layout, where the
-    summary figures land on one line ending in "=" (previous dues, credits
+    Tailored to the current (2026-era) statement's text-extraction layout, where
+    the summary figures land on one line ending in "=" (previous dues, credits
     received, purchases/debit, finance charges, in that order) and the total
     amount due lands on a separate line starting with "_".
     """
@@ -86,8 +87,8 @@ def _classify(
     return "debit"
 
 
-def parse(pdf_path: str, password: str) -> "list[Transaction]":
-    summary = extract_summary(pdf_path, password)
+def _parse_current_layout(pdf_path: str, password: str) -> "list[Transaction]":
+    summary = _extract_summary_current_layout(pdf_path, password)
     credits_received_total = summary["payments_credits_received"]
 
     transactions: list[Transaction] = []
@@ -124,3 +125,34 @@ def parse(pdf_path: str, password: str) -> "list[Transaction]":
                 )
 
     return transactions
+
+
+def _detect_layout(pdf_path: str, password: str) -> str:
+    """Sniff page 1 for a landmark string unique to each known HDFC statement layout.
+
+    HDFC changed this statement's template at some point; older statements
+    ("legacy") and newer ones ("current") need different parsing logic even
+    though both are nominally "an HDFC Diners statement".
+    """
+    with pdfplumber.open(pdf_path, password=password) as pdf:
+        text = pdf.pages[0].extract_text() or ""
+
+    if "PAYMENTS/CREDITS" in text:
+        return "current"
+    if "Account Summary" in text:
+        return "legacy"
+    raise ValueError(f"Unrecognized HDFC statement layout: {pdf_path}")
+
+
+def parse(pdf_path: str, password: str) -> "list[Transaction]":
+    layout = _detect_layout(pdf_path, password)
+    if layout == "legacy":
+        return hdfc_legacy.parse(pdf_path, password)
+    return _parse_current_layout(pdf_path, password)
+
+
+def extract_summary(pdf_path: str, password: str) -> dict:
+    layout = _detect_layout(pdf_path, password)
+    if layout == "legacy":
+        return hdfc_legacy.extract_summary(pdf_path, password)
+    return _extract_summary_current_layout(pdf_path, password)
