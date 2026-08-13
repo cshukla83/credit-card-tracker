@@ -534,3 +534,91 @@ section. No real statement content was pasted into chat or written into this log
 Write a regex-based parser over `extract_text()` output to turn each transaction line
 into structured fields (date, time, description, amount, reward points), using the
 line format identified in this session.
+
+---
+
+## Session 8 — 2026-08-13
+
+### Goal
+Turn the structural findings from Session 7 into an actual parser: a shared parser
+interface, an HDFC implementation, and a reconciliation check against the
+statement's own summary totals — without printing any real transaction data.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Create parsers/base.py defining a simple interface: a function signature
+> parse(pdf_path: str, password: str) -> list[dict]... Create parsers/hdfc.py
+> implementing this for HDFC statements... Classify a row as 'credit' if the
+> description contains payment/refund keywords (PAYMENT, REFUND, REVERSAL,
+> CASHBACK, CREDIT) OR if its amount matches the 'PAYMENTS/CREDITS RECEIVED' total
+> from the page-1 summary box. Otherwise classify as 'debit'. Write a helper that
+> also extracts the page-1 summary box's key totals... sum all debit amounts and
+> compare against the summary box's spend total; sum all credit amounts and compare
+> against the credits-received total. Print whether both reconcile (match) or not.
+> Test this against data/statements/hdfc_sample.pdf... Do not print individual
+> transaction rows... only print the reconciliation totals (do they match, yes/no)
+> and the count of transactions parsed, debits vs credits."
+
+**`parsers/base.py`:**
+Defines the shared contract as a `Transaction` `TypedDict` (`date`, `description`,
+`amount`, `type`, `reward_points`) plus a `ParseFn` type alias documenting that every
+parser module exposes `parse(pdf_path: str, password: str) -> list[Transaction]`. Kept
+intentionally minimal — no abstract base class, since a type alias is enough to
+document and check the contract for a single implementation.
+
+**`parsers/hdfc.py`:**
+- `_TXN_LINE_RE` — a single regex matching one transaction line as it comes out of
+  `extract_text()`: date, `|`, time, description, an optional `+ <points>` (reward
+  points earned), an optional lone `+` (present on the one non-purchase/payment line,
+  with no digits after it), then the currency-prefixed amount, then the trailing icon
+  glyph. Built and reasoned through against the exact line shapes recorded in
+  `data/exploration_output.txt` during Session 7 (not reproduced here).
+- `extract_summary()` — parses the page-1 summary box out of `extract_text()`
+  output: finds the line ending in `=` (which holds, in order, previous statement
+  dues / payments-credits received / purchases-debit / finance charges) and the line
+  starting with `_` (total amount due). This is explicitly tailored to this
+  statement's specific text-extraction quirks (documented in the code) — a fragile
+  approach, not a general-purpose summary-box parser.
+- `_classify()` — implements the requested rule exactly: credit if the description
+  contains a payment/refund/reversal/cashback/credit keyword, OR if the amount matches
+  the summary box's credits-received total (within a cent, to allow for float
+  rounding); debit otherwise.
+- `parse()` — opens the PDF once per page, regex-matches every line, and builds a
+  `Transaction` dict per match, using `extract_summary()`'s credits-received figure to
+  drive `_classify()`.
+
+**`run_hdfc_parser.py`:**
+A small script (same pattern as `read_statement.py` / `explore_structure.py`) that
+loads the password from `.env`, calls `parse()` and `extract_summary()`, sums debit
+and credit amounts, and compares each sum against the corresponding summary-box
+total (tolerance: 1 cent, to absorb float rounding). Deliberately prints **only**
+the transaction count (split debit/credit) and yes/no reconciliation results — never
+the sums themselves, individual rows, merchant names, or dates, since those are real
+personal financial data.
+
+```bash
+python run_hdfc_parser.py
+```
+Output:
+```
+Transactions parsed: 26 (25 debit, 1 credit)
+Debit total reconciles with statement summary: yes
+Credit total reconciles with statement summary: yes
+```
+
+### Outcome
+Parser interface (`parsers/base.py`) and HDFC implementation (`parsers/hdfc.py`)
+written and working. Against the sample statement: 26 transactions were parsed (25
+classified as debit, 1 as credit — matching the single payment/credit line identified
+structurally in Session 7), and both the debit-sum and credit-sum reconcile exactly
+with the statement's own summary-box totals. This is a strong signal the regex line
+format and the classification rule are both correct for this statement. No real
+transaction data (amounts, merchant names, dates) was printed to the terminal or
+written into this log — only counts and match results, none of which are sensitive.
+
+### Next steps
+Try the parser against a second/different statement (or month) to see whether the
+regex and summary-box parsing generalize, or whether they're overfit to this one
+sample's exact layout. Consider what to do with transactions that don't match
+`_TXN_LINE_RE` at all (currently silently skipped).
