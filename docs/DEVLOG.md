@@ -766,3 +766,68 @@ hardcoded.
 ### Next steps
 Consider testing against a statement with zero credit transactions and one with
 more than two, to further stress-test the classifier and the points-sign handling.
+
+---
+
+## Session 10 — 2026-08-13
+
+### Goal
+Run the parser against a third sample statement (`hdfc_sample_3.pdf`) as a further
+generalization check after Session 9's fixes.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Run the existing parsers/hdfc.py against a third sample statement at
+> data/statements/hdfc_sample_3.pdf, using run_hdfc_parser.py's existing file-path
+> argument... If reconciliation fails or the transaction count looks wrong,
+> investigate using the same systematic approach as before... Report what pattern
+> broke and what was fixed, not the actual values."
+
+```bash
+python run_hdfc_parser.py data/statements/hdfc_sample_3.pdf
+```
+Output:
+```
+Transactions parsed: 26 (25 debit, 1 credit)
+Debit total reconciles with statement summary: yes
+Credit total reconciles with statement summary: yes
+```
+
+Reconciled cleanly on the first attempt — no unmatched lines, no missed currency
+rows, no classification gap, so none of the Session 9-style diagnostics were needed.
+
+**Re-verification across all three sample statements**, to confirm nothing
+regressed:
+```bash
+python run_hdfc_parser.py
+python run_hdfc_parser.py data/statements/hdfc_sample_2.pdf
+python run_hdfc_parser.py data/statements/hdfc_sample_3.pdf
+```
+```
+Transactions parsed: 26 (25 debit, 1 credit)      # sample 1
+Debit total reconciles with statement summary: yes
+Credit total reconciles with statement summary: yes
+
+Transactions parsed: 12 (10 debit, 2 credit)      # sample 2
+Debit total reconciles with statement summary: yes
+Credit total reconciles with statement summary: yes
+
+Transactions parsed: 26 (25 debit, 1 credit)      # sample 3
+Debit total reconciles with statement summary: yes
+Credit total reconciles with statement summary: yes
+```
+
+### Outcome
+All three sample statements now parse and reconcile correctly with no code changes
+needed in this session. This is a useful data point: Session 9's fixes (the
+bare-`+` credit marker and signed reward points) weren't overfit to
+`hdfc_sample_2.pdf` specifically — they held up against a third, independent
+statement.
+
+### Next steps
+A fourth sample statement (`hdfc_sample_4.PDF`) is now also present in
+`data/statements/` but has not yet been tested. Try it next — note its filename
+has an uppercase `.PDF` extension, which is fine for `pdfplumber`/the file system
+on macOS but worth being aware of if any future path-matching logic is added
+(e.g. globbing for `*.pdf` would miss it on a case-sensitive filesystem).
