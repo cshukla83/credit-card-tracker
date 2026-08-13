@@ -31,7 +31,7 @@ def _to_float(amount_str: str) -> float:
     return float(amount_str.replace(",", ""))
 
 
-def extract_summary(pdf_path: str, password: str) -> dict:
+def _extract_summary_from_text(text: str) -> dict:
     """Pull the page-1 "Account Summary" box's key totals.
 
     Tailored to the pre-2025-layout statement, where these five figures
@@ -40,9 +40,6 @@ def extract_summary(pdf_path: str, password: str) -> dict:
     symbol or "=" anchor — located by finding a line of exactly 5
     amount-shaped tokens following the "Account Summary" section header.
     """
-    with pdfplumber.open(pdf_path, password=password) as pdf:
-        text = pdf.pages[0].extract_text() or ""
-
     summary = {
         "total_amount_due": None,
         "previous_statement_dues": None,
@@ -74,6 +71,40 @@ def extract_summary(pdf_path: str, password: str) -> dict:
     return summary
 
 
+def _parse_line(line: str) -> "Transaction | None":
+    match = _TXN_LINE_RE.match(line.strip())
+    if not match:
+        return None
+
+    description = match.group("desc").strip()
+    # Guards against summary/table rows that happen to start with a
+    # date-shaped token followed by nothing but numbers (no real transaction
+    # description ever lacks letters).
+    if not any(c.isalpha() for c in description):
+        return None
+
+    time_str = match.group("time") or "00:00:00"
+    date = datetime.strptime(f"{match.group('date')} {time_str}", "%d/%m/%Y %H:%M:%S")
+
+    amount = _to_float(match.group("amount"))
+    points = match.group("points")
+    is_credit = match.group("credit_marker") is not None
+
+    return Transaction(
+        date=date,
+        description=description,
+        amount=amount,
+        type="credit" if is_credit else "debit",
+        reward_points=int(points) if points else None,
+    )
+
+
+def extract_summary(pdf_path: str, password: str) -> dict:
+    with pdfplumber.open(pdf_path, password=password) as pdf:
+        text = pdf.pages[0].extract_text() or ""
+    return _extract_summary_from_text(text)
+
+
 def parse(pdf_path: str, password: str) -> "list[Transaction]":
     transactions: list[Transaction] = []
 
@@ -81,34 +112,8 @@ def parse(pdf_path: str, password: str) -> "list[Transaction]":
         for page in pdf.pages:
             text = page.extract_text() or ""
             for line in text.splitlines():
-                match = _TXN_LINE_RE.match(line.strip())
-                if not match:
-                    continue
-
-                description = match.group("desc").strip()
-                # Guards against summary/table rows that happen to start with
-                # a date-shaped token followed by nothing but numbers (no real
-                # transaction description ever lacks letters).
-                if not any(c.isalpha() for c in description):
-                    continue
-
-                time_str = match.group("time") or "00:00:00"
-                date = datetime.strptime(
-                    f"{match.group('date')} {time_str}", "%d/%m/%Y %H:%M:%S"
-                )
-
-                amount = _to_float(match.group("amount"))
-                points = match.group("points")
-                is_credit = match.group("credit_marker") is not None
-
-                transactions.append(
-                    Transaction(
-                        date=date,
-                        description=description,
-                        amount=amount,
-                        type="credit" if is_credit else "debit",
-                        reward_points=int(points) if points else None,
-                    )
-                )
+                transaction = _parse_line(line)
+                if transaction is not None:
+                    transactions.append(transaction)
 
     return transactions

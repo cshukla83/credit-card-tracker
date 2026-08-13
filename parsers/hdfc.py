@@ -33,7 +33,7 @@ def _to_float(amount_str: str) -> float:
     return float(amount_str.replace(",", ""))
 
 
-def _extract_summary_current_layout(pdf_path: str, password: str) -> dict:
+def _extract_summary_current_layout_from_text(text: str) -> dict:
     """Pull the page-1 summary box's key totals, used to cross-check parsed transactions.
 
     Tailored to the current (2026-era) statement's text-extraction layout, where
@@ -41,9 +41,6 @@ def _extract_summary_current_layout(pdf_path: str, password: str) -> dict:
     received, purchases/debit, finance charges, in that order) and the total
     amount due lands on a separate line starting with "_".
     """
-    with pdfplumber.open(pdf_path, password=password) as pdf:
-        text = pdf.pages[0].extract_text() or ""
-
     summary = {
         "total_amount_due": None,
         "previous_statement_dues": None,
@@ -92,6 +89,39 @@ def _classify(
     return "debit"
 
 
+def _parse_line_current_layout(
+    line: str, credits_received_total: "float | None"
+) -> "Transaction | None":
+    match = _TXN_LINE_RE.match(line.strip())
+    if not match:
+        return None
+
+    date = datetime.strptime(f"{match.group('date')} {match.group('time')}", "%d/%m/%Y %H:%M")
+    description = match.group("desc").strip()
+    amount = _to_float(match.group("amount"))
+    points = match.group("points")
+    points_sign = match.group("points_sign")
+    has_credit_marker = match.group("credit_marker") is not None
+
+    reward_points = int(points) if points else None
+    if reward_points is not None and points_sign == "-":
+        reward_points = -reward_points
+
+    return Transaction(
+        date=date,
+        description=description,
+        amount=amount,
+        type=_classify(description, amount, credits_received_total, has_credit_marker),
+        reward_points=reward_points,
+    )
+
+
+def _extract_summary_current_layout(pdf_path: str, password: str) -> dict:
+    with pdfplumber.open(pdf_path, password=password) as pdf:
+        text = pdf.pages[0].extract_text() or ""
+    return _extract_summary_current_layout_from_text(text)
+
+
 def _parse_current_layout(pdf_path: str, password: str) -> "list[Transaction]":
     summary = _extract_summary_current_layout(pdf_path, password)
     credits_received_total = summary["payments_credits_received"]
@@ -102,34 +132,19 @@ def _parse_current_layout(pdf_path: str, password: str) -> "list[Transaction]":
         for page in pdf.pages:
             text = page.extract_text() or ""
             for line in text.splitlines():
-                match = _TXN_LINE_RE.match(line.strip())
-                if not match:
-                    continue
-
-                date = datetime.strptime(
-                    f"{match.group('date')} {match.group('time')}", "%d/%m/%Y %H:%M"
-                )
-                description = match.group("desc").strip()
-                amount = _to_float(match.group("amount"))
-                points = match.group("points")
-                points_sign = match.group("points_sign")
-                has_credit_marker = match.group("credit_marker") is not None
-
-                reward_points = int(points) if points else None
-                if reward_points is not None and points_sign == "-":
-                    reward_points = -reward_points
-
-                transactions.append(
-                    Transaction(
-                        date=date,
-                        description=description,
-                        amount=amount,
-                        type=_classify(description, amount, credits_received_total, has_credit_marker),
-                        reward_points=reward_points,
-                    )
-                )
+                transaction = _parse_line_current_layout(line, credits_received_total)
+                if transaction is not None:
+                    transactions.append(transaction)
 
     return transactions
+
+
+def _detect_layout_from_text(text: str) -> str:
+    if "PAYMENTS/CREDITS" in text:
+        return "current"
+    if "Account Summary" in text:
+        return "legacy"
+    raise ValueError("Unrecognized HDFC statement layout")
 
 
 def _detect_layout(pdf_path: str, password: str) -> str:
@@ -142,11 +157,10 @@ def _detect_layout(pdf_path: str, password: str) -> str:
     with pdfplumber.open(pdf_path, password=password) as pdf:
         text = pdf.pages[0].extract_text() or ""
 
-    if "PAYMENTS/CREDITS" in text:
-        return "current"
-    if "Account Summary" in text:
-        return "legacy"
-    raise ValueError(f"Unrecognized HDFC statement layout: {pdf_path}")
+    try:
+        return _detect_layout_from_text(text)
+    except ValueError:
+        raise ValueError(f"Unrecognized HDFC statement layout: {pdf_path}") from None
 
 
 def parse(pdf_path: str, password: str) -> "list[Transaction]":

@@ -1023,3 +1023,95 @@ The legacy parser deliberately avoided keyword-based classification from the sta
 confirmation that decision was warranted. Worth periodically re-checking new
 CREDIT_KEYWORDS additions (if any) against real merchant-name concatenation
 patterns before assuming substring matching is safe anywhere in this codebase.
+
+---
+
+## Session 13 — 2026-08-13
+
+### Goal
+Add unit tests for `parsers/hdfc.py` and `parsers/hdfc_legacy.py`, covering the
+regex parsing and classification logic that Sessions 9, 11, and 12 had only been
+tested manually (via `run_hdfc_parser.py` against real sample PDFs).
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Add unit tests for parsers/hdfc.py and hdfc_legacy.py"
+
+**Design decision — refactor first:** both parser modules previously mixed PDF
+opening (`pdfplumber.open(pdf_path, password=...)`) directly into the same
+functions that did the actual text parsing. Unit-testing that as-is would have
+meant either opening real password-protected statement PDFs from tests (coupling
+the test suite to real personal financial data and a real password), or not
+testing the actual parsing logic at all. Instead, refactored each module to
+separate pure text-processing functions from thin PDF-opening wrappers:
+- `parsers/hdfc.py`: extracted `_extract_summary_current_layout_from_text(text)`,
+  `_parse_line_current_layout(line, credits_received_total)`, and
+  `_detect_layout_from_text(text)` as pure functions operating on strings. The
+  existing public `parse()` / `extract_summary()` (and `_detect_layout()`) became
+  thin wrappers: open the PDF, get the text, delegate to the pure function. No
+  behavior change — same regexes, same classification logic, just relocated.
+- `parsers/hdfc_legacy.py`: same pattern — extracted `_extract_summary_from_text(text)`
+  and `_parse_line(line)`.
+
+**Regression check before writing any tests:** re-ran `run_hdfc_parser.py` against
+all six real sample statements after the refactor, before adding a single test, to
+make sure moving code around hadn't silently changed behavior:
+```
+sample 1: 26 txns (25 debit, 1 credit)  — reconciles: yes / yes
+sample 2: 12 txns (10 debit, 2 credit)  — reconciles: yes / yes
+sample 3: 26 txns (25 debit, 1 credit)  — reconciles: yes / yes
+sample 4: 22 txns (21 debit, 1 credit)  — reconciles: yes / yes
+sample 5: 33 txns (31 debit, 2 credit)  — reconciles: yes / yes
+sample 6: 29 txns (27 debit, 2 credit)  — reconciles: yes / yes
+```
+All identical to pre-refactor results.
+
+**`requirements.txt`:** added `pytest`, installed into `venv`.
+
+**`tests/test_hdfc.py`** (16 tests) and **`tests/test_hdfc_legacy.py`** (10 tests) —
+all built around **fabricated** example lines (fake merchant names like "FAKE
+MERCHANT ONE", fake reference numbers, round-number amounts), never real
+transaction data from any sample statement. Coverage includes:
+- `_to_float` comma-stripping.
+- `_detect_layout_from_text` for both known layouts and the unrecognized-layout
+  error case.
+- Per-line parsing for: plain debit, debit with positive reward points, credit via
+  the bare-`+` marker, credit via negative (clawback) points, credit via a
+  standalone keyword, and — as a regression test for Session 12's fix — a
+  merchant/city token that contains "PAYMENT" only as a substring (must classify
+  as debit, not credit).
+- The amount-equality fallback classification path.
+- Non-matching lines returning `None` instead of raising.
+- `extract_summary`-equivalent parsing for both the current layout's `=`/`_`-anchored
+  format and the legacy layout's "Account Summary"-anchored format, including a
+  test that a same-shaped 5-number line *before* the "Account Summary" header
+  (mirroring the real GST-summary-row collision risk identified in Session 11)
+  is correctly ignored.
+- The legacy parser's numeric-only-line guard (the regression test for the
+  `08/03/2025 58,611.00 9,560.00`-style false-positive risk from Session 11).
+
+One test initially failed — a copy-paste bug in the test itself (a legacy-style
+`HH:MM:SS` timestamp used in a current-layout test line, which doesn't have a `|`
+separator and uses `HH:MM`), not a bug in the parser. Fixed the test's fabricated
+input and re-ran.
+
+```bash
+python -m pytest tests/
+```
+```
+26 passed in 0.06s
+```
+
+### Outcome
+26 unit tests added, all passing, running in well under a second with no PDF I/O,
+no real password, and no real financial data anywhere in the test suite. The
+refactor that made this possible is behavior-preserving, confirmed by an
+identical-results regression check against all six real sample statements both
+before writing tests and after.
+
+### Next steps
+Consider adding a thin integration-level test that runs `parsers.hdfc.parse()`
+against one of the real sample PDFs (skipped in CI/by default if `.env`/the sample
+file aren't present) as a belt-and-suspenders check that the wrappers themselves
+(PDF opening, page iteration) still work, not just the pure logic.
