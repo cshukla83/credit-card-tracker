@@ -451,3 +451,86 @@ needed.
 ### Next steps
 Move from printing raw text to actually parsing structured transactions (date,
 description, amount) out of the statement text.
+
+---
+
+## Session 7 — 2026-08-13
+
+### Goal
+Explore the sample statement's structure more fully — all pages, plus pdfplumber's
+table-extraction methods — to inform how transaction parsing should work later,
+without pasting real financial data into chat.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Using read_statement.py as a base, write a small exploration script
+> (explore_structure.py) that: 1. Opens data/statements/hdfc_sample.pdf with the
+> password from .env 2. Prints the raw text of all pages (not just page 1) 3. Also
+> tries pdfplumber's extract_table() / extract_tables() on each page and prints what
+> it finds, if anything 4. Saves both outputs to a local, gitignored file
+> (data/exploration_output.txt) rather than just printing to terminal, so we can
+> review it without pasting real financial data into chat. Add
+> data/exploration_output.txt to .gitignore. Append a Session entry to
+> docs/DEVLOG.md documenting this exploration step and what was found."
+
+**`.gitignore` change:**
+Added an explicit `data/exploration_output.txt` line. Note: the existing `data/` rule
+(added in Session 2) already covers this file, so the new line is redundant but kept
+for clarity/self-documentation, per the request. Confirmed with `git check-ignore -v`
+that the file is (and was already) ignored.
+
+**Code written — `explore_structure.py`:**
+Based on `read_statement.py`, but instead of only reading page 1 and printing to the
+terminal, it:
+- Loops over every page in the PDF (`pdf.pages`), not just the first.
+- For each page, calls `.extract_text()`, `.extract_table()`, and `.extract_tables()`
+  and records all three outputs.
+- Writes everything to `data/exploration_output.txt` (creating `data/` if needed)
+  instead of printing to stdout, so real statement contents never need to pass
+  through the terminal/chat to be reviewed — only the output file path is printed.
+
+```bash
+python explore_structure.py
+```
+Ran the script; it wrote `data/exploration_output.txt` successfully. The file itself
+was reviewed locally (via the file system, not pasted into this session).
+
+**Structural findings (described generically — no real transaction data below):**
+- The statement is 3 pages.
+  - Page 1: account summary (dues, credit limit, rewards balance, card controls),
+    followed by the start of a "Domestic Transactions" section with a handful of
+    transaction rows at the bottom.
+  - Page 2: the rest of the transaction list, followed by a transactions total and a
+    rewards-points-program summary section.
+  - Page 3: pure informational/legal text (terms, GST notes, useful links) — no
+    transactions, no tables.
+- Each transaction appears as **one raw-text line**, following a consistent shape:
+  `DATE| TIME  DESCRIPTION  [+ POINTS]  AMOUNT  ICON`, all separated by whitespace
+  rather than any visible column/ruling structure.
+- `extract_table()` / `extract_tables()`:
+  - On page 1, only picked up fragments of the summary boxes (e.g. the rewards-points
+    box, the credit-limit box) as small tables — it did **not** capture the
+    transaction rows as a structured table.
+  - On page 2, it detected the transaction section as a table, but each transaction
+    line came back as a single one-column row (the whole line as one cell) rather
+    than being split into separate date / description / amount columns.
+  - On page 3, no tables were found at all, consistent with it being plain paragraph
+    text.
+- Takeaway: `pdfplumber`'s automatic table detection doesn't cleanly separate
+  transaction fields on this statement layout. Parsing transactions later will likely
+  need a regex/positional approach over `extract_text()` output (matching on the
+  date-time prefix and the amount suffix) rather than relying on
+  `extract_table()`/`extract_tables()`.
+
+### Outcome
+`explore_structure.py` created and run successfully; full multi-page raw text and
+table-extraction output saved to the git-ignored `data/exploration_output.txt` for
+local review. Confirmed the general per-page structure and transaction line format,
+and confirmed that table extraction is not reliable for this statement's transaction
+section. No real statement content was pasted into chat or written into this log.
+
+### Next steps
+Write a regex-based parser over `extract_text()` output to turn each transaction line
+into structured fields (date, time, description, amount, reward points), using the
+line format identified in this session.
