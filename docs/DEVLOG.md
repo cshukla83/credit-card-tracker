@@ -1178,3 +1178,53 @@ the new tests skip rather than fail in that case.
 ### Next steps
 Consider adding samples 1-4 to this same integration test file for full coverage
 of all six known real statements, not just the two most recently added.
+
+---
+
+## Session 15 — 2026-08-13
+
+### Goal
+Follow through on Session 14's own "next steps" note: extend
+`tests/test_hdfc_real_statements.py`'s `SAMPLES` list to cover samples 1-4 too, so
+all six known real statements run through the integration tests, not just 5 and 6.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "run the same integration approach for samples 1-4"
+
+Confirmed each sample's expected layout via `_detect_layout()` before hardcoding it
+into the test parametrization (rather than assuming from memory of earlier
+sessions):
+```
+hdfc_sample.pdf   -> current
+hdfc_sample_2.pdf -> current
+hdfc_sample_3.pdf -> current
+hdfc_sample_4.PDF -> legacy
+```
+All matched what Sessions 8-11 had already established.
+
+**`tests/test_hdfc_real_statements.py`:** extended `SAMPLES` from 2 entries to 6,
+covering every real sample statement now present in `data/statements/`. No other
+changes needed — the two test functions were already written generically over
+`SAMPLES`.
+
+```bash
+python -m pytest tests/ -v
+```
+```
+38 passed in 2.24s
+```
+(Up from 30: the same 26 unit tests, plus 12 integration tests now — 2 test
+functions × 6 samples instead of × 2.)
+
+### Outcome
+All six real sample statements — both HDFC layouts, across Sessions 8 through
+12's worth of fixes — are now exercised automatically by `pytest`, covering both
+layout detection and full debit/credit reconciliation. The whole suite still runs
+in about 2 seconds and skips cleanly if `.env`/the sample PDFs aren't present.
+
+### Next steps
+None outstanding from this line of work — the test suite now mirrors the full
+manual verification history (Sessions 8-12) as automated, repeatable checks. Future
+new sample statements can be added to `SAMPLES` the same way.

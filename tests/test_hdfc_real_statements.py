@@ -18,6 +18,10 @@ load_dotenv()
 PASSWORD = os.environ.get("HDFC_SAMPLE_PASSWORD")
 
 SAMPLES = [
+    ("data/statements/hdfc_sample.pdf", "current"),
+    ("data/statements/hdfc_sample_2.pdf", "current"),
+    ("data/statements/hdfc_sample_3.pdf", "current"),
+    ("data/statements/hdfc_sample_4.PDF", "legacy"),
     ("data/statements/hdfc_sample_5.PDF", "legacy"),
     ("data/statements/hdfc_sample_6.pdf", "current"),
 ]
