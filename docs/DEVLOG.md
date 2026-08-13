@@ -403,3 +403,51 @@ including the value itself.
 ### Next steps
 Move from printing raw text to actually parsing structured transactions (date,
 description, amount) out of the statement text.
+
+---
+
+## Session 6 — 2026-08-13
+
+### Goal
+Document that the global git identity was set locally (outside Claude Code), fixing
+the auto-detected commit author flagged back in Session 2.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Append a dated entry to docs/DEVLOG.md documenting that git config --global
+> user.name and user.email were set locally (outside any Claude Code session) after
+> Session 2, to replace the auto-detected commit author. Confirm by running git
+> config --global user.name and git config --global user.email and including that
+> output (values only, this isn't sensitive)."
+
+Between Session 2 and this session, `git config --global user.name` and `git config
+--global user.email` were run by hand, outside of any Claude Code session, replacing
+the locally-derived identity (`chandra@Chandras-MacBook-Pro.local`) that git had
+auto-configured when the first commits were made. This is also what made it possible,
+back in the follow-up to Session 2, to rewrite the existing commits' authorship via
+`git rebase --root --exec "git commit --amend --reset-author --no-edit"`.
+
+**Commands run:**
+
+```bash
+git config --global user.name
+git config --global user.email
+```
+Reads back the currently configured global git identity to confirm what's in effect.
+
+Output:
+```
+Chandra Prakash Shukla
+64454270+cshukla83@users.noreply.github.com
+```
+
+### Outcome
+Confirmed the global git identity is set to `Chandra Prakash Shukla
+<64454270+cshukla83@users.noreply.github.com>`. All commits made in this repo from
+here on will use this identity automatically, with no per-commit configuration
+needed.
+
+### Next steps
+Move from printing raw text to actually parsing structured transactions (date,
+description, amount) out of the statement text.
