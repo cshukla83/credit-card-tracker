@@ -28,7 +28,7 @@ What's planned for the next session.
 
 ---
 
-## Session 1 — <date>
+## Session 1 — 2026-07-29
 
 ### Goal
 Set up the initial project scaffold: virtual environment, dependencies, and a minimal
