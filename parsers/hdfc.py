@@ -78,7 +78,12 @@ def _classify(
     has_credit_marker: bool,
 ) -> str:
     upper_desc = description.upper()
-    if any(keyword in upper_desc for keyword in CREDIT_KEYWORDS):
+    # Word-boundary match, not plain substring: this statement's merchant/city
+    # names are sometimes glued together with no space (e.g. "AMAZON SELLER
+    # PAYMENTSBANGALORE"), and a bare substring check would misfire on
+    # "PAYMENT" inside "PAYMENTSBANGALORE" even though that's a purchase, not
+    # a credit.
+    if any(re.search(rf"\b{keyword}\b", upper_desc) for keyword in CREDIT_KEYWORDS):
         return "credit"
     if has_credit_marker:
         return "credit"

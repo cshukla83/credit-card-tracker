@@ -932,3 +932,94 @@ should extend cleanly (add a new landmark check and a new `parsers/hdfc_<name>.p
 module). Consider whether `_detect_layout()`'s `ValueError` on an unrecognized
 layout is the right failure mode, or whether callers should get a clearer
 "unsupported statement format" message.
+
+---
+
+## Session 12 — 2026-08-13
+
+### Goal
+Run the parser against two newly added sample statements (`hdfc_sample_5.PDF`,
+`hdfc_sample_6.pdf`) to further test both layout paths, and fix whatever breaks.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "I added 2 more samples - hdfc_sample_5 and hdfc_sample_6 - run against both to
+> check integrity of our script."
+
+```bash
+python run_hdfc_parser.py "data/statements/hdfc_sample_5.PDF"
+python run_hdfc_parser.py "data/statements/hdfc_sample_6.pdf"
+```
+```
+Transactions parsed: 33 (31 debit, 2 credit)   # sample 5
+Debit total reconciles with statement summary: yes
+Credit total reconciles with statement summary: yes
+
+Transactions parsed: 29 (26 debit, 3 credit)   # sample 6
+Debit total reconciles with statement summary: no
+Credit total reconciles with statement summary: no
+```
+Sample 5 detected as `legacy` layout and reconciled cleanly on the first try — a
+good sign that Session 11's legacy parser generalizes, not just fits
+`hdfc_sample_4.PDF`. Sample 6 detected as `current` layout and failed to reconcile.
+
+**Investigation (same systematic approach as Session 9, all done locally):**
+1. Checked for unmatched date-prefixed or currency-bearing lines — none found;
+   every real transaction line matched.
+2. Verified debit-gap and credit-gap magnitudes were exactly equal and opposite
+   (conservation check), confirming a classification issue, not a missing/garbled
+   line.
+3. Searched combinations of debit-classified transaction amounts (up to 5) for one
+   summing to the credit shortfall — found nothing, unlike Session 9's single-line
+   case.
+4. Inspected the credit-classified side instead of the debit side this time: 3
+   transactions were classified credit, all 3 matched the `PAYMENT` keyword. Two
+   were the expected same-shaped statement-payment reference lines (desc length 66,
+   matching the known pattern); the third had a much shorter description starting
+   with `AMAZON`.
+5. Tested the hypothesis directly: recomputing the credit shortfall with that
+   `AMAZON`-prefixed transaction excluded from the credit bucket brought it to
+   (near) zero — strong evidence it was a false-positive credit classification, not
+   a missing one.
+6. Confirmed why: its description contains `PAYMENT` only as a substring inside a
+   longer glued-together token (word lengths, not content, checked locally) — the
+   same city/merchant-name concatenation pattern this statement format uses
+   elsewhere (e.g. `SELLERSERVICESBANGALORE`-style tokens seen in earlier
+   sessions). Verified with `\bPAYMENT\b` that a real standalone-word match (like
+   the correctly-classified payment lines) succeeds while the glued-token case
+   does not.
+
+**Root cause:** `_classify()`'s keyword check used plain substring matching
+(`keyword in upper_desc`), so `"PAYMENT"` matched inside merchant/city tokens like
+`"...PAYMENTSBANGALORE"` even though that's an ordinary purchase, not a credit —
+the exact class of false positive already flagged as a *risk* for the legacy
+parser back in Session 11, now confirmed to actually occur in the current-layout
+parser too.
+
+**Fix applied to `parsers/hdfc.py`:**
+`_classify()` now checks each keyword with a word-boundary regex
+(`re.search(rf"\b{keyword}\b", upper_desc)`) instead of plain substring
+containment, so `PAYMENT` only matches as its own word.
+
+**Re-verification across all six sample statements:**
+```
+sample 1: 26 txns (25 debit, 1 credit)  — reconciles: yes / yes  (unchanged)
+sample 2: 12 txns (10 debit, 2 credit)  — reconciles: yes / yes  (unchanged)
+sample 3: 26 txns (25 debit, 1 credit)  — reconciles: yes / yes  (unchanged)
+sample 4: 22 txns (21 debit, 1 credit)  — reconciles: yes / yes  (unchanged)
+sample 5: 33 txns (31 debit, 2 credit)  — reconciles: yes / yes  (unchanged)
+sample 6: 29 txns (27 debit, 2 credit)  — reconciles: yes / yes  (fixed: was 26/3)
+```
+
+### Outcome
+All six sample statements — across both HDFC layouts — now parse and reconcile
+correctly. The fix was narrowly scoped (one line, in the current-layout
+classifier's keyword check) and didn't change any other statement's result.
+
+### Next steps
+The legacy parser deliberately avoided keyword-based classification from the start
+(Session 11), specifically because of this exact risk — this session is a
+confirmation that decision was warranted. Worth periodically re-checking new
+CREDIT_KEYWORDS additions (if any) against real merchant-name concatenation
+patterns before assuming substring matching is safe anywhere in this codebase.
