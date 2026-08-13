@@ -1115,3 +1115,66 @@ Consider adding a thin integration-level test that runs `parsers.hdfc.parse()`
 against one of the real sample PDFs (skipped in CI/by default if `.env`/the sample
 file aren't present) as a belt-and-suspenders check that the wrappers themselves
 (PDF opening, page iteration) still work, not just the pure logic.
+
+---
+
+## Session 14 — 2026-08-13
+
+### Goal
+Follow through on Session 13's "next steps" note: add the integration-level test
+that runs the real parser wrappers (not just the pure logic) against real sample
+statements — specifically `hdfc_sample_5.PDF` and `hdfc_sample_6.pdf`.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "run hdfc_sample_5 and hdfc_sample_6 through the tests too"
+
+**`tests/test_hdfc_real_statements.py`** (new) — unlike Sessions 13's unit tests,
+this exercises the full public `parsers.hdfc.parse()` / `extract_summary()` /
+`_detect_layout()` path against the real PDFs and the real password from `.env`,
+the same code path `run_hdfc_parser.py` uses. To keep the test suite safe and
+portable:
+- The whole module is skipped (`pytestmark = pytest.mark.skipif(...)`) if
+  `HDFC_SAMPLE_PASSWORD` isn't set — since `.env` is git-ignored, anyone who clones
+  this repo without it would otherwise see failures instead of a clean skip.
+- Each test additionally skips if its specific PDF file isn't present locally
+  (the sample PDFs live under the git-ignored `data/statements/`, so they're not
+  part of the repo either).
+- Assertions are limited to: the detected layout matches what Session 12 found
+  (`legacy` for sample 5, `current` for sample 6), transaction count is nonzero,
+  every transaction's `type` is a valid value, and the debit/credit sums reconcile
+  against the statement's own summary box — the same properties
+  `run_hdfc_parser.py` prints, nothing more. No real amounts, dates, or merchant
+  text appear anywhere in the test file or its assertions.
+
+```bash
+python -m pytest tests/ -v
+```
+```
+30 passed in 0.89s
+```
+(26 from Session 13's unit tests, plus 4 new: layout-detection and reconciliation
+for each of the two samples.)
+
+**Verified the skip path works**, not just the happy path — ran with
+`HDFC_SAMPLE_PASSWORD=` (empty) set in the shell (which `load_dotenv()`'s
+non-overriding default behavior respects, since the variable is already "set" even
+though empty):
+```bash
+HDFC_SAMPLE_PASSWORD= python -m pytest tests/test_hdfc_real_statements.py -v
+```
+```
+4 skipped in 0.03s
+```
+
+### Outcome
+`hdfc_sample_5.PDF` and `hdfc_sample_6.pdf` are now part of the automated test
+suite (30 tests total), exercising the actual PDF-opening/parsing code path rather
+than only the pure text-processing functions. The suite still passes cleanly for
+anyone without the real sample files or password, since both are git-ignored and
+the new tests skip rather than fail in that case.
+
+### Next steps
+Consider adding samples 1-4 to this same integration test file for full coverage
+of all six known real statements, not just the two most recently added.
