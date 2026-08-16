@@ -1228,3 +1228,95 @@ in about 2 seconds and skips cleanly if `.env`/the sample PDFs aren't present.
 None outstanding from this line of work — the test suite now mirrors the full
 manual verification history (Sessions 8-12) as automated, repeatable checks. Future
 new sample statements can be added to `SAMPLES` the same way.
+
+---
+
+## Session 16 — 2026-08-16
+
+### Goal
+Storage foundation: schema + connection. No parser integration yet — just a
+`storage/` package with the SQLite schema, a connection helper, and tests. Sets up
+where parsed transactions will eventually be persisted.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Create the storage layer foundation for the credit card tracker. No parser
+> integration yet — just schema, connection helper, and tests. Create `storage/`
+> package: `storage/__init__.py` (empty); `storage/db.py` with `DB_PATH` loaded
+> from `.env` (default `data/tracker.db`), `get_connection()` (foreign keys on,
+> row_factory = sqlite3.Row), `init_db()` (idempotent, `CREATE TABLE IF NOT
+> EXISTS`); `storage/schema.py` defining `statements` and `transactions` tables
+> with a FK (`ON DELETE CASCADE`) and a `UNIQUE(bank, period_start, period_end)`
+> constraint on `statements`. Create `tests/test_storage.py` using `pytest
+> tmp_path`: tables exist after `init_db()`, `init_db()` is idempotent, duplicate
+> `(bank, period_start, period_end)` raises `IntegrityError`, FK violation raises
+> `IntegrityError`, `ON DELETE CASCADE` removes child transactions. Verify all
+> tests pass alongside the existing 38. Update DEVLOG. Commit as one unit.
+> Constraints: don't touch `parsers/` or existing tests, no real bank data, no
+> ORM/migrations — plain `sqlite3` + DDL strings."
+
+**`storage/schema.py`:** two DDL strings, `CREATE_STATEMENTS_TABLE` and
+`CREATE_TRANSACTIONS_TABLE`, exactly matching the requested columns —
+`statements(id, bank, period_start, period_end, imported_at)` with a
+`UNIQUE(bank, period_start, period_end)` constraint (this is the future dedup
+key — a statement for the same bank and period can't be imported twice), and
+`transactions(id, statement_id, txn_date, description, amount, txn_type,
+reward_points)` with `FOREIGN KEY(statement_id) REFERENCES statements(id) ON
+DELETE CASCADE` (deleting a statement cleans up its transactions automatically).
+
+**`storage/db.py`:**
+- `DB_PATH` is read from the environment **inside** `_get_db_path()`, called
+  fresh on every `get_connection()`/`init_db()` call — not cached as a
+  module-level constant at import time. This matters: the test fixture uses
+  `monkeypatch.setenv("DB_PATH", ...)` per test, and a cached value would have
+  ignored that, silently writing every test's data to the same real database
+  file instead of an isolated temp one.
+- `get_connection()` creates the parent directory of `DB_PATH` if missing (so a
+  fresh `data/` directory doesn't need to exist beforehand), opens the SQLite
+  connection, sets `PRAGMA foreign_keys = ON`, and sets `row_factory =
+  sqlite3.Row` (so query results can be accessed by column name, e.g.
+  `row["bank"]`, not just position). Foreign-key enforcement is per-connection
+  in SQLite, not a database-file setting, so this pragma has to be set every
+  time a connection opens, which naturally falls out of setting it inside
+  `get_connection()` itself.
+- `init_db()` opens a connection, runs both `CREATE TABLE IF NOT EXISTS`
+  statements, commits, and closes the connection — safe to call repeatedly.
+
+**`tests/test_storage.py`** (6 tests, using a `db_path` fixture that points
+`DB_PATH` at a `pytest`-managed `tmp_path` file and calls `init_db()`):
+- `statements` and `transactions` tables exist after `init_db()` (split into two
+  separate test functions for clearer failure messages).
+- Calling `init_db()` a second time doesn't raise.
+- Inserting a duplicate `(bank, period_start, period_end)` raises
+  `sqlite3.IntegrityError`.
+- Inserting a transaction referencing a non-existent `statement_id` raises
+  `sqlite3.IntegrityError` (confirms the FK pragma is actually taking effect,
+  not just declared in the schema).
+- Deleting a statement cascades to delete its transactions, verified by
+  re-querying after the delete.
+All bank names, merchants, and amounts used in the tests are fabricated
+(`"FAKE BANK"`, `"FAKE MERCHANT"`), consistent with the existing test suite's
+approach of never using real data.
+
+**Verification:**
+```bash
+python -m pytest tests/ -v
+```
+```
+44 passed in 2.30s
+```
+(38 existing + 6 new, all passing.) Confirmed via `git status`/`git diff --stat`
+that nothing under `parsers/` or the existing test files changed — only the new
+`storage/` package and `tests/test_storage.py` were added.
+
+### Outcome
+`storage/` package in place with a working, tested SQLite schema and connection
+helper. No parser integration yet, by design — this session only builds the
+foundation. All 44 tests pass; the existing 38 are unaffected.
+
+### Next steps
+Session 17 will add the write path: insert a parsed statement plus its
+transactions in a single database transaction, with dedup based on `(bank,
+period_start, period_end)` (the `UNIQUE` constraint added in this session is
+what that dedup will rely on).
