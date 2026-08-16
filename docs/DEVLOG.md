@@ -26,6 +26,24 @@ What works now that didn't before. What was verified (and how).
 What's planned for the next session.
 ```
 
+## Invariants
+
+Rules established in past sessions that later sessions must not silently break.
+When in doubt, check here before changing shared code (`storage/`, `parsers/base.py`).
+
+- **`DB_PATH` is read fresh on every `get_connection()` call — never cached at
+  module level.** (Session 16.) This is what lets tests point the database at an
+  isolated `tmp_path` file via `monkeypatch.setenv`. Introducing a module-level
+  DB handle or a cached path would silently break that isolation — tests would
+  start writing to whichever real path was loaded first.
+- **All multi-row writes go through a single SQL transaction; partial statements
+  must never land.** (Session 17.) `insert_statement()` inserts a statement and
+  all of its transactions inside one `with conn:` block, so any failure —
+  a duplicate `(bank, period_start, period_end)` or a malformed transaction row —
+  rolls back the entire write, including the statement row itself. A caller
+  should never observe a statement with zero or partial transactions due to a
+  write failure.
+
 ---
 
 ## Session 1 — 2026-07-29
@@ -1320,3 +1338,106 @@ Session 17 will add the write path: insert a parsed statement plus its
 transactions in a single database transaction, with dedup based on `(bank,
 period_start, period_end)` (the `UNIQUE` constraint added in this session is
 what that dedup will rely on).
+
+---
+
+## Session 17 — 2026-08-16
+
+### Goal
+Storage write path: insert a parsed statement (period + transaction list) and
+persist it atomically, respecting the `(bank, period_start, period_end)` dedup
+key established in Session 16. Still no parser integration — this works with
+plain dicts/lists so it's independently testable. Parser → storage wiring is
+Session 18.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Add the write path that takes a parsed statement (period + list of
+> transactions) and persists it, respecting the (bank, period_start,
+> period_end) dedup key... `insert_statement(conn, bank, period_start,
+> period_end, transactions) -> int | None`. Wraps the whole insert in a single
+> SQL transaction. Attempts to insert into statements; if the UNIQUE constraint
+> fires, catches IntegrityError, rolls back cleanly, returns None. On success,
+> inserts all transactions with the new statement_id and returns statement_id.
+> If any transaction insert fails, the whole thing rolls back... Do not cache
+> the connection at module level — every call takes conn as an argument...
+> Add tests: fresh insert with 3 transactions; duplicate period returns None
+> with no new rows; same bank different periods both succeed; same period
+> different banks both succeed; atomicity test with a malformed row; NULL
+> reward_points is accepted."
+
+**Design choice — `storage/writes.py` (new module) rather than extending
+`db.py`:** keeps connection/schema management (`db.py`) separate from write
+operations, which will likely grow (updates, queries, later sessions) without
+bloating `db.py`. `insert_statement()` still takes `conn` as an explicit
+argument rather than opening its own connection or importing a cached one —
+consistent with the Session 16 invariant now written down at the top of this
+file.
+
+**`storage/writes.py`:**
+- `_to_date_str()` — converts a `datetime.date` to its ISO string
+  (`YYYY-MM-DD`) before binding it into a query; passes strings through
+  unchanged. Used for `period_start`, `period_end`, and each transaction's
+  `txn_date`. Chosen over relying on `sqlite3`'s implicit date adapter, since
+  that behavior has been shifting across recent Python versions (deprecated as
+  of 3.12) — converting explicitly avoids depending on it at all.
+- `insert_statement()` — wraps one `INSERT` into `statements` and one `INSERT`
+  per transaction inside a single `with conn:` block. **Verified empirically
+  before writing the tests** (not just assumed) that `sqlite3`'s `with conn:`
+  context manager rolls back the whole block on any exception and then
+  re-raises it — confirmed with a throwaway 2-line reproduction using an
+  in-memory database and a deliberate `NOT NULL` violation. That re-raised
+  exception is what the surrounding `try/except sqlite3.IntegrityError:
+  return None` catches — so *both* the dedup case (duplicate `UNIQUE` key) and
+  the atomicity case (a malformed transaction row) are handled by the exact
+  same code path, not two separate mechanisms.
+
+**`tests/test_storage.py`** (6 new tests, reusing the existing `db_path`
+fixture, plus a `_fake_transactions()` helper building fabricated 3-transaction
+lists):
+- A fresh insert returns an `int` id, with 1 row in `statements` and 3 linked
+  rows in `transactions`.
+- Re-inserting the same `(bank, period_start, period_end)` — deliberately with
+  a *different* transaction list, to make sure it's really being ignored and
+  not silently merged — returns `None`, and the original 3 transactions are
+  untouched (no duplicates, no partial overwrite).
+- Same bank, different periods: both inserts succeed with different ids.
+- Same period, different banks: both inserts succeed with different ids.
+- A 3-transaction list with one row's `amount` set to `None` (violates `NOT
+  NULL`): the whole call returns `None`, and — critically — zero rows land in
+  *either* table, confirming the statement row itself was rolled back too, not
+  just the bad transaction row.
+- `reward_points=None` on a transaction is accepted and stored as SQL `NULL`
+  (read back via `conn.execute(...).fetchone()["reward_points"] is None`).
+
+**Verification:**
+```bash
+python -m pytest tests/ -v
+```
+```
+50 passed in 2.31s
+```
+(44 existing + 6 new.) Confirmed via `git status`/`git diff --stat` that
+`parsers/` and the existing parser test files were untouched — only
+`storage/writes.py` (new) and `tests/test_storage.py` (extended) changed.
+
+**Invariants section added** near the top of this file (see above), capturing
+both the Session 16 fresh-`DB_PATH`-read rule and this session's
+single-transaction/no-partial-writes rule, so future sessions touching
+`storage/` have a fast way to check what must not break.
+
+### Outcome
+`storage/writes.py` provides a tested, atomic `insert_statement()` that
+correctly dedups on `(bank, period_start, period_end)` and never leaves a
+partial write behind on failure. All 50 tests pass; the previous 44 are
+unaffected. Input is plain dicts/lists — `storage/` still has no dependency on
+`parsers/`.
+
+### Next steps
+Session 18 will bridge `parsers/hdfc.py`'s output to `insert_statement()` —
+likely a small adapter that derives `period_start`/`period_end` from the
+summary box (or the parsed transaction dates) and maps the parser's
+`Transaction` dicts (`date`, `description`, `amount`, `type`, `reward_points`)
+to the storage schema's field names (`txn_date`, `description`, `amount`,
+`txn_type`, `reward_points`).
