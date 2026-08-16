@@ -1,11 +1,23 @@
+CREATE_CARDS_TABLE = """
+CREATE TABLE IF NOT EXISTS cards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bank TEXT NOT NULL,
+    card_type TEXT NOT NULL,
+    nickname TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(bank, card_type, nickname)
+)
+"""
+
 CREATE_STATEMENTS_TABLE = """
 CREATE TABLE IF NOT EXISTS statements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    bank TEXT NOT NULL,
+    card_id INTEGER NOT NULL,
     period_start DATE NOT NULL,
     period_end DATE NOT NULL,
     imported_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(bank, period_start, period_end)
+    FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE,
+    UNIQUE(card_id, period_start, period_end)
 )
 """
 

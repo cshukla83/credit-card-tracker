@@ -1441,3 +1441,142 @@ summary box (or the parsed transaction dates) and maps the parser's
 `Transaction` dicts (`date`, `description`, `amount`, `type`, `reward_points`)
 to the storage schema's field names (`txn_date`, `description`, `amount`,
 `txn_type`, `reward_points`).
+
+**Revised:** this plan changed before Session 18 started — see that entry.
+Session 18 became a `cards` table + CRUD instead, to keep each session's scope
+small and focused; the parser-adapter bridge moved to a later session.
+
+---
+
+## Session 18 — 2026-08-16
+
+### Goal
+Add a `cards` table (one card = one bank + card type + optional nickname) and
+its CRUD helpers, and refactor `statements` to FK into `cards` instead of
+storing `bank` directly. No parser changes, no adapter, no CLI — those are
+later sessions. This keeps each session's scope small and independently
+verifiable, and lets the schema settle before anything gets built on top of it.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Add the cards table and its CRUD helpers. Refactor the statements table to
+> FK into it... New cards table: id, bank, card_type, nickname (nullable),
+> created_at, UNIQUE(bank, card_type, nickname)... Modified statements table:
+> drop bank, add card_id, FK to cards ON DELETE CASCADE, UNIQUE(card_id,
+> period_start, period_end)... Add storage/cards.py: create_card (raises
+> CardAlreadyExistsError on UNIQUE violation, not silent skip — card creation
+> is an explicit user action), get_card, find_card, list_cards... Update
+> insert_statement(): bank param removed, replaced with card_id; a
+> non-existent card_id should raise (FK violation), not silently return
+> None... Update existing tests to create a card first... Add: FK violation
+> test, cascade-from-cards test... Add tests/test_cards.py, including a
+> decision on whether two same-bank+card_type cards with both nicknames NULL
+> should be allowed (recommended: yes, leave SQLite's default NULL-distinct
+> behavior)."
+
+**Schema shape change (`storage/schema.py`):**
+- New `CREATE_CARDS_TABLE`: `id`, `bank`, `card_type`, `nickname` (nullable),
+  `created_at`, with `UNIQUE(bank, card_type, nickname)`.
+- `CREATE_STATEMENTS_TABLE` changed: `bank` column dropped entirely, replaced
+  with `card_id INTEGER NOT NULL` plus `FOREIGN KEY(card_id) REFERENCES
+  cards(id) ON DELETE CASCADE`. The dedup `UNIQUE` constraint moved from
+  `(bank, period_start, period_end)` to `(card_id, period_start, period_end)`
+  — a card now stands in for what `bank` used to mean for dedup purposes.
+- `storage/db.py`'s `init_db()` now creates `cards` before `statements`, since
+  the latter's `FOREIGN KEY` references the former — table creation order
+  matters even with `CREATE TABLE IF NOT EXISTS`.
+
+**Migration note:** no migration script was written, on purpose — Sessions
+16–17 only ever wrote to `pytest`'s `tmp_path` temp databases, so there's no
+real data anywhere to migrate. `init_db()` uses `CREATE TABLE IF NOT EXISTS`,
+which will **not** retroactively add the new `cards` table or alter an
+already-existing `statements` table's columns on a stale database file. **If a
+`data/tracker.db` file exists on your machine from earlier manual testing,
+delete it by hand before Session 20 runs the CLI against it** — checked on
+this machine and no such file exists, so nothing to clean up here, but this is
+a real trap for anyone who created one locally outside of tests.
+
+**`storage/cards.py`** (new module):
+- `CardAlreadyExistsError` — a plain `Exception` subclass, raised by
+  `create_card()` on a `UNIQUE` violation instead of returning `None`. This is
+  a deliberate asymmetry with `insert_statement()`'s dedup behavior: creating a
+  card is a one-off, explicit user action (e.g. "add my HDFC Diners card"), so
+  silently doing nothing on a collision would hide a mistake (wrong bank/type/
+  nickname typed) instead of surfacing it. Importing a statement, by contrast,
+  is routine bulk/automated work where re-processing an already-imported
+  statement is expected and skipping it silently is the correct, quiet
+  behavior.
+- `get_card()` / `find_card()` / `list_cards()` — straightforward
+  dict-returning lookups. `find_card()` needed one deliberate care point: SQL's
+  `= ?` never matches when the bound parameter is `NULL` (`NULL = NULL` is not
+  true in SQL), so a `nickname=None` lookup uses an explicit `nickname IS NULL`
+  clause rather than `nickname = ?` — otherwise a search for an unnamed card
+  would never match anything, silently.
+
+**NULL-nickname decision:** went with the recommended default — SQLite treats
+each `NULL` as distinct for `UNIQUE`-constraint purposes, so two cards with the
+same `bank` + `card_type` and both `nickname=None` are allowed to coexist.
+**Verified this empirically via the test suite rather than just trusting the
+recommendation** — `test_create_card_same_bank_and_type_both_null_nicknames_both_succeed`
+creates two such cards and asserts both inserts succeed with different ids;
+it passed on the first run, confirming SQLite's behavior matched the
+prediction exactly. Users who want to tell two same-type cards apart add a
+nickname; those who don't care aren't forced to.
+
+**`storage/writes.py` — `insert_statement()` signature change:** `bank: str`
+replaced with `card_id: int`. The trickier part: a duplicate `(card_id,
+period_start, period_end)` and a non-existent `card_id` both raise
+`sqlite3.IntegrityError` in `sqlite3` — there's no separate exception type per
+constraint. **Verified empirically** (a small throwaway reproduction, not
+assumed) that `IntegrityError` instances expose `e.sqlite_errorname`, which
+reads `"SQLITE_CONSTRAINT_UNIQUE"` for a duplicate key and
+`"SQLITE_CONSTRAINT_FOREIGNKEY"` for a bad foreign key — so `insert_statement()`
+now re-raises specifically when `e.sqlite_errorname ==
+"SQLITE_CONSTRAINT_FOREIGNKEY"` (a bad `card_id` is a caller bug, not a dedup
+hit) and returns `None` for everything else, which preserves Session 17's
+original behavior for both the dedup case *and* the malformed-transaction
+(`NOT NULL` violation) case unchanged — neither of those two established
+behaviors needed to change, only the new FK case needed to be carved out.
+
+**Test updates (`tests/test_storage.py`):** every existing test that inserted
+into `statements` now creates a card first (via a `_create_fake_card()` test
+helper wrapping `create_card()`) and passes its `card_id` instead of a bare
+`"FAKE BANK"` string. Added two new tests: `insert_statement()` with a
+non-existent `card_id` raises `IntegrityError` (not `None`), and deleting a
+card cascades through `statements` to `transactions` (the full three-table
+cascade chain, not just the `statements`→`transactions` link Session 16
+already covered).
+
+**`tests/test_cards.py`** (new, 11 tests): id/persistence on create, duplicate
+raises `CardAlreadyExistsError`, distinct nicknames both succeed, both-`NULL`
+nicknames both succeed (see above), `get_card`/`find_card` found and
+not-found cases, `find_card(nickname=None)` matching only `NULL`-nickname rows
+specifically (not any row) even when a named card with the same bank/type
+exists, `list_cards()` ordering and the empty-list case.
+
+**Verification:**
+```bash
+python -m pytest tests/ -v
+```
+```
+63 passed in 2.32s
+```
+(50 previous — all now schema-updated and still passing — plus 13 new: 2 in
+`test_storage.py`, 11 in `test_cards.py`.) Confirmed via `git status`/`git diff
+--stat` that `parsers/` and the parser test files were completely untouched.
+
+### Outcome
+`cards` table and CRUD helpers in place; `statements` now correctly models
+"one card can have many statements" via `card_id` instead of a free-text
+`bank` column. Both the NULL-nickname behavior and the UNIQUE-vs-FOREIGN-KEY
+distinction in `insert_statement()` were verified empirically rather than
+assumed, matching how earlier sessions in this project have approached
+uncertain `sqlite3` behavior. All 63 tests pass; no real bank data anywhere in
+the new code, and no connection/`DB_PATH` caching introduced.
+
+### Next steps
+Session 19 renames `parsers/hdfc.py` → `parsers/hdfc_diners.py` and adds a
+dispatch layer keyed on `card_type`, in preparation for Session 20's CLI (which
+is also when the migration note above about deleting a stale `data/tracker.db`
+becomes relevant, if one exists by then).

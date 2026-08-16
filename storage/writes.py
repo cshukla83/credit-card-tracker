@@ -8,7 +8,7 @@ def _to_date_str(value):
 
 def insert_statement(
     conn: sqlite3.Connection,
-    bank: str,
+    card_id: int,
     period_start: date,
     period_end: date,
     transactions: "list[dict]",
@@ -16,18 +16,25 @@ def insert_statement(
     """Insert a statement and its transactions as one atomic write.
 
     Returns the new statement's id, or None if a statement for this
-    (bank, period_start, period_end) was already imported (in which case
+    (card_id, period_start, period_end) was already imported (in which case
     nothing is written — this call is a no-op dedup skip).
 
     If any transaction fails to insert (e.g. a NOT NULL violation), the
     whole write — including the statement row — rolls back, so a statement
     row never ends up with a partial or missing set of transactions.
+
+    A non-existent card_id fires the FOREIGN KEY constraint rather than the
+    UNIQUE constraint used for dedup, and is re-raised rather than swallowed:
+    it means the caller passed a bad id, not that this statement was already
+    imported. Every other IntegrityError (the UNIQUE dedup case, or a
+    malformed transaction row violating e.g. NOT NULL) still returns None,
+    matching Session 17's original atomicity behavior.
     """
     try:
         with conn:
             cursor = conn.execute(
-                "INSERT INTO statements (bank, period_start, period_end) VALUES (?, ?, ?)",
-                (bank, _to_date_str(period_start), _to_date_str(period_end)),
+                "INSERT INTO statements (card_id, period_start, period_end) VALUES (?, ?, ?)",
+                (card_id, _to_date_str(period_start), _to_date_str(period_end)),
             )
             statement_id = cursor.lastrowid
 
@@ -45,7 +52,9 @@ def insert_statement(
                         txn.get("reward_points"),
                     ),
                 )
-    except sqlite3.IntegrityError:
+    except sqlite3.IntegrityError as e:
+        if e.sqlite_errorname == "SQLITE_CONSTRAINT_FOREIGNKEY":
+            raise
         return None
 
     return statement_id

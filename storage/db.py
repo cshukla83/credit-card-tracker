@@ -4,7 +4,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from storage.schema import CREATE_STATEMENTS_TABLE, CREATE_TRANSACTIONS_TABLE
+from storage.schema import (
+    CREATE_CARDS_TABLE,
+    CREATE_STATEMENTS_TABLE,
+    CREATE_TRANSACTIONS_TABLE,
+)
 
 load_dotenv()
 
@@ -28,6 +32,7 @@ def get_connection() -> sqlite3.Connection:
 def init_db() -> None:
     conn = get_connection()
     try:
+        conn.execute(CREATE_CARDS_TABLE)
         conn.execute(CREATE_STATEMENTS_TABLE)
         conn.execute(CREATE_TRANSACTIONS_TABLE)
         conn.commit()

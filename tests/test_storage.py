@@ -3,6 +3,7 @@ from datetime import date
 
 import pytest
 
+from storage.cards import create_card
 from storage.db import get_connection, init_db
 from storage.writes import insert_statement
 
@@ -20,6 +21,10 @@ def _fake_transactions(n=3):
         }
         for i in range(n)
     ]
+
+
+def _create_fake_card(conn, bank="FAKE BANK", card_type="FAKE CARD TYPE", nickname=None):
+    return create_card(conn, bank, card_type, nickname)
 
 
 @pytest.fixture
@@ -58,16 +63,18 @@ def test_init_db_is_idempotent(db_path):
 def test_duplicate_statement_raises_integrity_error(db_path):
     conn = get_connection()
     try:
+        card_id = _create_fake_card(conn)
+
         conn.execute(
-            "INSERT INTO statements (bank, period_start, period_end) VALUES (?, ?, ?)",
-            ("FAKE BANK", "2026-01-01", "2026-01-31"),
+            "INSERT INTO statements (card_id, period_start, period_end) VALUES (?, ?, ?)",
+            (card_id, "2026-01-01", "2026-01-31"),
         )
         conn.commit()
 
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(
-                "INSERT INTO statements (bank, period_start, period_end) VALUES (?, ?, ?)",
-                ("FAKE BANK", "2026-01-01", "2026-01-31"),
+                "INSERT INTO statements (card_id, period_start, period_end) VALUES (?, ?, ?)",
+                (card_id, "2026-01-01", "2026-01-31"),
             )
     finally:
         conn.close()
@@ -90,9 +97,11 @@ def test_transaction_with_missing_statement_raises_integrity_error(db_path):
 def test_cascade_delete_removes_transactions(db_path):
     conn = get_connection()
     try:
+        card_id = _create_fake_card(conn)
+
         cursor = conn.execute(
-            "INSERT INTO statements (bank, period_start, period_end) VALUES (?, ?, ?)",
-            ("FAKE BANK", "2026-02-01", "2026-02-28"),
+            "INSERT INTO statements (card_id, period_start, period_end) VALUES (?, ?, ?)",
+            (card_id, "2026-02-01", "2026-02-28"),
         )
         statement_id = cursor.lastrowid
         conn.execute(
@@ -115,11 +124,37 @@ def test_cascade_delete_removes_transactions(db_path):
         conn.close()
 
 
+def test_cascade_delete_from_card_removes_statements_and_transactions(db_path):
+    conn = get_connection()
+    try:
+        card_id = _create_fake_card(conn)
+        statement_id = insert_statement(
+            conn, card_id, date(2026, 3, 1), date(2026, 3, 31), _fake_transactions(2)
+        )
+
+        conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+        conn.commit()
+
+        remaining_statements = conn.execute(
+            "SELECT COUNT(*) AS count FROM statements WHERE card_id = ?", (card_id,)
+        ).fetchone()
+        remaining_transactions = conn.execute(
+            "SELECT COUNT(*) AS count FROM transactions WHERE statement_id = ?",
+            (statement_id,),
+        ).fetchone()
+
+        assert remaining_statements["count"] == 0
+        assert remaining_transactions["count"] == 0
+    finally:
+        conn.close()
+
+
 def test_insert_statement_persists_transactions(db_path):
     conn = get_connection()
     try:
+        card_id = _create_fake_card(conn)
         statement_id = insert_statement(
-            conn, "FAKE BANK", date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(3)
+            conn, card_id, date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(3)
         )
 
         assert isinstance(statement_id, int)
@@ -130,6 +165,7 @@ def test_insert_statement_persists_transactions(db_path):
         ).fetchall()
 
         assert len(statements) == 1
+        assert statements[0]["card_id"] == card_id
         assert len(transactions) == 3
         assert all(t["statement_id"] == statement_id for t in transactions)
     finally:
@@ -139,12 +175,13 @@ def test_insert_statement_persists_transactions(db_path):
 def test_insert_statement_dedup_returns_none_and_leaves_rows_untouched(db_path):
     conn = get_connection()
     try:
+        card_id = _create_fake_card(conn)
         first_id = insert_statement(
-            conn, "FAKE BANK", date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(3)
+            conn, card_id, date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(3)
         )
         result = insert_statement(
             conn,
-            "FAKE BANK",
+            card_id,
             date(2026, 1, 1),
             date(2026, 1, 31),
             _fake_transactions(5),  # deliberately different, must be ignored
@@ -163,14 +200,15 @@ def test_insert_statement_dedup_returns_none_and_leaves_rows_untouched(db_path):
         conn.close()
 
 
-def test_insert_statement_same_bank_different_periods_both_succeed(db_path):
+def test_insert_statement_same_card_different_periods_both_succeed(db_path):
     conn = get_connection()
     try:
+        card_id = _create_fake_card(conn)
         id_one = insert_statement(
-            conn, "FAKE BANK", date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(1)
+            conn, card_id, date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(1)
         )
         id_two = insert_statement(
-            conn, "FAKE BANK", date(2026, 2, 1), date(2026, 2, 28), _fake_transactions(1)
+            conn, card_id, date(2026, 2, 1), date(2026, 2, 28), _fake_transactions(1)
         )
 
         assert id_one is not None
@@ -180,19 +218,31 @@ def test_insert_statement_same_bank_different_periods_both_succeed(db_path):
         conn.close()
 
 
-def test_insert_statement_same_period_different_banks_both_succeed(db_path):
+def test_insert_statement_same_period_different_cards_both_succeed(db_path):
     conn = get_connection()
     try:
+        card_one = _create_fake_card(conn, bank="FAKE BANK A")
+        card_two = _create_fake_card(conn, bank="FAKE BANK B")
+
         id_one = insert_statement(
-            conn, "FAKE BANK A", date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(1)
+            conn, card_one, date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(1)
         )
         id_two = insert_statement(
-            conn, "FAKE BANK B", date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(1)
+            conn, card_two, date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(1)
         )
 
         assert id_one is not None
         assert id_two is not None
         assert id_one != id_two
+    finally:
+        conn.close()
+
+
+def test_insert_statement_missing_card_id_raises_integrity_error(db_path):
+    conn = get_connection()
+    try:
+        with pytest.raises(sqlite3.IntegrityError):
+            insert_statement(conn, 9999, date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(1))
     finally:
         conn.close()
 
@@ -200,11 +250,12 @@ def test_insert_statement_same_period_different_banks_both_succeed(db_path):
 def test_insert_statement_malformed_transaction_rolls_back_atomically(db_path):
     conn = get_connection()
     try:
+        card_id = _create_fake_card(conn)
         transactions = _fake_transactions(3)
         transactions[1]["amount"] = None  # violates NOT NULL
 
         result = insert_statement(
-            conn, "FAKE BANK", date(2026, 1, 1), date(2026, 1, 31), transactions
+            conn, card_id, date(2026, 1, 1), date(2026, 1, 31), transactions
         )
 
         assert result is None
@@ -221,8 +272,9 @@ def test_insert_statement_malformed_transaction_rolls_back_atomically(db_path):
 def test_insert_statement_reward_points_none_stored_as_null(db_path):
     conn = get_connection()
     try:
+        card_id = _create_fake_card(conn)
         statement_id = insert_statement(
-            conn, "FAKE BANK", date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(1)
+            conn, card_id, date(2026, 1, 1), date(2026, 1, 31), _fake_transactions(1)
         )
 
         row = conn.execute(
