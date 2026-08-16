@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from parsers.hdfc_legacy import _extract_summary_from_text, _parse_line, _to_float
+from parsers.hdfc_diners_legacy import _extract_summary_from_text, _parse_line, _to_float
 
 # All merchant names, reference numbers, and amounts below are fabricated for
 # testing — none of this is real transaction data.

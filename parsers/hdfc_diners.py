@@ -5,7 +5,7 @@ from datetime import datetime
 
 import pdfplumber
 
-from parsers import hdfc_legacy
+from parsers import hdfc_diners_legacy
 from parsers.base import Transaction
 
 CREDIT_KEYWORDS = ("PAYMENT", "REFUND", "REVERSAL", "CASHBACK", "CREDIT")
@@ -166,12 +166,12 @@ def _detect_layout(pdf_path: str, password: str) -> str:
 def parse(pdf_path: str, password: str) -> "list[Transaction]":
     layout = _detect_layout(pdf_path, password)
     if layout == "legacy":
-        return hdfc_legacy.parse(pdf_path, password)
+        return hdfc_diners_legacy.parse(pdf_path, password)
     return _parse_current_layout(pdf_path, password)
 
 
 def extract_summary(pdf_path: str, password: str) -> dict:
     layout = _detect_layout(pdf_path, password)
     if layout == "legacy":
-        return hdfc_legacy.extract_summary(pdf_path, password)
+        return hdfc_diners_legacy.extract_summary(pdf_path, password)
     return _extract_summary_current_layout(pdf_path, password)

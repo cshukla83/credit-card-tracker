@@ -1,4 +1,4 @@
-from parsers.hdfc import (
+from parsers.hdfc_diners import (
     _classify,
     _detect_layout_from_text,
     _extract_summary_current_layout_from_text,

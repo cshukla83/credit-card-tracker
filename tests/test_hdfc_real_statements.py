@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
-from parsers.hdfc import _detect_layout, extract_summary, parse
+import parsers.hdfc as hdfc_dispatch
+from parsers.hdfc_diners import _detect_layout, extract_summary
 
 # These tests run the parsers against the real sample statement PDFs in
 # data/statements/ (git-ignored, not part of the repo) using the real password
@@ -12,6 +13,12 @@ from parsers.hdfc import _detect_layout, extract_summary, parse
 # locally, so the suite still passes for anyone who clones the repo without
 # them. Only reconciliation results and counts are asserted on -- never real
 # amounts, dates, or merchant descriptions.
+#
+# parse() goes through the parsers.hdfc dispatch layer (card_type="Diners") so
+# the dispatch path itself is exercised, not just the Diners implementation
+# directly. extract_summary()/_detect_layout() are Diners-specific reconciliation
+# tooling, not part of the dispatch interface, so those are imported straight
+# from parsers.hdfc_diners.
 
 load_dotenv()
 
@@ -49,7 +56,7 @@ def test_real_statement_reconciles(pdf_path, expected_layout):
     if not Path(pdf_path).exists():
         pytest.skip(f"{pdf_path} not present locally")
 
-    transactions = parse(pdf_path, PASSWORD)
+    transactions = hdfc_dispatch.parse(pdf_path, PASSWORD, card_type="Diners")
     summary = extract_summary(pdf_path, PASSWORD)
 
     assert len(transactions) > 0

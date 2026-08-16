@@ -1580,3 +1580,142 @@ Session 19 renames `parsers/hdfc.py` → `parsers/hdfc_diners.py` and adds a
 dispatch layer keyed on `card_type`, in preparation for Session 20's CLI (which
 is also when the migration note above about deleting a stale `data/tracker.db`
 becomes relevant, if one exists by then).
+
+---
+
+## Session 19 — 2026-08-16
+
+### Goal
+Restructure the HDFC parser into one of potentially many card-type-specific
+parsers under HDFC, with a dispatch layer routing by `card_type`. Pure
+restructuring — no schema, storage, or CLI changes, and no behavior change to
+the Diners parser itself.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Rename files: parsers/hdfc.py → parsers/hdfc_diners.py; parsers/hdfc_legacy.py
+> → parsers/hdfc_diners_legacy.py. The layout auto-detection... stays exactly
+> as-is — that's a layout-within-card-type concern, orthogonal to card-type
+> dispatch. Create dispatch layer at parsers/hdfc/__init__.py... Exposes
+> parse(pdf_path, password, card_type: str)... case-insensitive (normalize to
+> title case)... lazy-import inside the dispatch function... if lazy import
+> makes the code meaningfully uglier, eager import is fine, but note the
+> tradeoff... Grep the whole repo for from parsers.hdfc import... every hit
+> needs updating... In storage/writes.py, add a code comment next to the
+> sqlite_errorname branching explaining why it's string-based... Add
+> tests/test_hdfc_dispatch.py..."
+
+**Rename mapping (old → new):**
+| Old path | New path |
+|---|---|
+| `parsers/hdfc.py` | `parsers/hdfc_diners.py` |
+| `parsers/hdfc_legacy.py` | `parsers/hdfc_diners_legacy.py` |
+| `tests/test_hdfc.py` | `tests/test_hdfc_diners.py` |
+| `tests/test_hdfc_legacy.py` | `tests/test_hdfc_diners_legacy.py` |
+| *(new)* | `parsers/hdfc/__init__.py` (dispatch layer, `parsers.hdfc` is now a package) |
+| *(new)* | `tests/test_hdfc_dispatch.py` |
+
+Both renames done via `git mv` to preserve history. `git diff` on
+`hdfc_diners_legacy.py` shows **zero** content change (a pure rename) —
+`hdfc_diners.py` has exactly one substantive change: its internal
+`from parsers import hdfc_legacy` → `from parsers import hdfc_diners_legacy`
+(and the two call sites using that name). No parser logic touched anywhere,
+confirming the "pure restructuring" constraint held.
+
+**`parsers/hdfc/__init__.py` (new dispatch layer):**
+- `parse(pdf_path, password, card_type)` normalizes `card_type` via
+  `.strip().title()` internally (so `"diners"`, `"DINERS"`, `" Diners "` all
+  route the same way) and compares against `"Diners"`.
+- **Lazy import chosen** — `from parsers import hdfc_diners` sits inside the
+  `if normalized == "Diners":` branch, not at module top level. It didn't make
+  the code meaningfully uglier (one import line, same place it'd otherwise be
+  at the top), so the stated default (lazy, unless it gets ugly) applied
+  cleanly — no real tradeoff to make here. The payoff: a second card-type
+  module with an import-time bug (bad syntax, missing dependency) won't take
+  down dispatch for `"Diners"` or any other already-working card type.
+- Unknown card types raise `NotImplementedError(f"HDFC {card_type} parser not
+  yet implemented")` using the caller's original (non-normalized) string, so
+  the error message reflects exactly what was typed.
+- The two axes stay separate as instructed: `parsers/hdfc/__init__.py` only
+  knows about `card_type` ("Diners" vs. future card types); `current` vs.
+  `legacy` statement-layout detection remains entirely inside
+  `parsers/hdfc_diners.py`, unaware that card-type dispatch exists above it.
+
+**Callers found via exhaustive grep (`from parsers.hdfc import`, `import
+parsers.hdfc`, `parsers.hdfc.`) — three expected, one surprising:**
+- `tests/test_hdfc.py` (→ renamed, now imports Diners internals directly from
+  `parsers.hdfc_diners` — expected, these are white-box tests of the Diners
+  implementation, not the dispatch layer).
+- `tests/test_hdfc_legacy.py` (→ renamed, now imports from
+  `parsers.hdfc_diners_legacy` — expected, same reasoning).
+- `tests/test_hdfc_real_statements.py` — expected to need updating, but this
+  one revealed a design question: it uses `extract_summary()` and
+  `_detect_layout()` for reconciliation assertions, and neither is part of the
+  `parse()`-only dispatch interface. Resolved by importing `extract_summary`/
+  `_detect_layout` directly from `parsers.hdfc_diners` (Diners-specific
+  reconciliation tooling, not a dispatch concern) while routing only the
+  `parse()` call through `parsers.hdfc.parse(..., card_type="Diners")` — so the
+  dispatch path genuinely gets exercised for the one function it actually
+  covers.
+- **`run_hdfc_parser.py` — not mentioned anywhere in this session's brief, and
+  the one genuinely surprising hit.** It's a standalone dev/debug script (from
+  Session 8 onward) that imports `parse`/`extract_summary` from `parsers.hdfc`
+  directly — it would have silently broken (import error, since the old
+  `parsers.hdfc` module no longer exists in that form) the next time anyone
+  ran it, with no test to catch that regression. Fixed the same way as the
+  integration test: `parse()` now goes through
+  `hdfc_dispatch.parse(args.pdf_path, PASSWORD, card_type=CARD_TYPE)`, with
+  `CARD_TYPE = "Diners"` hardcoded as a module constant (not exposed as a CLI
+  flag — only one card type exists to choose from right now, so a flag would
+  be speculative complexity) and `extract_summary` imported directly from
+  `parsers.hdfc_diners`, same reasoning as above.
+
+**Session 18 follow-up — code comment convention:** added a short comment in
+`storage/writes.py` directly above the `if e.sqlite_errorname ==
+"SQLITE_CONSTRAINT_FOREIGNKEY":` branch, explaining that `sqlite3` doesn't
+expose distinct exception classes for `UNIQUE` vs. `FOREIGN KEY` violations,
+so `sqlite_errorname` string comparison is the only way to distinguish them —
+so the "why" is visible right at the branch, not only in this DEVLOG.
+
+**`tests/test_hdfc_dispatch.py`** (new, 6 tests, no real PDFs): monkeypatches
+`hdfc_diners.parse` with a fake function to verify dispatch (a) calls through
+with the right arguments and returns its result unchanged, (b) does so for
+`"diners"`, `"DINERS"`, `"Diners"`, and `" Diners "` alike (parametrized), and
+(c) raises `NotImplementedError` containing the offending card type
+(`"Regalia"`) for an unimplemented one. Monkeypatching the module attribute
+works correctly even with lazy import, since Python caches `parsers.hdfc_diners`
+as a single module object in `sys.modules` — the dispatch function's `from
+parsers import hdfc_diners` resolves to that same cached object regardless of
+when the import statement executes.
+
+**Verification:**
+```bash
+python -m pytest tests/ -v
+```
+```
+69 passed in 2.20s
+```
+(63 previous — renamed/re-pathed, no logic changes — plus 6 new dispatch
+tests.) The real-statement integration tests **actually ran against all 6 real
+samples** (not skipped) — `.env`/`HDFC_SAMPLE_PASSWORD` and the sample PDFs
+were both present on this machine, so `test_real_statement_layout_detected`
+and `test_real_statement_reconciles` executed for real, exercising the
+dispatch layer's `parse()` path end-to-end rather than just the mocked
+dispatch tests. Also ran `run_hdfc_parser.py` directly against both a
+current-layout and a legacy-layout sample post-fix — both still reconcile
+correctly through the dispatch layer.
+
+### Outcome
+HDFC parsing is now structured as a dispatch layer (`parsers/hdfc/`) plus one
+card-type implementation (`parsers/hdfc_diners.py`, itself still handling two
+statement layouts internally, unrelated to card-type dispatch). All 4 known
+callers of the old `parsers.hdfc` module — 2 test files, 1 integration test
+file, and 1 previously-unmentioned dev script — were found via exhaustive grep
+and updated; none were missed. 69 tests pass; no behavior change to Diners
+parsing itself.
+
+### Next steps
+Session 20 adds the adapter (`storage/adapters.py`), the CLI
+(`scripts/import_statement.py` with `--card-id`), and the end-to-end
+integration test importing real samples into a `tmp_path` DB.

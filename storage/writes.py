@@ -53,6 +53,11 @@ def insert_statement(
                     ),
                 )
     except sqlite3.IntegrityError as e:
+        # Python's sqlite3 module raises the same IntegrityError class for
+        # UNIQUE and FOREIGN KEY violations -- there's no distinct exception
+        # type to catch separately. e.sqlite_errorname exposes the underlying
+        # SQLite error code (verified empirically in Session 18) as the only
+        # way to tell them apart here.
         if e.sqlite_errorname == "SQLITE_CONSTRAINT_FOREIGNKEY":
             raise
         return None

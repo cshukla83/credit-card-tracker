@@ -3,12 +3,16 @@ import os
 
 from dotenv import load_dotenv
 
-from parsers.hdfc import extract_summary, parse
+import parsers.hdfc as hdfc_dispatch
+from parsers.hdfc_diners import extract_summary
 
 load_dotenv()
 
 DEFAULT_PDF_PATH = "data/statements/hdfc_sample.pdf"
 PASSWORD = os.environ["HDFC_SAMPLE_PASSWORD"]
+# Only the Diners parser exists so far; hardcoded rather than exposed as a
+# flag until a second card_type is actually implemented.
+CARD_TYPE = "Diners"
 
 
 def _reconciles(actual, expected, tolerance=0.01):
@@ -28,7 +32,7 @@ def main():
     parser.add_argument("pdf_path", nargs="?", default=DEFAULT_PDF_PATH)
     args = parser.parse_args()
 
-    transactions = parse(args.pdf_path, PASSWORD)
+    transactions = hdfc_dispatch.parse(args.pdf_path, PASSWORD, card_type=CARD_TYPE)
     summary = extract_summary(args.pdf_path, PASSWORD)
 
     debits = [t for t in transactions if t["type"] == "debit"]
