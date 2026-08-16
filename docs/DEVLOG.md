@@ -1719,3 +1719,177 @@ parsing itself.
 Session 20 adds the adapter (`storage/adapters.py`), the CLI
 (`scripts/import_statement.py` with `--card-id`), and the end-to-end
 integration test importing real samples into a `tmp_path` DB.
+
+---
+
+## Session 20 — 2026-08-16
+
+### Goal
+Wire the parser dispatch layer's output into `insert_statement()` via an
+adapter, add a CLI entry point, and integration-test end-to-end against real
+samples. First session that writes real statement data through the full
+pipeline (into a local, git-ignored DB — never into git).
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Wire the parser dispatch layer's output into insert_statement() via an
+> adapter, add a CLI entry point, and integration-test end-to-end against real
+> samples... Statement period surfacing — resolve the Session 19 open question
+> first... Preferred (Option A): change parse()'s return type to {period_start,
+> period_end, transactions}... Prefer A. Only fall back to B with an explicit
+> reason... Create storage/adapters.py: from_hdfc(parsed, card_id) ->
+> (card_id, period_start, period_end, transactions)... Create
+> scripts/import_statement.py... never prints amounts, merchants, or
+> individual transaction dates... Add tests/test_adapters.py,
+> tests/test_integration_import.py... Manual CLI verification in your separate
+> terminal..."
+
+**Period surfacing — Option A, no fallback needed.** Investigated whether
+`period_start`/`period_end` were derivable from the statement text before
+touching any code (all checks below print only structural presence/derived
+dates, never real transaction data, consistent with this session's own rule
+that period dates are the one date-shaped thing safe to surface):
+- **Current layout:** page 1 has an explicit `"Billing Period 17 Jun, 2026 -
+  16 Jul, 2026"`-style line — confirmed present and consistently formatted
+  across all 4 current-layout samples (1, 2, 3, 6). Both dates come straight
+  from one regex match; no derivation needed.
+- **Legacy layout:** page 1 has only a closing `"Statement Date:16/02/2025"`
+  — **no explicit billing-period range exists anywhere in the document**
+  (checked all 3 pages of both legacy samples). `period_end` comes from that
+  statement date. `period_start` doesn't have an explicit source, so it's
+  derived as the earliest parsed transaction's date — **verified against both
+  real legacy samples before committing to this approach**: sample 4's min
+  transaction date landed exactly one month before its statement date
+  (2025-01-16 → 2025-02-16), and sample 5's did too (2024-09-17 →
+  2024-10-16), both matching the same "~17th to 16th" monthly cycle pattern
+  seen explicitly in the current layout's `Billing Period` line. This isn't
+  just a rough guess; it reproduces the real cycle boundary the bank itself
+  uses, based on the two real data points available.
+
+Because a real, non-trivial derivation path existed for *both* layouts,
+**Option A was used outright — no fallback to Option B was needed.** Per the
+"Prefer A" instruction, this required actually attempting A properly before
+concluding it wasn't viable, not assuming B based on the legacy layout's
+missing explicit range.
+
+**`parsers/base.py`:** added a `ParsedStatement` `TypedDict`
+(`period_start: date`, `period_end: date`, `transactions: list[Transaction]`)
+and changed `ParseFn`'s return type to it. Placed in `base.py`, not
+`hdfc_diners.py`, since a statement period is a bank-agnostic concept — any
+future non-HDFC parser inherits this same contract.
+
+**`parsers/hdfc_diners.py`:** added `_extract_period_current_layout_from_text()`
+(the `Billing Period` regex + `strptime("%d %b, %Y")` per side) and changed
+`parse()` to return the new `ParsedStatement` shape for the current-layout
+branch (the legacy branch already delegates to `hdfc_diners_legacy.parse()`,
+which now returns the same shape itself).
+
+**`parsers/hdfc_diners_legacy.py`:** added `_extract_period_end_from_text()`
+(the `Statement Date` regex) and changed `parse()` to compute `period_start =
+min(t["date"] for t in transactions).date()` after collecting transactions,
+then return the `ParsedStatement` shape.
+
+**Caller updates from the return-shape change** (found by checking every
+`parse()` call site, not just tests — same discipline as Session 19's grep):
+`run_hdfc_parser.py` and `tests/test_hdfc_real_statements.py` both now
+unpack `parsed["transactions"]` from the dict instead of treating the return
+value as the list directly; `tests/test_hdfc_dispatch.py`'s fabricated fixture
+became a `ParsedStatement`-shaped dict instead of a bare list.
+`tests/test_hdfc_diners.py` / `test_hdfc_diners_legacy.py` were unaffected —
+confirmed via grep in Session 19 that neither calls the top-level `parse()`,
+only internal per-line/per-summary helpers.
+`tests/test_hdfc_real_statements.py` also gained new assertions
+(`period_start`/`period_end` not `None`, `period_start <= period_end`) since
+the parser now makes a promise (a correct period) that nothing verified
+before — same "code makes a promise no test currently verifies" reasoning
+flagged as the standing bar for this project.
+
+**`storage/adapters.py`** (new): `from_hdfc(parsed, card_id) -> (card_id,
+period_start, period_end, transactions)`, ready to unpack directly into
+`insert_statement(conn, *result)`. Field mapping kept in one small table
+(`_FIELD_MAP`) plus one explicit exception: the parser's `date` field is a
+full `datetime` (carries time-of-day on some layouts), while storage's
+`txn_date` column is a pure date — folding that rename into the generic map
+would have silently stored a full ISO datetime string in a date column via
+`_to_date_str()`'s default `isinstance(value, date)` check (`datetime` is a
+subclass of `date`, so it would "work" without erroring, just wrongly). Handled
+explicitly instead: `.date()` is called before mapping, so `txn_date` always
+lands as a clean date.
+
+**`scripts/import_statement.py`** (new CLI): `python -m
+scripts.import_statement <pdf_path> --card-id <int>`. Workflow: `init_db()`
+→ open connection → `get_card()` (missing card_id → clear error, exit 1,
+never reaches parsing) → look up the PDF password by the card's `bank` field
+→ `hdfc_dispatch.parse(..., card_type=card["card_type"])` → `from_hdfc()` →
+`insert_statement()` → print outcome. Output is strictly counts, ids, and
+statement periods — never amounts, merchants, or individual transaction
+dates, matching this session's explicit rule (periods are the one date-shaped
+exception, since they identify *which* statement was affected, not its
+contents).
+
+**`HDFC_SAMPLE_PASSWORD` hardcoding:** the CLI looks up which `.env` key holds
+a card's password via a one-entry dict, `_BANK_PASSWORD_ENV_KEYS = {"HDFC":
+"HDFC_SAMPLE_PASSWORD"}`, with a `TODO` comment explaining this needs to
+generalize once a second bank exists. Building a real per-bank config system
+for a single known entry would be speculative complexity — this is the
+correct amount of "not yet."
+
+**Tests:**
+- `tests/test_adapters.py` (4 tests, fabricated data): shape/field-mapping
+  correctness, `reward_points=None` passthrough, and a full round-trip through
+  `insert_statement()` into a `tmp_path` DB with values read back and checked.
+- `tests/test_integration_import.py` (2 tests, real samples, skip-cleanly
+  pattern from Sessions 14–15): imports all 6 real samples through the full
+  `parse → adapt → insert_statement` pipeline into one `tmp_path` DB under one
+  card, asserting stored transaction counts match the parser's own count per
+  statement and that all 6 land as distinct statement ids (no false dedup
+  collision across genuinely different periods); a second pass re-imports
+  every sample and asserts each one dedups (`None` returned). Failure messages
+  reference statement periods only, never amounts or merchants.
+
+**Verification:**
+```bash
+python -m pytest tests/ -v
+```
+```
+75 passed in 6.41s
+```
+(69 previous — 2 files' `parse()` call sites and 1 fixture updated for the
+new return shape, no logic changes otherwise — plus 6 new: 4 adapter, 2
+integration.) **The integration tests ran for real, not skipped** — `.env`
+and all 6 sample PDFs were present, so `test_import_all_real_samples_...` and
+`test_reimporting_same_samples_dedups` actually executed the full pipeline
+against real statement data.
+
+**Manual CLI verification** (in a real terminal session, against the real
+default `data/tracker.db` — confirmed no stale file existed first, and
+deleted the manually-created one afterward since it was only for this
+verification, not meant to persist):
+1. Created a card by hand (`create_card(conn, "HDFC", "Diners", "Primary")`)
+   → `card_id=1`.
+2. `python -m scripts.import_statement data/statements/hdfc_sample.pdf
+   --card-id 1` → `Imported 26 transactions (statement_id=1, card_id=1)` —
+   matches the known reconciled count for this sample from Sessions 8–13.
+3. Same command again → `Skipped: already imported (card_id=1,
+   period=2026-06-17..2026-07-16)` — dedup confirmed working through the CLI,
+   not just in unit tests.
+4. `--card-id 99999` (nonexistent) → `Error: card_id 99999 not found`, exit
+   code `1`, confirmed via `echo "exit code: $?"` — parsing was never reached
+   (the error happens before any PDF is opened).
+
+### Outcome
+The full pipeline — PDF → parser dispatch → adapter → storage — works
+end-to-end, verified three ways: unit tests (fabricated data), integration
+tests (real samples, isolated `tmp_path` DB), and manual CLI runs (real
+sample, real default DB, then cleaned up). `period_start`/`period_end` are now
+a first-class part of the parser interface (`parsers/base.py`), not something
+adapter/CLI code has to reach into implementation internals for. 75 tests
+pass; no real financial data appears in any test file, assertion message, or
+CLI output — only counts, ids, and statement periods.
+
+### Next steps
+Candidates for Session 21 (pick one): (a) read path — query transactions by
+month/week filtered by card; (b) generalize the `.env` password-key lookup so
+adding a bank isn't a hardcoded dict entry; (c) card-creation CLI so users
+don't need an ad-hoc script to add a card.

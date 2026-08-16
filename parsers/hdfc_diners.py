@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 
 import pdfplumber
 
 from parsers import hdfc_diners_legacy
-from parsers.base import Transaction
+from parsers.base import ParsedStatement, Transaction
 
 CREDIT_KEYWORDS = ("PAYMENT", "REFUND", "REVERSAL", "CASHBACK", "CREDIT")
 
 _CURRENCY_RE = r"C\s*([\d,]+\.\d{2})"
+
+# e.g. "Billing Period 17 Jun, 2026 - 16 Jul, 2026" -- present on page 1 of
+# every current-layout statement, giving both period_start and period_end
+# directly (unlike the legacy layout, which only states a closing date).
+_BILLING_PERIOD_RE = re.compile(
+    r"Billing Period\s+(\d{1,2}\s+[A-Za-z]{3},\s+\d{4})\s*-\s*(\d{1,2}\s+[A-Za-z]{3},\s+\d{4})"
+)
 
 # Matches one transaction line as it comes out of pdfplumber's extract_text(),
 # e.g. "17/06/2026| 21:45 SOME MERCHANT C 216.00 l" or, when reward points were
@@ -116,6 +123,15 @@ def _parse_line_current_layout(
     )
 
 
+def _extract_period_current_layout_from_text(text: str) -> "tuple[date | None, date | None]":
+    match = _BILLING_PERIOD_RE.search(text)
+    if not match:
+        return None, None
+    period_start = datetime.strptime(match.group(1), "%d %b, %Y").date()
+    period_end = datetime.strptime(match.group(2), "%d %b, %Y").date()
+    return period_start, period_end
+
+
 def _extract_summary_current_layout(pdf_path: str, password: str) -> dict:
     with pdfplumber.open(pdf_path, password=password) as pdf:
         text = pdf.pages[0].extract_text() or ""
@@ -163,11 +179,21 @@ def _detect_layout(pdf_path: str, password: str) -> str:
         raise ValueError(f"Unrecognized HDFC statement layout: {pdf_path}") from None
 
 
-def parse(pdf_path: str, password: str) -> "list[Transaction]":
+def parse(pdf_path: str, password: str) -> ParsedStatement:
     layout = _detect_layout(pdf_path, password)
     if layout == "legacy":
         return hdfc_diners_legacy.parse(pdf_path, password)
-    return _parse_current_layout(pdf_path, password)
+
+    transactions = _parse_current_layout(pdf_path, password)
+    with pdfplumber.open(pdf_path, password=password) as pdf:
+        text = pdf.pages[0].extract_text() or ""
+    period_start, period_end = _extract_period_current_layout_from_text(text)
+
+    return ParsedStatement(
+        period_start=period_start,
+        period_end=period_end,
+        transactions=transactions,
+    )
 
 
 def extract_summary(pdf_path: str, password: str) -> dict:

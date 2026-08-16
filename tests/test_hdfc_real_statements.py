@@ -56,11 +56,15 @@ def test_real_statement_reconciles(pdf_path, expected_layout):
     if not Path(pdf_path).exists():
         pytest.skip(f"{pdf_path} not present locally")
 
-    transactions = hdfc_dispatch.parse(pdf_path, PASSWORD, card_type="Diners")
+    parsed = hdfc_dispatch.parse(pdf_path, PASSWORD, card_type="Diners")
+    transactions = parsed["transactions"]
     summary = extract_summary(pdf_path, PASSWORD)
 
     assert len(transactions) > 0
     assert all(t["type"] in ("debit", "credit") for t in transactions)
+    assert parsed["period_start"] is not None
+    assert parsed["period_end"] is not None
+    assert parsed["period_start"] <= parsed["period_end"]
 
     debit_total = sum(t["amount"] for t in transactions if t["type"] == "debit")
     credit_total = sum(t["amount"] for t in transactions if t["type"] == "credit")

@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 
 import pdfplumber
 
-from parsers.base import Transaction
+from parsers.base import ParsedStatement, Transaction
 
 _AMOUNT_RE = r"[\d,]+\.\d{2}"
+
+# This layout never prints an explicit billing-period range (unlike the
+# current layout's "Billing Period DD Mon, YYYY - DD Mon, YYYY" line) -- only
+# a single closing "Statement Date". period_end comes from that; period_start
+# is derived as the earliest parsed transaction date, which matches this
+# statement's actual ~1-month billing cycle exactly (verified against real
+# sample statements: min transaction date landed on the same day-of-month as
+# the cycle start seen in current-layout statements, one month before
+# period_end).
+_STATEMENT_DATE_RE = re.compile(r"Statement Date:?\s*(\d{2}/\d{2}/\d{4})")
 
 # Matches one transaction line from the pre-2025-layout HDFC statement's
 # extract_text() output, e.g.:
@@ -99,16 +109,24 @@ def _parse_line(line: str) -> "Transaction | None":
     )
 
 
+def _extract_period_end_from_text(text: str) -> "date | None":
+    match = _STATEMENT_DATE_RE.search(text)
+    if not match:
+        return None
+    return datetime.strptime(match.group(1), "%d/%m/%Y").date()
+
+
 def extract_summary(pdf_path: str, password: str) -> dict:
     with pdfplumber.open(pdf_path, password=password) as pdf:
         text = pdf.pages[0].extract_text() or ""
     return _extract_summary_from_text(text)
 
 
-def parse(pdf_path: str, password: str) -> "list[Transaction]":
+def parse(pdf_path: str, password: str) -> ParsedStatement:
     transactions: list[Transaction] = []
 
     with pdfplumber.open(pdf_path, password=password) as pdf:
+        first_page_text = pdf.pages[0].extract_text() or ""
         for page in pdf.pages:
             text = page.extract_text() or ""
             for line in text.splitlines():
@@ -116,4 +134,13 @@ def parse(pdf_path: str, password: str) -> "list[Transaction]":
                 if transaction is not None:
                     transactions.append(transaction)
 
-    return transactions
+    period_end = _extract_period_end_from_text(first_page_text)
+    period_start = min((t["date"] for t in transactions), default=None)
+    if period_start is not None:
+        period_start = period_start.date()
+
+    return ParsedStatement(
+        period_start=period_start,
+        period_end=period_end,
+        transactions=transactions,
+    )

@@ -32,7 +32,8 @@ def main():
     parser.add_argument("pdf_path", nargs="?", default=DEFAULT_PDF_PATH)
     args = parser.parse_args()
 
-    transactions = hdfc_dispatch.parse(args.pdf_path, PASSWORD, card_type=CARD_TYPE)
+    parsed = hdfc_dispatch.parse(args.pdf_path, PASSWORD, card_type=CARD_TYPE)
+    transactions = parsed["transactions"]
     summary = extract_summary(args.pdf_path, PASSWORD)
 
     debits = [t for t in transactions if t["type"] == "debit"]

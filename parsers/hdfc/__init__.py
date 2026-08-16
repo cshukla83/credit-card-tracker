@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from parsers.base import ParsedStatement
 
-def parse(pdf_path: str, password: str, card_type: str) -> "list":
+
+def parse(pdf_path: str, password: str, card_type: str) -> ParsedStatement:
     """Route parsing to the HDFC parser for the given card_type.
 
     card_type matching is case-insensitive: "diners", "DINERS", and "Diners"
