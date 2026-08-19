@@ -1893,3 +1893,107 @@ Candidates for Session 21 (pick one): (a) read path — query transactions by
 month/week filtered by card; (b) generalize the `.env` password-key lookup so
 adding a bank isn't a hardcoded dict entry; (c) card-creation CLI so users
 don't need an ad-hoc script to add a card.
+
+---
+
+## Session 21 — 2026-08-19
+
+### Goal
+Step 1 of the storage-layer read path: `storage/reads.py` with a single
+`get_transactions(conn, card_id=None, start_date=None, end_date=None)`
+function, filterable by card and/or an inclusive date range. No CLI yet —
+that's step 2, next session.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Create storage/reads.py with a single function: get_transactions(conn,
+> card_id=None, start_date=None, end_date=None)... All three filters are
+> optional and compose with AND... card_id filters transactions whose parent
+> statement belongs to that card (JOIN through statements)... start_date and
+> end_date filter on transactions.txn_date, BOTH INCLUSIVE... normalize via
+> the same _to_date_str() pattern used elsewhere (check storage/writes.py; if
+> the helper isn't shared, extract it... but only if extraction is genuinely
+> clean, otherwise duplicate and flag it)... Results ordered txn_date DESC,
+> id DESC... match whatever convention the rest of storage/ uses; check
+> first... Add unit tests in tests/test_reads.py..."
+
+**Note on the prompt's file references:** it mentioned `tests/test_writes.py`
+as an existing pattern to follow — that file doesn't exist in this project;
+the storage write-path tests actually live in `tests/test_storage.py`. Used
+that (and `tests/test_cards.py`) as the pattern reference instead; flagged
+here rather than silently substituting without comment.
+
+**Return-shape convention check (done before writing any code, per the
+prompt's own instruction to check first):** `storage/db.py`'s
+`get_connection()` sets `row_factory = sqlite3.Row`, but `storage/cards.py`'s
+multi-row function (`list_cards()`) explicitly converts each row to a `dict`
+before returning, as do `get_card()`/`find_card()`. `storage/writes.py` sets
+no precedent either way (it returns an `int | None`, never rows). Followed
+`storage/cards.py`'s established convention: `get_transactions()` returns
+`list[dict]`, for consistency with the only other place in `storage/` that
+returns multiple structured rows.
+
+**`_to_date_str()` extraction — done, not duplicated.** Grepped for every
+reference first: it was only ever defined and used inside `storage/writes.py`
+(private, single 2-line helper, zero dependencies) — a clean extraction with
+no risk of missing a caller. Rather than importing a private
+(underscore-prefixed) name across modules, which signals "don't reach into
+this from outside," created **`storage/dates.py`** with a public
+`to_date_str()`, and updated `storage/writes.py` to import and use it,
+removing its own private copy. `storage/reads.py` imports the same shared
+function. This is the one existing file this session touched, and it's
+exactly the case the constraints called out as acceptable.
+
+**`storage/reads.py`:**
+- Builds the query incrementally: starts from `SELECT transactions.* FROM
+  transactions` (explicitly `transactions.*`, not bare `*` — with the
+  conditional `JOIN statements`, both tables have an `id` column, and a bare
+  `SELECT *` would collide when converted to a `dict`, silently keeping only
+  one of the two `id` values). Adds a `JOIN` clause only when `card_id` is
+  given (no unnecessary join when it's unused), then appends `WHERE`
+  conditions and parameters for whichever filters are present, all
+  parameterized (no string-interpolated values).
+- `start_date`/`end_date` use `>=`/`<=` respectively — inclusive on both
+  ends, as specified.
+- Both date filters and `card_id` compose with `AND` when combined, via a
+  single `conditions` list joined at the end.
+- Final `ORDER BY transactions.txn_date DESC, transactions.id DESC`.
+
+**`tests/test_reads.py`** (9 tests): a `two_cards` fixture sets up 2 cards and
+5 fabricated transactions spread across January 2026 (Card A: Jan 5/10/15;
+Card B: Jan 8/20) via the real storage layer (`create_card` +
+`insert_statement`, not the parser — matching the prompt's instruction).
+Covers: no filters (all 5), `card_id` only, `start_date` only, `end_date`
+only, both together (range), all three combined, an empty result set, and —
+as its own separate test with 3 same-day transactions — that same-day rows
+come back in stable `id DESC` (reverse insertion) order. The boundary
+inclusivity test deliberately sets `start_date`/`end_date` to land exactly on
+two real transaction dates (Jan 5 and Jan 20) and asserts both are included,
+directly testing for an off-by-one `>`/`<` vs. `>=`/`<=` bug rather than just
+trusting the query text.
+
+**Verification:**
+```bash
+python -m pytest tests/ -v
+```
+```
+84 passed in 6.31s
+```
+(75 previous — `storage/writes.py`'s only change was the `to_date_str` import
+swap, verified via full suite re-run to confirm no behavior change — plus 9
+new.)
+
+### Outcome
+`get_transactions()` is a working, tested read path over the full
+`cards`/`statements`/`transactions` schema, filterable by card and/or an
+inclusive date range, composing correctly with `AND`. The shared
+`storage/dates.py` module means `storage/writes.py` and `storage/reads.py`
+now share one normalization helper instead of each carrying (or risking
+diverging) their own copy. No CLI yet, no aggregations, no categorization, no
+multi-card views — exactly the step-1 scope asked for.
+
+### Next steps
+Step 2: a thin CLI wrapper in `scripts/query_transactions.py` over
+`get_transactions()`, following the same "thin entry point, no business
+logic" pattern `scripts/import_statement.py` established in Session 20.

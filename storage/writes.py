@@ -1,9 +1,7 @@
 import sqlite3
 from datetime import date
 
-
-def _to_date_str(value):
-    return value.isoformat() if isinstance(value, date) else value
+from storage.dates import to_date_str
 
 
 def insert_statement(
@@ -34,7 +32,7 @@ def insert_statement(
         with conn:
             cursor = conn.execute(
                 "INSERT INTO statements (card_id, period_start, period_end) VALUES (?, ?, ?)",
-                (card_id, _to_date_str(period_start), _to_date_str(period_end)),
+                (card_id, to_date_str(period_start), to_date_str(period_end)),
             )
             statement_id = cursor.lastrowid
 
@@ -45,7 +43,7 @@ def insert_statement(
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (
                         statement_id,
-                        _to_date_str(txn["txn_date"]),
+                        to_date_str(txn["txn_date"]),
                         txn["description"],
                         txn["amount"],
                         txn["txn_type"],
