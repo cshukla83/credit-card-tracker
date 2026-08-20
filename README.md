@@ -44,6 +44,22 @@ uvicorn main:app --reload
 
 Then open http://127.0.0.1:8000/ in your browser.
 
+## Running the CLIs
+
+The project's command-line scripts live under `scripts/` and must be run as
+modules (`-m`), not invoked directly (`python scripts/foo.py`) — running a
+script directly puts *that script's own directory* on `sys.path`, not the
+project root, so its top-level `from storage...`/`from parsers...` imports
+fail with `ModuleNotFoundError`. Always run from the project root, with the
+venv active:
+
+```bash
+source venv/bin/activate
+python -m scripts.create_card --bank HDFC --card-type Diners --nickname Primary
+python -m scripts.import_statement data/statements/hdfc_sample.pdf --card-id 1
+python -m scripts.query_transactions --card-id 1 --start 2026-06-01 --end 2026-06-30
+```
+
 ## Learning notes
 
 This project was built while learning Claude Code hands-on. The full session-by-session
