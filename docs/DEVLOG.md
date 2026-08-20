@@ -2193,6 +2193,27 @@ storage layer? validate against an enum of known values? something else?)
 that deserves its own focused session rather than a quick patch bolted onto
 CLI #3.
 
+**Second card-identity asymmetry (surfaced during Session 22 verification):**
+
+`CardAlreadyExistsError` only fires when `nickname` is non-NULL. Two
+cards with `(bank='X', card_type='Y', nickname=NULL)` are considered
+distinct by SQLite because NULL values are treated as distinct in UNIQUE
+constraints — this is the Session 18 locked design decision working as
+intended. Practical consequence: the CLI's duplicate detection is really
+"duplicate detection when nickname is set." A user creating a series of
+nickname-less cards will silently accumulate duplicates without any
+error.
+
+Not a bug — the Session 18 design intentionally allows multiple unnamed
+cards of the same bank/type. But it's a surprise worth naming: verified
+during Session 22 by running `create_card --bank "Test Bank" --card-type
+"Test Type"` twice without a nickname and observing two rows created
+with different ids.
+
+Related to the case-sensitivity asymmetry above: both are card-identity
+questions that deserve a proper design decision in a future session
+(alongside case normalization / validation for bank + card_type).
+
 **Verification:** no automated tests added or run, and no manual verification
 run by Claude Code, per this session's explicit instruction. Manual
 verification is reported to the user to run themselves:
