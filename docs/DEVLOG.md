@@ -2098,3 +2098,32 @@ lookup (so `--card-id` doesn't require remembering numeric ids), JSON output
 mode (for programmatic consumption), and aggregations (totals, category
 grouping) — none of these were needed for this session's scope and weren't
 added speculatively.
+
+**Post-verification notes:**
+
+- CLI initially failed with `ModuleNotFoundError: No module named 'storage'`
+  when invoked as `python3 scripts/query_transactions.py ...`. Root cause:
+  running a script directly puts the script's directory on `sys.path`, not
+  the project root, so top-level `from storage...` imports fail. Correct
+  invocation is `python3 -m scripts.query_transactions ...` from the
+  project root with venv active — same convention `scripts/import_statement.py`
+  uses.
+
+- Tests did not catch this because pytest configures `sys.path` itself and
+  the tests exercise `storage.reads.get_transactions()` directly as a
+  library function; the CLI's import chain is never invoked by any test.
+  Decision to skip formal CLI tests remains reasonable, but noted as the
+  reason this class of failure isn't caught automatically.
+
+- The `python -m scripts.xxx` invocation convention is undocumented — no
+  README section, no per-script usage docstring. Small doc debt to clear
+  in a session that touches scripts anyway. Not urgent enough to warrant
+  its own session.
+
+- Manual end-to-end verification against real data completed after the
+  invocation issue was resolved: fresh card created, sample statement
+  re-imported (26 transactions, matching the Session 8 reconciliation),
+  all four remaining CLI checks passed (card filter returns correct count
+  and DESC ordering, date range narrows count, boundary inclusivity
+  confirmed on same-day start/end, --start > --end error path exits
+  cleanly before touching the DB).
