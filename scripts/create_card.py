@@ -1,3 +1,12 @@
+"""Create a card (bank + card type + optional nickname) in the tracker DB.
+
+Run from the project root, with the venv active:
+    python -m scripts.create_card --bank <str> --card-type <str> [--nickname <str>]
+
+Example:
+    python -m scripts.create_card --bank HDFC --card-type Diners --nickname Primary
+"""
+
 import argparse
 import sys
 

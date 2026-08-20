@@ -1,3 +1,12 @@
+"""Query transactions from the tracker DB, optionally filtered by card and/or date range.
+
+Run from the project root, with the venv active:
+    python -m scripts.query_transactions [--card-id <int>] [--start YYYY-MM-DD] [--end YYYY-MM-DD]
+
+Example:
+    python -m scripts.query_transactions --card-id 1 --start 2026-06-01 --end 2026-06-30
+"""
+
 import argparse
 import sys
 from datetime import date

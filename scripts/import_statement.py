@@ -1,3 +1,12 @@
+"""Import a card statement PDF into the tracker DB.
+
+Run from the project root, with the venv active:
+    python -m scripts.import_statement <pdf_path> --card-id <int>
+
+Example:
+    python -m scripts.import_statement data/statements/hdfc_sample.pdf --card-id 1
+"""
+
 import argparse
 import os
 import sys
