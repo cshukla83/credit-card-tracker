@@ -2127,3 +2127,97 @@ added speculatively.
   and DESC ordering, date range narrows count, boundary inclusivity
   confirmed on same-day start/end, --start > --end error path exits
   cleanly before touching the DB).
+
+---
+
+## Session 22 — 2026-08-20
+
+### Goal
+Build a proper card-creation CLI (`scripts/create_card.py`), and clear the
+`python -m scripts.<name>` invocation doc debt flagged in Session 21's
+post-verification notes — write it down in one place instead of leaving it
+as tribal knowledge.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Session 22: build a proper card creation CLI and clear the script
+> invocation doc debt from Session 21... Part 1: create
+> scripts/create_card.py... Part 2: clear the script invocation doc
+> debt... Part 3: add a 'Running the CLIs' section to README.md... Part 4:
+> manual verification. Do not run any verification yourself... Part 5:
+> docs/DEVLOG.md... explicitly note the known asymmetry..."
+
+**`scripts/create_card.py`** (new): follows the exact shape established by
+`scripts/import_statement.py` (`argparse` → `init_db()` → `get_connection()`
+in `try/finally` → work → close). `--bank`/`--card-type` required,
+`--nickname` optional. `CardAlreadyExistsError` is caught explicitly around
+just the `create_card()` call and reported as a clean one-line error to
+**stderr** with `sys.exit(1)` — not left to propagate as an uncaught
+traceback. `args.bank`/`args.card_type` are stored exactly as passed, with no
+case normalization (see the open question below). No `--list`/`--update`/
+`--delete`, no interactive prompting, no tests (matches Session 21's
+reasoning: `create_card()` itself already has unit coverage in
+`tests/test_cards.py`; argparse plumbing and print formatting aren't judged
+worth testing at this stage), and `storage/cards.py` itself was not touched.
+
+**Docstrings added to all three scripts** (`create_card.py`,
+`import_statement.py`, `query_transactions.py`): a short module-level
+docstring stating what the script does, the `python -m scripts.<name> ...`
+invocation form, and one concrete example command. Verified via `git diff`
+that the two pre-existing scripts gained *only* docstring lines — no
+behavior change.
+
+**`README.md`**: new "Running the CLIs" section, placed between the existing
+"Running the app" and "Learning notes" sections (the README's structure
+wasn't otherwise touched). States the `-m` invocation rule and *why* it
+matters — running a script directly puts that script's own directory on
+`sys.path` rather than the project root, so its top-level `from storage...`
+imports fail — plus one example command per script.
+
+**Known open question — case-sensitivity asymmetry (not fixed this
+session):** `storage.cards.create_card()`'s `UNIQUE(bank, card_type,
+nickname)` constraint is case-sensitive (SQLite's default `TEXT` comparison),
+but `parsers/hdfc/__init__.py`'s dispatch normalizes `card_type` via
+`.strip().title()` before comparing, so `"Diners"`, `"diners"`, and `"DINERS"
+all route to the same parser at the *parsing* layer. This means a user could
+create a card with `bank="hdfc"`, `card_type="diners"` (lowercase) and then
+be unable to import into it if `scripts/import_statement.py` passes
+`card["card_type"]` straight through to a dispatch layer that expects
+`"Diners"` — or, separately, could create two *different* cards
+(`card_type="Diners"` and `card_type="diners"`) that a human would consider
+duplicates but the storage layer does not. This session's `create_card.py`
+deliberately does **not** attempt to paper over this by normalizing case
+itself, since the right fix belongs to a real decision (normalize at the
+storage layer? validate against an enum of known values? something else?)
+that deserves its own focused session rather than a quick patch bolted onto
+CLI #3.
+
+**Verification:** no automated tests added or run, and no manual verification
+run by Claude Code, per this session's explicit instruction. Manual
+verification is reported to the user to run themselves:
+```bash
+python -m scripts.create_card --bank "Test Bank" --card-type "Test Type"
+python -m scripts.create_card --bank "Test Bank" --card-type "Test Type"   # expect CardAlreadyExistsError path
+python -m scripts.create_card --bank "Test Bank" --card-type "Test Type" --nickname "Test Nick"
+python -m scripts.create_card --help
+python -m scripts.import_statement --help
+python -m scripts.query_transactions --help
+```
+
+### Outcome
+There are now three CLIs (`create_card`, `import_statement`,
+`query_transactions`), all following the same established shape, all
+documented with a docstring and a README section explaining the shared
+invocation convention. The case-sensitivity asymmetry between card storage
+and parser dispatch is written down as an explicit open question rather than
+silently left for someone to discover the hard way.
+
+### Next steps
+Remaining Session 22-adjacent candidates: (a) a second bank parser
+(SBI/ICICI/IndusInd/Axis), which would force the `_BANK_PASSWORD_ENV_KEYS`
+generalization (Session 20's `TODO`) to be resolved against two real cases
+instead of staying a one-entry placeholder; (b) aggregations or a
+nickname-based card lookup on the read path, deferred until a real caller
+needs them (Session 21); (c) the case-normalization/validation open question
+for `bank`/`card_type` flagged above.
