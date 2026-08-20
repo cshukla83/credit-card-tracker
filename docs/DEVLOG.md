@@ -1997,3 +1997,104 @@ multi-card views — exactly the step-1 scope asked for.
 Step 2: a thin CLI wrapper in `scripts/query_transactions.py` over
 `get_transactions()`, following the same "thin entry point, no business
 logic" pattern `scripts/import_statement.py` established in Session 20.
+
+---
+
+## Session 21, step 2 — 2026-08-20
+
+### Goal
+Thin CLI wrapper over `get_transactions()`: `scripts/query_transactions.py`
+with `--card-id`, `--start`, `--end` flags, printing a simple human-readable
+table. Closes the read path at the storage + CLI layer.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Create scripts/query_transactions.py — a thin CLI over
+> storage.reads.get_transactions()... Uses storage.db.get_connection() to
+> open the DB (same pattern as scripts/import_statement.py — check it for the
+> established shape before writing anything)... Prints results as a simple
+> aligned table to stdout. Columns: date | amount | type | description.
+> Truncate description to keep the line readable (~60 chars, ellipsis if
+> cut)... Do NOT include the transaction id or statement id... 'N
+> transactions'... Empty result set: print 'No transactions found.' and exit
+> 0. If --start > --end, exit with a clear error message and non-zero status
+> before touching the DB... skip formal unit tests... BUT verify manually
+> against the real DB and report back..."
+
+**Read `scripts/import_statement.py` first**, as instructed, to match its
+established shape: `argparse` → validate → `init_db()` → `get_connection()`
+in a `try/finally` → do the work → `conn.close()`. `query_transactions.py`
+follows the same skeleton, minus the parts that don't apply (no password
+lookup, no card-existence check — `card_id` here is just an optional filter
+value passed straight to `get_transactions()`, not something that has to
+exist).
+
+**`scripts/query_transactions.py`:**
+- `--start`/`--end` use `type=date.fromisoformat` directly in `argparse`, so
+  malformed date strings get argparse's own error handling (usage message,
+  exit code 2) for free — no hand-rolled date parsing, per the constraint.
+- The `--start > --end` check happens **before** `init_db()`/
+  `get_connection()` are called at all, so a bad range never touches the
+  database, matching "before touching the DB" literally, not just in effect.
+- Table printer explicitly selects the friendly column labels (`date`,
+  `amount`, `type`, `description`) rather than the underlying row keys
+  (`txn_date`, `txn_type`) — the storage schema's column names and the
+  human-facing table headers are allowed to diverge, and here they do
+  slightly, on purpose.
+- Description truncation: exactly 60 visible characters when truncated (59
+  characters of content + one `…`), not "60 characters plus an ellipsis" (61
+  total) — verified by eye against a deliberately-long fabricated description
+  before running anything against real data.
+- No transaction id or statement id printed anywhere, per the "human-facing
+  view, not a debugging dump" instruction.
+
+**Formatting verified against fabricated data first** (safe to inspect
+directly, unlike real statement contents): created a throwaway DB at a
+temp path, seeded two fabricated transactions — one with a deliberately long
+description to check truncation, one short — and ran all four required
+scenarios against it. Confirmed: correct `txn_date DESC` ordering, amount
+right-aligned to 2 decimal places, truncation kicking in at exactly the right
+length with a trailing `…`, and the empty-result and bad-range messages both
+read clearly.
+
+**Manual verification against the real DB** (per this session's own rule:
+counts and periods are safe to report, actual table contents are not, so
+command output was redirected to a file and only specific lines — never the
+transaction rows themselves — were inspected):
+1. Created a real card (`HDFC`/`Diners`/`Primary`) and imported two real
+   sample statements into it (26 + 12 = 38 transactions).
+2. No filters → **38 transactions** (matches the import counts exactly).
+3. `--card-id 1 --start 2026-06-01 --end 2026-06-30` → **20 transactions** —
+   a real, meaningful subset (not all 38, not zero), confirming the date
+   filter is actually narrowing results against real data, not just passing
+   everything through.
+4. A date range with no matches (`--start 2030-01-01 --end 2030-01-31`) →
+   `No transactions found.`
+5. `--start 2026-07-01 --end 2026-06-01` (start after end) →
+   `Error: --start (2026-07-01) is after --end (2026-06-01)`, exit code `1`.
+
+Deleted the manually-created `data/tracker.db` afterward (gitignored, only
+existed for this verification), matching Session 20's cleanup practice.
+
+**No unit tests added for the CLI itself**, per the explicit instruction —
+argparse plumbing and print formatting weren't judged worth the
+test-maintenance cost at this stage. The manual verification above is the
+record of correctness for this script instead.
+
+### Outcome
+The read path is complete at both layers: `storage/reads.py` (Session 21 step
+1) and now `scripts/query_transactions.py` on top of it. All four required
+manual scenarios passed against real imported data, and the table formatting
+was independently confirmed correct against fabricated data first. No real
+transaction data (merchant names, amounts, or table output) appears anywhere
+in this DEVLOG entry — only counts, a card/import summary, and the exact
+CLI-printed error/status messages, which contain no transaction content.
+
+### Next steps
+This closes Session 21's read path at the storage + CLI layer. Obvious next
+candidates, deferred until a real caller needs them: a nickname-based card
+lookup (so `--card-id` doesn't require remembering numeric ids), JSON output
+mode (for programmatic consumption), and aggregations (totals, category
+grouping) — none of these were needed for this session's scope and weren't
+added speculatively.
