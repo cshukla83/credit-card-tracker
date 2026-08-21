@@ -2480,3 +2480,9 @@ Two threads pick up from here, in order:
    vs. single-file static HTML with client-side fetch() is the first
    scoping decision. To be scoped in detail before drafting a Claude Code
    prompt for it.
+
+Separately, one open question from Session 23 remains worth naming: whether
+`GET /transactions` should eventually gain response pagination or a
+result-count cap before Session 24's page renders potentially large result
+sets directly. No evidence yet that it's a real problem, so not acted on —
+just named, so it isn't lost.
