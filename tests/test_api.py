@@ -1,0 +1,134 @@
+from datetime import date
+
+import pytest
+from fastapi.testclient import TestClient
+
+from main import app
+from storage.cards import create_card
+from storage.db import get_connection, init_db
+from storage.writes import insert_statement
+
+# All bank names, merchants, and amounts below are fabricated for testing.
+
+
+def _txn(day, description, amount=10.0, month=1):
+    return {
+        "txn_date": date(2026, month, day),
+        "description": description,
+        "amount": amount,
+        "txn_type": "debit",
+        "reward_points": None,
+    }
+
+
+@pytest.fixture
+def db_path(tmp_path, monkeypatch):
+    path = tmp_path / "test.db"
+    monkeypatch.setenv("DB_PATH", str(path))
+    init_db()
+    return str(path)
+
+
+@pytest.fixture
+def client(db_path):
+    return TestClient(app)
+
+
+@pytest.fixture
+def two_cards(db_path):
+    """Two cards, five transactions total, spread across January 2026:
+
+    Card A (3 txns): Jan 5, Jan 10, Jan 15
+    Card B (2 txns): Jan 8, Jan 20
+    """
+    conn = get_connection()
+    try:
+        card_a = create_card(conn, "FAKE BANK A", "FAKE CARD TYPE")
+        card_b = create_card(conn, "FAKE BANK B", "FAKE CARD TYPE")
+
+        insert_statement(
+            conn,
+            card_a,
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            [
+                _txn(5, "CARD A TXN 1"),
+                _txn(10, "CARD A TXN 2"),
+                _txn(15, "CARD A TXN 3"),
+            ],
+        )
+        insert_statement(
+            conn,
+            card_b,
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            [
+                _txn(8, "CARD B TXN 1"),
+                _txn(20, "CARD B TXN 2"),
+            ],
+        )
+    finally:
+        conn.close()
+
+    return card_a, card_b
+
+
+def test_no_filters_returns_all_transactions(client, two_cards):
+    response = client.get("/transactions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 5
+    assert set(body[0].keys()) == {
+        "id",
+        "statement_id",
+        "txn_date",
+        "description",
+        "amount",
+        "txn_type",
+        "reward_points",
+    }
+
+
+def test_all_filters_narrow_to_expected_subset(client, two_cards):
+    card_a, _card_b = two_cards
+
+    response = client.get(
+        "/transactions", params={"card_id": card_a, "start": "2026-01-08", "end": "2026-01-15"}
+    )
+
+    assert response.status_code == 200
+    descriptions = {t["description"] for t in response.json()}
+    assert descriptions == {"CARD A TXN 2", "CARD A TXN 3"}
+
+
+@pytest.mark.parametrize("bad_start", ["not-a-date", "2026-13-01"])
+def test_malformed_start_returns_400_naming_start(client, two_cards, bad_start):
+    response = client.get("/transactions", params={"start": bad_start})
+
+    assert response.status_code == 400
+    assert "start" in response.json()["detail"]
+
+
+def test_start_after_end_returns_400(client, two_cards):
+    response = client.get("/transactions", params={"start": "2026-02-01", "end": "2026-01-01"})
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "start" in detail and "end" in detail
+
+
+def test_empty_result_returns_200_and_empty_list(client, two_cards):
+    response = client.get("/transactions", params={"start": "2030-01-01", "end": "2030-01-31"})
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_unknown_card_id_returns_200_and_empty_list(client, two_cards):
+    # Locks in the "no second lookup" decision: an id that doesn't exist in
+    # cards behaves exactly like a card with no matching transactions.
+    response = client.get("/transactions", params={"card_id": 999999})
+
+    assert response.status_code == 200
+    assert response.json() == []

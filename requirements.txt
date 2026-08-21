@@ -3,3 +3,4 @@ uvicorn[standard]
 pdfplumber
 python-dotenv
 pytest
+httpx

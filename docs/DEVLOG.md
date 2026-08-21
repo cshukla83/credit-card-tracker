@@ -2298,3 +2298,160 @@ grounding gap this addendum was written to fix.
 Scope Session 23 in detail (exact endpoint path, param names, response JSON
 shape, error handling for unknown `card_id` / malformed dates, and whether
 any automated tests are in scope) before drafting its Claude Code prompt.
+
+---
+
+## Session 23 — 2026-08-21
+
+### Goal
+Add a single FastAPI endpoint, `GET /transactions`, wrapping
+`storage.reads.get_transactions()` — the API-layer equivalent of
+`scripts/query_transactions.py`, following the arc plan from the
+2026-08-20 addendum. Scope was explicitly locked going in: no frontend,
+no aggregations, no `/cards` endpoint, no router split, no touching `/`,
+no changes to `storage/`, `parsers/`, or the three existing scripts.
+
+### What happened
+
+**Prompt given to Claude Code:**
+> "Session 23: FastAPI endpoint wrapping get_transactions(). Scope is
+> locked. Do not expand it... Add a single new route to main.py: GET
+> /transactions... Empty result → return [] (HTTP 200), not 404. This
+> includes the case where card_id refers to a card that does not exist...
+> start or end not parseable... → HTTPException(400)... start > end...
+> → HTTPException(400)... DB connection handling: use a FastAPI dependency
+> (Depends)... Add tests/test_api.py... Add httpx to requirements.txt...
+> Run the full test suite... do not run it yourself [regarding manual
+> endpoint verification]..."
+
+**Endpoint, params, response shape.** `GET /transactions` takes three
+optional query params — `card_id` (int), `start` (string, `YYYY-MM-DD`),
+`end` (string, `YYYY-MM-DD`) — matching `scripts/query_transactions.py`'s
+`--card-id`/`--start`/`--end` flags one-for-one, so the API and the CLI
+describe the same operation in the same vocabulary. The response is
+`get_transactions()`'s return value returned directly: a flat JSON array of
+transaction objects, no wrapping envelope, no metadata, no pagination info —
+exactly what was asked for, nothing added "for completeness."
+
+**"Empty list, not 404" — including for an unknown `card_id`.** This was
+the one design decision with real teeth in this session, so it's worth
+explaining the reasoning, not just restating the rule: `get_transactions()`
+already can't distinguish "this `card_id` doesn't exist" from "this
+`card_id` exists but has no transactions in this date range" — it's a
+single SQL query with a `JOIN`+`WHERE`, and either case produces zero rows
+from that query. Making the endpoint distinguish them would mean adding a
+second query (`get_card()`) purely to produce a different HTTP status for a
+case the storage layer treats as identical to a normal empty result. That's
+a real design choice, not laziness — it keeps the endpoint's behavior
+consistent with the function it wraps, and consistent with the CLI (which
+also just prints "No transactions found." either way). Documented inline in
+`main.py` with a comment, not just in this log, so the reasoning is visible
+at the point someone might be tempted to "fix" it later.
+
+**Date parsing and `start > end` validation.** `storage/dates.py` only
+had `to_date_str()` (a `date` → ISO-string converter, the wrong direction
+for parsing incoming query strings), so — per the instruction not to add
+anything speculative there — date parsing for incoming request params
+stayed local to `main.py`: a small `_parse_query_date(value, param_name)`
+helper wrapping `date.fromisoformat()`, catching `ValueError` (which
+`fromisoformat` raises uniformly for both malformed strings like
+`"not-a-date"` and syntactically-plausible-but-invalid dates like
+`"2026-13-01"`) and re-raising as `HTTPException(400, detail=f"Invalid
+{param_name} date: {value!r} (expected YYYY-MM-DD)")` — naming the param
+and echoing back exactly what was received, per the spec. The
+`start > end` check mirrors `scripts/query_transactions.py`'s existing
+logic (`if args.start is not None and args.end is not None and args.start >
+args.end`) with an equivalent error shape (`"start (...) is after end
+(...)"`), adapted from the CLI's `"Error: --start (...) is after --end
+(...)"` since the API doesn't have `--`-prefixed flags or a `sys.exit`
+convention to match.
+
+**DB connection as a FastAPI dependency.** `get_db()` is a generator
+dependency: it calls `init_db()`, then `get_connection()`, `yield`s the
+connection, and closes it in a `finally` block after the request completes
+— including when the endpoint raises an `HTTPException`, since FastAPI runs
+dependency teardown code regardless of how the request handler exits. The
+one non-obvious choice here: `init_db()` runs **inside** `get_db()`, called
+fresh on every request, rather than once at module import time. Calling it
+once at import would have been fine for a real running server, but it
+would have broken test isolation: `tests/test_api.py` (like every other
+test file in this project) points `DB_PATH` at a fresh `tmp_path` per test
+via `monkeypatch.setenv`, and `main.py`'s module-level code only executes
+once per test process (Python caches imported modules) — so a
+module-level `init_db()` call would only ever create tables in whichever
+`DB_PATH` happened to be set the *first* time `main` was imported, silently
+breaking every test after the first. Calling `init_db()` inside the
+dependency instead means it re-reads `DB_PATH` (indirectly, via
+`get_connection()`'s own fresh read) on every single request, preserving
+the Session 16 invariant exactly the way `get_connection()` itself already
+does.
+
+**`tests/test_api.py`** (7 tests, via `fastapi.testclient.TestClient`,
+fabricated data through the real storage layer into a `tmp_path` DB — same
+isolation pattern as `tests/test_storage.py` and `tests/test_reads.py`, no
+real PDFs or `.env` involved):
+- No filters → all 5 fabricated transactions, correct JSON shape (exact key
+  set checked, not just count).
+- All three filters together → correctly narrows to the expected subset.
+- Malformed `start`, parametrized over both example shapes from the spec
+  (`"not-a-date"` and `"2026-13-01"`) → `400` naming `start` in the detail.
+- `start` after `end` → `400`, detail mentions both `start` and `end`.
+- A valid-but-matchless date range → `200` and `[]`.
+- An unknown `card_id` → `200` and `[]` — this is the test that locks in
+  the "no second lookup" decision, so a future change can't silently start
+  distinguishing "no such card" from "no matches" without this test
+  failing and forcing an explicit decision to update it.
+
+**`requirements.txt`:** added `httpx` (FastAPI's `TestClient` requires it
+under the hood), nothing else changed or reordered, installed into `venv`.
+
+**What was deliberately not done, and why:** no frontend/HTML (that's
+Session 24, per the 2026-08-20 addendum), no `/cards` endpoint (not needed
+until a page needs a card picker), no router split (one route doesn't
+justify restructuring `main.py`), no aggregations or pagination (nothing
+in this session's scope needs them, and the read path already deferred
+these — Session 21 — until a real caller asks), `/` untouched. All
+consistent with the project's standing anti-speculation rule: build what's
+needed now, write down what's deferred and why, don't guess ahead.
+
+**Surprise hit during implementation:** running the new tests surfaced a
+`StarletteDeprecationWarning`: *"Using `httpx` with `starlette.testclient`
+is deprecated; install `httpx2` instead."* Not a failure — all 91 tests
+still pass — and not acted on this session, since the instruction was to
+add `httpx` and nothing else. Flagged here rather than silently
+suppressed or silently fixed.
+
+**Verification:**
+```bash
+python3 -m pytest
+```
+```
+91 passed, 1 warning in 6.65s
+```
+(84 previous + 7 new, all passing.) Per this session's explicit
+instruction, no manual endpoint verification (`uvicorn`, `curl`, or
+touching `data/tracker.db`) was performed — that's left for manual
+verification afterward.
+
+### Outcome
+`GET /transactions` is live in `main.py`, backed by the same
+`get_transactions()` the CLI already uses, with matching param names and a
+matching `start > end` validation rule. The DB-connection-as-dependency
+pattern preserves the Session 16 invariant under FastAPI's request
+lifecycle the same way the CLI scripts already preserve it under their own
+`try/finally`. 91 tests pass; scope stayed exactly where it was locked —
+nothing in `storage/`, `parsers/`, or the three existing scripts changed,
+and `/` is untouched.
+
+### Next steps
+Session 24, per the 2026-08-20 addendum: a minimal HTML page that calls
+this endpoint and renders a transaction table. The
+server-rendered-vs-single-file-JS-fetch choice is deliberately left open
+until that session is actually scoped, not decided speculatively here.
+Separately, two open questions surfaced this session, neither urgent
+enough to block anything: (a) the `httpx`/`starlette.testclient` deprecation
+warning above — worth a look whenever dependencies are next touched, not
+before; (b) whether `GET /transactions` should eventually gain response
+pagination or a result-count cap before Session 24's page renders
+potentially large result sets directly — no evidence yet that it's a real
+problem, so not acted on, just named.
