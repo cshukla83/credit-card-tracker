@@ -2242,3 +2242,59 @@ instead of staying a one-entry placeholder; (b) aggregations or a
 nickname-based card lookup on the read path, deferred until a real caller
 needs them (Session 21); (c) the case-normalization/validation open question
 for `bank`/`card_type` flagged above.
+
+---
+
+## Addendum — 2026-08-20 (planning note, no code)
+
+### Goal
+Record a scoping decision made in conversation after Session 22 closed, so
+it isn't only living in chat history. No code was written or run in this
+addendum.
+
+### What happened
+Reviewed the state after 22 sessions: parsing, storage, dedup, and three
+CLIs are all working end to end for HDFC Diners, but there is still no
+browser-facing surface — everything so far is backend infrastructure and
+command-line tools. Agreed this is the natural point to shift toward a
+visible UI rather than adding more backend depth first.
+
+**Decision: next arc is "HDFC UI end-to-end,"** to be built for HDFC only
+first, then generalized to a second bank (ICICI) afterward — consistent
+with the project's standing anti-speculation rule of only generalizing once
+a second real case exists.
+
+Planned shape, session by session:
+- **Session 23:** a FastAPI endpoint wrapping the existing
+  `storage.reads.get_transactions()`, using the same filter shape as
+  `scripts/query_transactions.py` (`card_id`, `start`, `end`), returning
+  JSON. No frontend yet. Verified manually via `curl` against real data.
+- **Session 24:** a minimal HTML page that calls the Session 23 endpoint and
+  renders a transaction table. Server-rendered vs. single-file JS fetch to
+  be decided when that session is actually scoped.
+- **Session 25:** filters added to the page (likely a card dropdown backed
+  by a new `/cards` endpoint, plus a date range control).
+- **Session 26+:** left deliberately open — aggregations, styling,
+  pagination, etc., to be decided from what Sessions 23–25 actually reveal
+  is needed, not decided speculatively now.
+
+Target: a working HDFC transaction viewer in the browser by the end of
+Session 25. The ICICI parser arc (and the Session 20 `_BANK_PASSWORD_ENV_KEYS`
+generalization it forces) is deferred to start after that, once a second
+real bank case exists.
+
+**Open sequencing question, not yet resolved:** whether Session 23 stays
+endpoint-only, or whether 23 and 24 get compressed into one larger session
+that ends with a visible artifact. Leaning endpoint-only, to keep sessions
+small and match the established rhythm, but this will be revisited when
+Session 23 is actually scoped.
+
+### Outcome
+No code changed. The UI-arc decision and its session-by-session shape are
+now recorded here instead of existing only in conversation, closing the
+grounding gap this addendum was written to fix.
+
+### Next steps
+Scope Session 23 in detail (exact endpoint path, param names, response JSON
+shape, error handling for unknown `card_id` / malformed dates, and whether
+any automated tests are in scope) before drafting its Claude Code prompt.
