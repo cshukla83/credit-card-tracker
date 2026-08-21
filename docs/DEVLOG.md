@@ -2459,6 +2459,27 @@ lifecycle the same way the CLI scripts already preserve it under their own
 nothing in `storage/`, `parsers/`, or the three existing scripts changed,
 and `/` is untouched.
 
+### Post-verification notes
+
+Manual endpoint verification against the live server (separate terminal,
+per this project's standing practice) confirmed all scenarios behaved
+correctly: no-filter baseline, card_id filter, a real narrow date range
+returning a genuine subset, a future date range returning an empty list,
+an unknown card_id returning an empty list rather than an error, an
+inverted start/end range returning a 400 with a clear message, and
+malformed date strings of several shapes all returning 400s naming the
+bad parameter. No counts, merchant names, amounts, or transaction dates
+are recorded here — only that the behavior was correct.
+
+One verification-tooling gotcha surfaced along the way: an ad hoc
+count-checking script assumed every response was a JSON list and called
+`len()` on it directly. Against a FastAPI error response — a JSON object
+of the form `{"detail": "..."}` — `len()` returns the object's key count,
+so an error silently read as "1 result" instead of surfacing as an error.
+The endpoint itself was correct throughout; the verification script was
+not. Written up as a standing lesson in docs/CONVENTIONS.md under
+"Verification Tooling," rather than left as a one-off footnote here.
+
 ### Next steps
 Two threads pick up from here, in order:
 
