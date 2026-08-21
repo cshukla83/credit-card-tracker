@@ -4,6 +4,11 @@ This file is a detailed, chronological record of every working session on this p
 what was done, every command run, and what it means. Written so that anyone with no prior
 context (including future-me) can follow along and understand each step.
 
+For project-wide process conventions (DEVLOG entry structure, learning summary
+format, data handling rules, CLI invocation), see docs/CONVENTIONS.md. This
+file keeps only the session log itself, code-level invariants, and the entry
+template below.
+
 Each entry follows this format:
 
 ```
@@ -18,9 +23,20 @@ Step-by-step account, including:
 - Every command run, and what it does / why it was needed
 - Any code written, with a short explanation of what it does
 - Any errors hit, and how they were resolved
+- The reasoning behind design decisions, not just the decisions themselves
 
 ### Outcome
 What works now that didn't before. What was verified (and how).
+
+### In plain English
+Two or three short paragraphs, no jargon, no file paths or function names,
+no session numbers. What was built, why it mattered, what it unlocks. Every
+sentence must trace back to something in "What happened" or "Outcome" above —
+this section is a translation, not a re-interpretation. Written so it can be
+lifted almost verbatim into a learning summary.
+
+Required from Session 24 onward. Earlier sessions predate this convention
+and are not retrofitted.
 
 ### Next steps
 What's planned for the next session.
@@ -2444,14 +2460,23 @@ nothing in `storage/`, `parsers/`, or the three existing scripts changed,
 and `/` is untouched.
 
 ### Next steps
-Session 24, per the 2026-08-20 addendum: a minimal HTML page that calls
-this endpoint and renders a transaction table. The
-server-rendered-vs-single-file-JS-fetch choice is deliberately left open
-until that session is actually scoped, not decided speculatively here.
-Separately, two open questions surfaced this session, neither urgent
-enough to block anything: (a) the `httpx`/`starlette.testclient` deprecation
-warning above — worth a look whenever dependencies are next touched, not
-before; (b) whether `GET /transactions` should eventually gain response
-pagination or a result-count cap before Session 24's page renders
-potentially large result sets directly — no evidence yet that it's a real
-problem, so not acted on, just named.
+Two threads pick up from here, in order:
+
+1. **Documentation restructuring (in progress).** Between Session 23 closing
+   and Session 24 starting, extract project-wide process conventions into a
+   new `docs/CONVENTIONS.md` — DEVLOG entry structure, learning summary
+   format, data handling in documentation, CLI invocation. Add a new "In
+   plain English" section to the DEVLOG entry template so every session
+   from Session 24 onward carries a plain-language translation of what it
+   built and why, grounded strictly in the technical sections above it.
+   This closes two loose ends surfaced during Session 23: the
+   post-verification notes flagged the data-handling rule as needing an
+   explicit home, and the plain-English bullets written during Session 23's
+   review made it clear DEVLOG entries themselves should carry that layer
+   rather than requiring translation after the fact.
+
+2. **Session 24 — minimal HTML page consuming /transactions.** The next
+   arc-plan step from the 2026-08-20 addendum. Server-rendered (Jinja2)
+   vs. single-file static HTML with client-side fetch() is the first
+   scoping decision. To be scoped in detail before drafting a Claude Code
+   prompt for it.
