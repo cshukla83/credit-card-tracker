@@ -2507,3 +2507,104 @@ Separately, one open question from Session 23 remains worth naming: whether
 result-count cap before Session 24's page renders potentially large result
 sets directly. No evidence yet that it's a real problem, so not acted on —
 just named, so it isn't lost.
+
+---
+
+## Session 24 — 2026-08-23
+
+### Goal
+Build a minimal HTML page that consumes `GET /transactions` and renders it as
+a table — the first UI-facing session in the "HDFC UI end-to-end" arc.
+`/transactions` is treated as the contract: the page is a thin, replaceable
+consumer of it and must never reach into anything the endpoint doesn't
+already expose.
+
+### What happened
+
+**`main.py`:** the existing `GET /` handler (`{"message": "hello world"}`,
+in place since Session 1) was replaced with `FileResponse("static/index.html")`,
+imported from `fastapi.responses`. No `StaticFiles` mount — one file, one
+route, no URL prefix, since a single static page doesn't justify mounting a
+whole static-file app. `GET /transactions` itself was untouched.
+
+**`static/index.html` (new):** a single self-contained file — inline
+`<style>`, inline `<script>`, no external CSS, no CDN links, no JS
+framework. On page load it calls `fetch("/transactions")` with no query
+params (filters are Session 25's scope). While the request is in flight, a
+status area shows "Loading…". On a non-200 response or a fetch failure, the
+status area is replaced with `"Error loading transactions: " + <status or
+exception message>` — a blank page on failure was explicitly disallowed, so
+failures have to be visible. On a successful response with an empty array,
+the status area shows the exact text `"No transactions found."`, matching
+`scripts/query_transactions.py`'s existing wording for the same case. On a
+successful response with a non-empty array, a table is populated with
+columns in the order `date, amount, type, description`, one row per
+transaction, values taken as-is from the JSON fields (`txn_date`, `amount`,
+`txn_type`, `description`) with no reformatting, no thousands separators,
+and no currency symbols — a deliberate deferral, not an oversight. Every
+value is written into the DOM with `textContent`, never `innerHTML`, so
+inserted values are always treated as text rather than parsed as markup, even
+though the data comes from this project's own parsed statements. Styling is
+minimal: padding on cells and a visually distinct header row, nothing more.
+
+**`tests/test_api.py`:** one new test, `test_root_serves_html_page`, asserts
+`GET /` returns `200`, that the `content-type` header starts with
+`text/html`, and that the response body contains `id="transactions-table"` —
+a sentinel confirming the actual page (not some other 200 response) is being
+served. No browser-level or DOM-level testing was attempted; that was
+explicitly out of scope for this session.
+
+**What was deliberately not done, and why:** no query params or filter UI
+(Session 25's scope), no date/currency formatting (named above as a
+deliberate deferral), no `StaticFiles` mount or templating engine (one file
+doesn't need either), no changes to `storage/`, `parsers/`, or the three
+existing CLIs, no manual verification against a running server — that's
+left for a separate terminal per this project's standing practice.
+
+**Verification:**
+```bash
+python3 -m pytest
+```
+```
+92 passed, 1 warning in 6.61s
+```
+(91 previous + 1 new, all passing. The pre-existing `httpx`/`starlette`
+deprecation warning noted in Session 23 is still present, still not acted
+on.)
+
+### Outcome
+Visiting `/` now serves a working HTML page that fetches `/transactions` on
+load and renders a loading state, an error state, an empty state, or a
+populated table — never a blank page. The page reaches the API only through
+`fetch()` against the existing endpoint; it does not touch the database,
+FastAPI templating, or anything `/transactions` doesn't already expose. 92
+tests pass. Only `main.py`, `static/index.html`, and `tests/test_api.py`
+changed in code; `storage/`, `parsers/`, and `scripts/` are untouched.
+
+### In plain English
+
+This session added the first page people can actually look at in a browser.
+Before this, the only way to see transaction data was through raw API
+responses or the command-line tools; now there's a page that loads that same
+data and shows it as a readable table.
+
+The page was kept deliberately simple. It always tells you what's happening
+— loading, an error, "no transactions found," or the actual table — rather
+than ever showing a blank screen, since a silent failure is worse than a
+visible one. It also doesn't try to make numbers or dates look nicer yet;
+that polish is being saved for later so this step could stay small and
+easy to check.
+
+The page gets its data the same way any outside tool would: by asking the
+existing API for it, rather than reaching into the database directly. That
+keeps the page swappable — it can be rebuilt or replaced later without
+anything else in the project needing to change.
+
+### Next steps
+Session 25: add filters (card, date range) to the page, wired to the query
+parameters `GET /transactions` already supports (`card_id`, `start`, `end`).
+Also still open: the Session 23 question of whether `GET /transactions`
+should eventually gain pagination or a result-count cap, now slightly more
+relevant since this page renders whatever the endpoint returns in one
+unpaginated table — still no evidence it's a real problem yet, so still not
+acted on, just carried forward.

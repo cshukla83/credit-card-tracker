@@ -1,6 +1,7 @@
 from datetime import date
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse
 
 from storage.db import get_connection, init_db
 from storage.reads import get_transactions
@@ -10,7 +11,7 @@ app = FastAPI()
 
 @app.get("/")
 def read_root():
-    return {"message": "hello world"}
+    return FileResponse("static/index.html")
 
 
 def get_db():

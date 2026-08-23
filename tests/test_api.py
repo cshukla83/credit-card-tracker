@@ -132,3 +132,11 @@ def test_unknown_card_id_returns_200_and_empty_list(client, two_cards):
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_root_serves_html_page(client, db_path):
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert 'id="transactions-table"' in response.text

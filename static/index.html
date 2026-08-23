@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Transactions</title>
+<style>
+  body {
+    font-family: sans-serif;
+    margin: 2rem;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid #ccc;
+  }
+  th {
+    background-color: #eee;
+    font-weight: bold;
+  }
+  #status {
+    margin-bottom: 1rem;
+  }
+</style>
+</head>
+<body>
+  <h1>Transactions</h1>
+  <div id="status">Loading…</div>
+  <table id="transactions-table" style="display: none;">
+    <thead>
+      <tr>
+        <th>date</th>
+        <th>amount</th>
+        <th>type</th>
+        <th>description</th>
+      </tr>
+    </thead>
+    <tbody id="transactions-body"></tbody>
+  </table>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const tableEl = document.getElementById("transactions-table");
+    const bodyEl = document.getElementById("transactions-body");
+
+    fetch("/transactions")
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(String(response.status));
+        }
+        return response.json();
+      })
+      .then((transactions) => {
+        if (transactions.length === 0) {
+          statusEl.textContent = "No transactions found.";
+          return;
+        }
+
+        for (const txn of transactions) {
+          const row = document.createElement("tr");
+
+          const dateCell = document.createElement("td");
+          dateCell.textContent = txn.txn_date;
+          row.appendChild(dateCell);
+
+          const amountCell = document.createElement("td");
+          amountCell.textContent = txn.amount;
+          row.appendChild(amountCell);
+
+          const typeCell = document.createElement("td");
+          typeCell.textContent = txn.txn_type;
+          row.appendChild(typeCell);
+
+          const descriptionCell = document.createElement("td");
+          descriptionCell.textContent = txn.description;
+          row.appendChild(descriptionCell);
+
+          bodyEl.appendChild(row);
+        }
+
+        statusEl.textContent = "";
+        tableEl.style.display = "";
+      })
+      .catch((error) => {
+        statusEl.textContent = "Error loading transactions: " + error.message;
+      });
+  </script>
+</body>
+</html>
