@@ -140,3 +140,67 @@ def test_root_serves_html_page(client, db_path):
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert 'id="transactions-table"' in response.text
+
+
+def test_cards_empty_db_returns_200_and_empty_list(client, db_path):
+    response = client.get("/cards")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_cards_with_no_statements_returns_empty_list(client, db_path):
+    conn = get_connection()
+    try:
+        create_card(conn, "FAKE BANK A", "FAKE CARD TYPE")
+        create_card(conn, "FAKE BANK B", "FAKE CARD TYPE")
+    finally:
+        conn.close()
+
+    response = client.get("/cards")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_cards_returns_only_cards_with_statements_ordered_by_id(client, db_path):
+    conn = get_connection()
+    try:
+        card_with_statement = create_card(conn, "FAKE BANK A", "FAKE CARD TYPE")
+        card_without_statement = create_card(conn, "FAKE BANK B", "FAKE CARD TYPE")
+        insert_statement(
+            conn,
+            card_with_statement,
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            [_txn(5, "CARD A TXN 1")],
+        )
+    finally:
+        conn.close()
+
+    response = client.get("/cards")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [card["id"] for card in body] == [card_with_statement]
+    assert card_without_statement not in [card["id"] for card in body]
+    assert set(body[0].keys()) == {"id", "bank", "card_type", "nickname", "created_at"}
+
+
+def test_cards_with_multiple_statements_appears_once(client, db_path):
+    conn = get_connection()
+    try:
+        card_id = create_card(conn, "FAKE BANK A", "FAKE CARD TYPE")
+        insert_statement(
+            conn, card_id, date(2026, 1, 1), date(2026, 1, 31), [_txn(5, "CARD A TXN 1")]
+        )
+        insert_statement(
+            conn, card_id, date(2026, 2, 1), date(2026, 2, 28), [_txn(5, "CARD A TXN 2", month=2)]
+        )
+    finally:
+        conn.close()
+
+    response = client.get("/cards")
+
+    assert response.status_code == 200
+    assert [card["id"] for card in response.json()] == [card_id]

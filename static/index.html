@@ -8,6 +8,18 @@
     font-family: sans-serif;
     margin: 2rem;
   }
+  #filters {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-end;
+    margin-bottom: 1.5rem;
+  }
+  #filters label {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.85rem;
+    gap: 0.25rem;
+  }
   table {
     border-collapse: collapse;
     width: 100%;
@@ -28,6 +40,24 @@
 </head>
 <body>
   <h1>Transactions</h1>
+
+  <div id="filters">
+    <label>
+      Card
+      <select id="card-filter">
+        <option value="">All cards</option>
+      </select>
+    </label>
+    <label>
+      Start date
+      <input type="date" id="start-filter">
+    </label>
+    <label>
+      End date
+      <input type="date" id="end-filter">
+    </label>
+  </div>
+
   <div id="status">Loading…</div>
   <table id="transactions-table" style="display: none;">
     <thead>
@@ -45,48 +75,183 @@
     const statusEl = document.getElementById("status");
     const tableEl = document.getElementById("transactions-table");
     const bodyEl = document.getElementById("transactions-body");
+    const cardFilterEl = document.getElementById("card-filter");
+    const startFilterEl = document.getElementById("start-filter");
+    const endFilterEl = document.getElementById("end-filter");
 
-    fetch("/transactions")
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(String(response.status));
-        }
-        return response.json();
-      })
-      .then((transactions) => {
-        if (transactions.length === 0) {
-          statusEl.textContent = "No transactions found.";
-          return;
-        }
+    // Out-of-order guard: only the response from the most recently issued
+    // /transactions request is allowed to render. Without this, a slow
+    // response to an earlier filter change could land after (and overwrite)
+    // the result of a newer one.
+    let requestSeq = 0;
 
-        for (const txn of transactions) {
-          const row = document.createElement("tr");
+    let debounceTimer = null;
+    const DEBOUNCE_MS = 300;
 
-          const dateCell = document.createElement("td");
-          dateCell.textContent = txn.txn_date;
-          row.appendChild(dateCell);
+    function currentFilters() {
+      return {
+        cardId: cardFilterEl.value,
+        start: startFilterEl.value,
+        end: endFilterEl.value,
+      };
+    }
 
-          const amountCell = document.createElement("td");
-          amountCell.textContent = txn.amount;
-          row.appendChild(amountCell);
+    function updateURL(filters) {
+      const params = new URLSearchParams();
+      if (filters.cardId) params.set("card_id", filters.cardId);
+      if (filters.start) params.set("start", filters.start);
+      if (filters.end) params.set("end", filters.end);
 
-          const typeCell = document.createElement("td");
-          typeCell.textContent = txn.txn_type;
-          row.appendChild(typeCell);
+      const query = params.toString();
+      const newURL = window.location.pathname + (query ? "?" + query : "");
+      window.history.replaceState(null, "", newURL);
+    }
 
-          const descriptionCell = document.createElement("td");
-          descriptionCell.textContent = txn.description;
-          row.appendChild(descriptionCell);
+    function extractErrorMessage(response) {
+      return response
+        .json()
+        .then(
+          (body) => (body && body.detail ? body.detail : String(response.status)),
+          () => String(response.status),
+        );
+    }
 
-          bodyEl.appendChild(row);
-        }
+    function renderTransactions(transactions) {
+      bodyEl.textContent = "";
 
-        statusEl.textContent = "";
-        tableEl.style.display = "";
-      })
-      .catch((error) => {
-        statusEl.textContent = "Error loading transactions: " + error.message;
-      });
+      if (transactions.length === 0) {
+        statusEl.textContent = "No transactions found.";
+        tableEl.style.display = "none";
+        return;
+      }
+
+      for (const txn of transactions) {
+        const row = document.createElement("tr");
+
+        const dateCell = document.createElement("td");
+        dateCell.textContent = txn.txn_date;
+        row.appendChild(dateCell);
+
+        const amountCell = document.createElement("td");
+        amountCell.textContent = txn.amount;
+        row.appendChild(amountCell);
+
+        const typeCell = document.createElement("td");
+        typeCell.textContent = txn.txn_type;
+        row.appendChild(typeCell);
+
+        const descriptionCell = document.createElement("td");
+        descriptionCell.textContent = txn.description;
+        row.appendChild(descriptionCell);
+
+        bodyEl.appendChild(row);
+      }
+
+      statusEl.textContent = "";
+      tableEl.style.display = "";
+    }
+
+    function fetchTransactions(filters) {
+      const seq = ++requestSeq;
+
+      statusEl.textContent = "Loading…";
+      tableEl.style.display = "none";
+
+      const params = new URLSearchParams();
+      if (filters.cardId) params.set("card_id", filters.cardId);
+      if (filters.start) params.set("start", filters.start);
+      if (filters.end) params.set("end", filters.end);
+      const query = params.toString();
+
+      fetch("/transactions" + (query ? "?" + query : ""))
+        .then((response) => {
+          if (!response.ok) {
+            return extractErrorMessage(response).then((message) => {
+              throw new Error(message);
+            });
+          }
+          return response.json();
+        })
+        .then((transactions) => {
+          if (seq !== requestSeq) return; // a newer request has since been issued
+          renderTransactions(transactions);
+        })
+        .catch((error) => {
+          if (seq !== requestSeq) return;
+          statusEl.textContent = "Error loading transactions: " + error.message;
+        });
+    }
+
+    function fetchFiltersThenTransactions() {
+      const params = new URLSearchParams(window.location.search);
+      const urlCardId = params.get("card_id") || "";
+      const urlStart = params.get("start") || "";
+      const urlEnd = params.get("end") || "";
+
+      startFilterEl.value = urlStart;
+      endFilterEl.value = urlEnd;
+
+      statusEl.textContent = "Loading…";
+
+      fetch("/cards")
+        .then((response) => {
+          if (!response.ok) {
+            return extractErrorMessage(response).then((message) => {
+              throw new Error(message);
+            });
+          }
+          return response.json();
+        })
+        .then((cards) => {
+          if (cards.length === 0) {
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = "No cards with statements yet";
+            option.disabled = true;
+            option.selected = true;
+            cardFilterEl.appendChild(option);
+          } else {
+            for (const card of cards) {
+              const option = document.createElement("option");
+              option.value = String(card.id);
+              option.textContent =
+                card.bank + " " + card.card_type + (card.nickname ? " (" + card.nickname + ")" : "");
+              cardFilterEl.appendChild(option);
+            }
+          }
+
+          const knownCardIds = new Set(cards.map((card) => String(card.id)));
+          const resolvedCardId = knownCardIds.has(urlCardId) ? urlCardId : "";
+          cardFilterEl.value = resolvedCardId;
+
+          const filters = { cardId: resolvedCardId, start: urlStart, end: urlEnd };
+          updateURL(filters);
+          fetchTransactions(filters);
+        })
+        .catch((error) => {
+          statusEl.textContent = "Error loading transactions: " + error.message;
+        });
+    }
+
+    cardFilterEl.addEventListener("change", () => {
+      const filters = currentFilters();
+      updateURL(filters);
+      fetchTransactions(filters);
+    });
+
+    function onDateInput() {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const filters = currentFilters();
+        updateURL(filters);
+        fetchTransactions(filters);
+      }, DEBOUNCE_MS);
+    }
+
+    startFilterEl.addEventListener("input", onDateInput);
+    endFilterEl.addEventListener("input", onDateInput);
+
+    fetchFiltersThenTransactions();
   </script>
 </body>
 </html>

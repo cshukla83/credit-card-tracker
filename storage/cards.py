@@ -54,3 +54,19 @@ def find_card(
 def list_cards(conn: sqlite3.Connection) -> "list[dict]":
     rows = conn.execute("SELECT * FROM cards ORDER BY created_at").fetchall()
     return [dict(row) for row in rows]
+
+
+def list_cards_with_statements(conn: sqlite3.Connection) -> "list[dict]":
+    """Cards that have at least one statement, ordered by id ascending.
+
+    Explicit `cards.*` (not a bare `*`) for the same reason as the
+    transactions/statements read-path JOIN: both `cards` and `statements`
+    have an `id` column, so a bare `*` would collide. `DISTINCT` collapses
+    the JOIN's one-row-per-statement fan-out back down to one row per card.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT cards.* FROM cards "
+        "JOIN statements ON statements.card_id = cards.id "
+        "ORDER BY cards.id ASC"
+    ).fetchall()
+    return [dict(row) for row in rows]

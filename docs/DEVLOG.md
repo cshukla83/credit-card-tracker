@@ -2608,3 +2608,222 @@ should eventually gain pagination or a result-count cap, now slightly more
 relevant since this page renders whatever the endpoint returns in one
 unpaginated table — still no evidence it's a real problem yet, so still not
 acted on, just carried forward.
+
+---
+
+## Session 25 — 2026-08-25
+
+### Goal
+Add filters (card, start date, end date) to the transactions page from
+Session 24, backed by a new `GET /cards` endpoint for populating the card
+picker. Filters must compose with the query parameters `GET /transactions`
+already supports, and the URL must stay shareable/bookmarkable as filters
+change.
+
+### What happened
+
+**`storage/cards.py`:** added `list_cards_with_statements(conn)`, returning
+only cards that have at least one row in `statements`, ordered by `id`
+ascending. `list_cards()` was left untouched — it still returns every card,
+ordered by `created_at`, and is used by the existing CLI. The two functions
+now order differently (`id` vs. `created_at`); in practice these agree,
+since SQLite's `AUTOINCREMENT` id is assigned in insertion order, but it's
+worth naming as a real (if inert) divergence rather than an accident.
+Implementation: `SELECT DISTINCT cards.* FROM cards JOIN statements ON
+statements.card_id = cards.id ORDER BY cards.id ASC` — explicit `cards.*`
+rather than a bare `*`, for the same reason as the Session 21
+`transactions.*` JOIN: both `cards` and `statements` have an `id` column,
+and a bare `*` would collide. `DISTINCT` collapses the JOIN's
+one-row-per-statement fan-out (a card with three statements would otherwise
+appear three times) back down to one row per card. The "cards with
+statements" filter itself is the point of the function: the picker should
+only ever offer cards a user could actually get results for, not every card
+that merely exists.
+
+**`main.py`:** added `GET /cards`, using the same `get_db` dependency
+`/transactions` already uses, returning `list_cards_with_statements(conn)`
+directly as a flat JSON array — no query params, no envelope, `200` + `[]`
+when empty, matching `/transactions`'s existing empty-case convention.
+`GET /transactions` itself is unchanged.
+
+**`static/index.html`:** added a card `<select>` and two `<input
+type="date">` fields above the table.
+
+- *Card picker.* Populated from `GET /cards` on load. Default option is "All
+  cards" (empty value). If `/cards` returns `[]`, the picker shows a single
+  disabled "No cards with statements yet" option instead — the control stays
+  visible but unusable, and this is not treated as an error, since an empty
+  card list is a legitimate (if early) state for the whole app to be in. If
+  `/cards` itself fails, that's a real error and goes through the same
+  error-message path as a failed `/transactions` fetch.
+- *Date inputs.* Each is bound to the `input` event (not `change`), because
+  the debounce only means anything against a high-frequency event —
+  `change` on a date field already fires once per completed edit, so binding
+  debounce logic to it would make the debounce a no-op. Both inputs share a
+  single debounce timer rather than one each, so editing start and end in
+  quick succession fires one request, not two.
+- *Fetch ordering on load.* `/cards` is fetched first, deliberately not in
+  parallel with `/transactions`. Validating a `card_id` that arrived via the
+  URL against the real card list requires knowing that list first — fetching
+  both at once would leave nothing to validate against yet. If the URL's
+  `card_id` doesn't match any card in the fetched list, the picker falls
+  back to "All cards" and the bad id is dropped from the URL, silently
+  rather than as an error — a stale or hand-edited URL parameter isn't a
+  real failure.
+- *URL sync.* Every filter change updates the URL's query string via
+  `history.replaceState`, never `pushState`, so filtering doesn't spam the
+  back button with one entry per keystroke or click — the URL is a
+  reflection of current filter state, not a navigation history of every
+  intermediate state. Parameter names match `/transactions` exactly
+  (`card_id`, `start`, `end`); empty filters are omitted from the URL
+  entirely rather than written as empty strings.
+- *Stale-response guard.* Every `/transactions` fetch is tagged with an
+  incrementing sequence number, and a response is only rendered if it's
+  still the most recent request issued. Without this, two filter changes in
+  close succession — say, picking a card immediately after typing a date —
+  could resolve out of order over the network, and a slow response to the
+  older request could land after, and silently overwrite, the result of the
+  newer one.
+- *Error detail.* The error path now reads the response body's `detail`
+  field (when present and JSON) rather than showing only the raw status
+  code — worth calling out because Session 24's version only ever showed
+  the status code, never the backend's actual message. That was fine when
+  the only way to reach `/transactions` was with no parameters at all, so a
+  400 was never reachable from the page. Session 25 changes that: an
+  inverted start/end range is now something a user can trigger directly
+  through the date inputs, so surfacing the real `detail` message (e.g.
+  naming which date is the problem) instead of a bare "400" is necessary
+  for the error state to still do its job, not just a cosmetic improvement.
+- `start > end` validation remains entirely server-side; no client-side
+  pre-validation was added. Loading, empty-result, and error states all
+  continue to work identically whether triggered by the initial page load or
+  by a later filter change, since every filter-triggered fetch reuses the
+  same rendering path as the initial one.
+
+**`tests/test_api.py`:** four new tests for `GET /cards`, following the same
+fixture/isolation pattern as the existing `/transactions` tests (fabricated
+data through the real storage layer into a `tmp_path` DB): empty DB → `[]`;
+cards exist but none have statements → `[]`; a mix of cards with and without
+statements → only the ones with statements come back, correct field set;
+a card with multiple statements appears exactly once, not once per
+statement.
+
+**`tests/test_cards.py`:** the same four cases added as direct unit tests
+against `list_cards_with_statements()` at the storage layer, mirroring the
+existing `list_cards()` test pairs in that file. No frontend or browser-level
+tests were added — deliberately out of scope for this session, same as
+Session 24.
+
+**What was deliberately not done, and why:** no pagination or result-count
+cap on `/transactions` or `/cards` (still an open, unevidenced question
+carried over from Session 23), no query params on `/cards` itself (nothing
+in this session needs to filter the card list), no client-side date-range
+validation (the backend already owns that rule, and duplicating it
+client-side would be a second place for the same logic to drift), no changes
+to `list_cards()`, `storage/reads.py`, `parsers/`, or any of the three CLI
+scripts.
+
+**Verification:**
+```bash
+python3 -m pytest
+```
+```
+100 passed, 1 warning in 6.59s
+```
+(92 previous + 8 new, all passing. The pre-existing `httpx`/`starlette`
+deprecation warning from Session 23 is still present, still not acted on.)
+Per this session's instructions, no `uvicorn`, `curl`, or `data/tracker.db`
+access was performed — manual browser verification is a separate step.
+
+### Outcome
+The transactions page now has a working card picker and date-range filters,
+all wired to the same `GET /transactions` query parameters the backend
+already validates. A new `GET /cards` endpoint backs the picker, returning
+only cards that actually have statements to show. Filter state round-trips
+through the URL via `replaceState`, so a filtered view is bookmarkable and
+shareable without polluting browser history. Out-of-order network responses
+are guarded against explicitly, and backend validation errors (like an
+inverted date range) now surface their real message instead of a bare status
+code. 100 tests pass; `storage/reads.py`, `parsers/`, the three CLIs, and
+`list_cards()` are all untouched.
+
+### In plain English
+
+The transactions page can now be narrowed down instead of always showing
+everything at once. A dropdown lets you pick a specific card, and two date
+fields let you set a range — both work together with what the underlying
+data service already supported, nothing new had to be invented on that
+side. The dropdown only lists cards that actually have data behind them, so
+there's nothing to pick that would just come back empty.
+
+Filtering was also made resilient in ways that don't show up as new
+buttons or fields but matter for correctness. If someone changes a filter
+and then changes another one quickly, the page makes sure it only ever
+displays the answer to the most recent request, not an older one that
+happens to arrive late. And because filters can now produce real error
+conditions — like asking for an end date before a start date — the page
+was updated to actually show the specific reason for the error, not just a
+generic failure code.
+
+The current filter selections are reflected in the page's address, so a
+particular filtered view can be bookmarked or shared as a link and come
+back exactly as it was left, without cluttering the browser's back button
+with every small change along the way.
+
+### Next steps
+Session 26 is deliberately open, per the arc plan set on 2026-08-20 — to be
+decided from what Sessions 23–25 actually reveal is needed, not speculated
+now. Once the HDFC UI arc ships, the next arc is a second real bank
+(ICICI), which is also when the deferred password-key and dispatch-routing
+generalizations named in `docs/STATE.md` finally happen, against two real
+cases rather than speculatively. Separately, the Session 23 pagination/
+result-count question remains open and untouched — still no evidence it's a
+real problem.
+
+### Post-session note: card consolidation and manual verification
+
+After Session 25's code was written but before manual verification, a
+card-identity issue was found and fixed outside this session's Claude Code
+prompt, worth recording here since it changes the shape of the data
+verification ran against.
+
+**What was found:** two cards existed in the local database (`July_2026`,
+`June_2026`), both `HDFC`/`Diners`, created by using the nickname field to
+label the statement month rather than the physical card — a misuse of the
+`cards` table's intended identity model (one row per physical card,
+`statements.period_start`/`period_end` already carries the month). This
+would have caused a new card to be created every month a new statement was
+imported, defeating "all transactions for this card across time" queries.
+
+**Fix applied (manual, outside Claude Code, per this project's standing
+rule that Claude Code doesn't touch `data/tracker.db` directly):**
+
+```sql
+BEGIN TRANSACTION;
+UPDATE cards SET nickname = 'Primary' WHERE id = 1;
+UPDATE statements SET card_id = 1 WHERE card_id = 5;
+DELETE FROM cards WHERE id = 5;
+COMMIT;
+```
+
+Verified no period overlap existed between the two cards' statements before
+running (the `UNIQUE(card_id, period_start, period_end)` constraint would
+have blocked the merge otherwise). Post-fix: one card (`Primary`), two
+statements (17 May–16 Jun, 17 Jun–16 Jul) both correctly attached to it, 38
+transactions total — matching the pre-consolidation count exactly,
+confirming nothing was lost or duplicated.
+
+**Consequence for this session's manual verification:** the ten-scenario
+verification walkthrough (Tests 1–10, covering card-picker population,
+filter narrowing, debounce, URL hydration/sync, unknown-card_id handling,
+backend error surfacing, and the stale-response guard) ran against this
+consolidated single-card state rather than the original two-card split.
+Card-switching mechanics (URL updates, fetch firing, param add/remove) were
+verified correctly; genuine multi-card data differentiation was not
+exercised in this pass, since only one card exists post-consolidation. All
+ten scenarios passed.
+
+**Follow-on decision, not yet built:** a related design conversation
+(nicknames vs. statement periods, and a future `statement_month` label +
+bank/card-type filter) surfaced during this verification and was scoped
+separately as Session 26 — see carry-over.

@@ -3,6 +3,7 @@ from datetime import date
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 
+from storage.cards import list_cards_with_statements
 from storage.db import get_connection, init_db
 from storage.reads import get_transactions
 
@@ -61,3 +62,8 @@ def read_transactions(
     # second lookup just to draw that distinction isn't worth it when the
     # response is an empty list either way.
     return get_transactions(conn, card_id=card_id, start_date=start_date, end_date=end_date)
+
+
+@app.get("/cards")
+def read_cards(conn=Depends(get_db)):
+    return list_cards_with_statements(conn)

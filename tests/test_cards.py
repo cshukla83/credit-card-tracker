@@ -1,9 +1,29 @@
+from datetime import date
+
 import pytest
 
-from storage.cards import CardAlreadyExistsError, create_card, find_card, get_card, list_cards
+from storage.cards import (
+    CardAlreadyExistsError,
+    create_card,
+    find_card,
+    get_card,
+    list_cards,
+    list_cards_with_statements,
+)
 from storage.db import get_connection, init_db
+from storage.writes import insert_statement
 
 # All bank names, card types, and nicknames below are fabricated for testing.
+
+
+def _txn(day, description, amount=10.0, month=1):
+    return {
+        "txn_date": date(2026, month, day),
+        "description": description,
+        "amount": amount,
+        "txn_type": "debit",
+        "reward_points": None,
+    }
 
 
 @pytest.fixture
@@ -145,5 +165,64 @@ def test_list_cards_empty_returns_empty_list(db_path):
     conn = get_connection()
     try:
         assert list_cards(conn) == []
+    finally:
+        conn.close()
+
+
+def test_list_cards_with_statements_empty_db_returns_empty_list(db_path):
+    conn = get_connection()
+    try:
+        assert list_cards_with_statements(conn) == []
+    finally:
+        conn.close()
+
+
+def test_list_cards_with_statements_no_cards_have_statements_returns_empty_list(db_path):
+    conn = get_connection()
+    try:
+        create_card(conn, "FAKE BANK A", "FAKE CARD TYPE")
+        create_card(conn, "FAKE BANK B", "FAKE CARD TYPE")
+
+        assert list_cards_with_statements(conn) == []
+    finally:
+        conn.close()
+
+
+def test_list_cards_with_statements_returns_only_cards_with_statements_ordered_by_id(db_path):
+    conn = get_connection()
+    try:
+        card_without_statement = create_card(conn, "FAKE BANK A", "FAKE CARD TYPE")
+        card_with_statement = create_card(conn, "FAKE BANK B", "FAKE CARD TYPE")
+        insert_statement(
+            conn,
+            card_with_statement,
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            [_txn(5, "CARD B TXN 1")],
+        )
+
+        cards = list_cards_with_statements(conn)
+
+        assert [c["id"] for c in cards] == [card_with_statement]
+        assert card_without_statement not in [c["id"] for c in cards]
+        assert set(cards[0].keys()) == {"id", "bank", "card_type", "nickname", "created_at"}
+    finally:
+        conn.close()
+
+
+def test_list_cards_with_statements_multiple_statements_appears_once(db_path):
+    conn = get_connection()
+    try:
+        card_id = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+        insert_statement(
+            conn, card_id, date(2026, 1, 1), date(2026, 1, 31), [_txn(5, "CARD TXN 1")]
+        )
+        insert_statement(
+            conn, card_id, date(2026, 2, 1), date(2026, 2, 28), [_txn(5, "CARD TXN 2", month=2)]
+        )
+
+        cards = list_cards_with_statements(conn)
+
+        assert [c["id"] for c in cards] == [card_id]
     finally:
         conn.close()
