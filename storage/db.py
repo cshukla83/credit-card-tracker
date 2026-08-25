@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from storage.schema import (
+    ADD_STATEMENT_MONTH_COLUMN,
     CREATE_CARDS_TABLE,
     CREATE_STATEMENTS_TABLE,
     CREATE_TRANSACTIONS_TABLE,
@@ -23,7 +24,18 @@ def get_connection() -> sqlite3.Connection:
     db_path = _get_db_path()
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(db_path)
+    # FastAPI's Depends(get_db) runs dependency setup, the endpoint
+    # handler, and generator teardown across different threadpool
+    # threads. sqlite3 defaults to check_same_thread=True which
+    # crashes on cross-thread connection use -- including during
+    # teardown for endpoints that appear to work otherwise. This
+    # flag protects against *concurrent* use from multiple threads;
+    # every caller here uses each connection sequentially from at
+    # most one thread at a time (CLIs are single-threaded; the
+    # FastAPI dependency creates a fresh connection per request),
+    # so disabling it is safe. Discovered Session 26, latent since
+    # Session 23.
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row
     return conn
@@ -35,6 +47,24 @@ def init_db() -> None:
         conn.execute(CREATE_CARDS_TABLE)
         conn.execute(CREATE_STATEMENTS_TABLE)
         conn.execute(CREATE_TRANSACTIONS_TABLE)
+        _ensure_statement_month_column(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_statement_month_column(conn: sqlite3.Connection) -> None:
+    # CREATE TABLE IF NOT EXISTS above is a no-op against a DB created before
+    # this column existed, so a DB from an earlier session needs this
+    # explicit ALTER TABLE migration. Empirically, PRAGMA table_info omits
+    # generated columns entirely (verified: it listed only 5 of 6 columns on
+    # a table whose CREATE TABLE already included statement_month), so it
+    # can never see the column and would re-run the ALTER on every call,
+    # failing with "duplicate column name" the moment the column already
+    # exists -- including on a table that was just freshly created with it.
+    # PRAGMA table_xinfo does include generated columns (with a nonzero
+    # `hidden` value) and is used here instead; that's the real idempotency
+    # check.
+    columns = {row["name"] for row in conn.execute("PRAGMA table_xinfo(statements)")}
+    if "statement_month" not in columns:
+        conn.execute(ADD_STATEMENT_MONTH_COLUMN)

@@ -204,3 +204,123 @@ def test_cards_with_multiple_statements_appears_once(client, db_path):
 
     assert response.status_code == 200
     assert [card["id"] for card in response.json()] == [card_id]
+
+
+def test_statement_months_returns_desc_period_end_order(client, db_path):
+    conn = get_connection()
+    try:
+        card_id = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+        insert_statement(
+            conn, card_id, date(2025, 12, 17), date(2026, 1, 16), [_txn(1, "JAN TXN")]
+        )
+        insert_statement(
+            conn, card_id, date(2025, 11, 17), date(2025, 12, 16), [_txn(1, "DEC TXN", month=12)]
+        )
+    finally:
+        conn.close()
+
+    response = client.get("/statement-months")
+
+    assert response.status_code == 200
+    assert response.json() == ["January-2026", "December-2025"]
+
+
+def test_statement_months_empty_db_returns_200_and_empty_list(client, db_path):
+    response = client.get("/statement-months")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_card_types_returns_alphabetical_bank_card_type_pairs(client, db_path):
+    conn = get_connection()
+    try:
+        card_z = create_card(conn, "ZZZ BANK", "FAKE CARD TYPE")
+        card_a = create_card(conn, "AAA BANK", "FAKE CARD TYPE")
+        insert_statement(conn, card_z, date(2026, 1, 1), date(2026, 1, 31), [_txn(5, "TXN 1")])
+        insert_statement(
+            conn, card_a, date(2026, 2, 1), date(2026, 2, 28), [_txn(5, "TXN 2", month=2)]
+        )
+    finally:
+        conn.close()
+
+    response = client.get("/card-types")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {"bank": "AAA BANK", "card_type": "FAKE CARD TYPE"},
+        {"bank": "ZZZ BANK", "card_type": "FAKE CARD TYPE"},
+    ]
+
+
+def test_card_types_empty_db_returns_200_and_empty_list(client, db_path):
+    response = client.get("/card-types")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_transactions_statement_month_filter(client, two_cards):
+    response = client.get("/transactions", params={"statement_month": "January-2026"})
+
+    assert response.status_code == 200
+    assert len(response.json()) == 5
+
+
+def test_transactions_unknown_statement_month_returns_empty_list(client, two_cards):
+    response = client.get("/transactions", params={"statement_month": "March-2099"})
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_transactions_bank_filter(client, two_cards):
+    response = client.get("/transactions", params={"bank": "FAKE BANK A"})
+
+    assert response.status_code == 200
+    descriptions = {t["description"] for t in response.json()}
+    assert descriptions == {"CARD A TXN 1", "CARD A TXN 2", "CARD A TXN 3"}
+
+
+def test_transactions_unknown_bank_returns_empty_list(client, two_cards):
+    response = client.get("/transactions", params={"bank": "NOT A REAL BANK"})
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_transactions_card_type_filter(client, two_cards):
+    # Both fixture cards share "FAKE CARD TYPE", so this exercises the cards
+    # JOIN without narrowing -- narrowing behavior is covered separately at
+    # the storage layer (test_reads.py), where the fixture cards differ.
+    response = client.get("/transactions", params={"card_type": "FAKE CARD TYPE"})
+
+    assert response.status_code == 200
+    assert len(response.json()) == 5
+
+
+def test_transactions_unknown_card_type_returns_empty_list(client, two_cards):
+    response = client.get("/transactions", params={"card_type": "NOT A REAL TYPE"})
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_transactions_new_filters_compose_as_and(client, two_cards):
+    card_a, _card_b = two_cards
+
+    response = client.get(
+        "/transactions",
+        params={
+            "card_id": card_a,
+            "bank": "FAKE BANK A",
+            "card_type": "FAKE CARD TYPE",
+            "statement_month": "January-2026",
+            "start": "2026-01-08",
+            "end": "2026-01-15",
+        },
+    )
+
+    assert response.status_code == 200
+    descriptions = {t["description"] for t in response.json()}
+    assert descriptions == {"CARD A TXN 2", "CARD A TXN 3"}

@@ -284,3 +284,101 @@ def test_insert_statement_reward_points_none_stored_as_null(db_path):
         assert row["reward_points"] is None
     finally:
         conn.close()
+
+
+def test_statement_month_populates_on_insert(db_path):
+    conn = get_connection()
+    try:
+        card_id = _create_fake_card(conn)
+        insert_statement(
+            conn, card_id, date(2026, 6, 17), date(2026, 7, 16), _fake_transactions(1)
+        )
+
+        row = conn.execute(
+            "SELECT statement_month FROM statements WHERE card_id = ?", (card_id,)
+        ).fetchone()
+
+        assert row["statement_month"] == "July-2026"
+    finally:
+        conn.close()
+
+
+def test_statement_month_migration_is_idempotent_and_backfills_existing_rows(tmp_path, monkeypatch):
+    # Deliberately bypasses storage.db entirely to build a pre-Session-26
+    # schema (no statement_month column) exactly as an earlier session would
+    # have left it on disk, rather than reusing the db_path fixture -- which
+    # already runs the current (migrated) init_db() and so could never
+    # reproduce the "existing DB from an earlier session" scenario this test
+    # exists to cover.
+    path = tmp_path / "legacy.db"
+    monkeypatch.setenv("DB_PATH", str(path))
+
+    legacy_conn = sqlite3.connect(str(path))
+    legacy_conn.execute(
+        """
+        CREATE TABLE cards (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bank TEXT NOT NULL,
+            card_type TEXT NOT NULL,
+            nickname TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(bank, card_type, nickname)
+        )
+        """
+    )
+    legacy_conn.execute(
+        """
+        CREATE TABLE statements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            card_id INTEGER NOT NULL,
+            period_start DATE NOT NULL,
+            period_end DATE NOT NULL,
+            imported_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE,
+            UNIQUE(card_id, period_start, period_end)
+        )
+        """
+    )
+    legacy_conn.execute(
+        """
+        CREATE TABLE transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            statement_id INTEGER NOT NULL,
+            txn_date DATE NOT NULL,
+            description TEXT NOT NULL,
+            amount REAL NOT NULL,
+            txn_type TEXT NOT NULL,
+            reward_points REAL,
+            FOREIGN KEY(statement_id) REFERENCES statements(id) ON DELETE CASCADE
+        )
+        """
+    )
+    legacy_conn.execute("INSERT INTO cards (bank, card_type) VALUES ('FAKE BANK', 'FAKE CARD TYPE')")
+    legacy_conn.commit()
+    card_id = legacy_conn.execute("SELECT id FROM cards").fetchone()[0]
+    legacy_conn.execute(
+        "INSERT INTO statements (card_id, period_start, period_end) VALUES (?, ?, ?)",
+        (card_id, "2025-12-17", "2026-01-16"),
+    )
+    legacy_conn.commit()
+    legacy_conn.close()
+
+    init_db()
+    init_db()  # must not raise -- idempotency against an already-migrated DB too
+
+    conn = get_connection()
+    try:
+        pre_existing = conn.execute(
+            "SELECT statement_month FROM statements WHERE card_id = ?", (card_id,)
+        ).fetchone()
+        assert pre_existing["statement_month"] == "January-2026"
+
+        new_statement_id = insert_statement(
+            conn, card_id, date(2026, 2, 1), date(2026, 2, 28), _fake_transactions(1)
+        )
+        new_row = conn.execute(
+            "SELECT statement_month FROM statements WHERE id = ?", (new_statement_id,)
+        ).fetchone()
+        assert new_row["statement_month"] == "February-2026"
+    finally:
+        conn.close()

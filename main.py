@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 
 from storage.cards import list_cards_with_statements
 from storage.db import get_connection, init_db
-from storage.reads import get_transactions
+from storage.reads import get_transactions, list_card_types, list_statement_months
 
 app = FastAPI()
 
@@ -44,6 +44,9 @@ def read_transactions(
     card_id: int | None = None,
     start: str | None = None,
     end: str | None = None,
+    statement_month: str | None = None,
+    bank: str | None = None,
+    card_type: str | None = None,
     conn=Depends(get_db),
 ):
     start_date = _parse_query_date(start, "start") if start is not None else None
@@ -55,15 +58,32 @@ def read_transactions(
             detail=f"start ({start_date}) is after end ({end_date})",
         )
 
-    # Always 200 + [] when nothing matches -- including an unknown card_id.
-    # get_transactions() (and the storage layer generally) doesn't
-    # distinguish "no such card" from "card exists but has no matching
-    # transactions" for the given range, so this endpoint doesn't either: a
-    # second lookup just to draw that distinction isn't worth it when the
-    # response is an empty list either way.
-    return get_transactions(conn, card_id=card_id, start_date=start_date, end_date=end_date)
+    # Always 200 + [] when nothing matches -- including an unknown card_id,
+    # statement_month, bank, or card_type. Same reasoning throughout: the
+    # storage layer doesn't distinguish "no such value" from "value exists
+    # but has no matching transactions," so this endpoint doesn't either --
+    # no format validation, no 400s, for these three, unlike start/end.
+    return get_transactions(
+        conn,
+        card_id=card_id,
+        start_date=start_date,
+        end_date=end_date,
+        statement_month=statement_month,
+        bank=bank,
+        card_type=card_type,
+    )
 
 
 @app.get("/cards")
 def read_cards(conn=Depends(get_db)):
     return list_cards_with_statements(conn)
+
+
+@app.get("/statement-months")
+def read_statement_months(conn=Depends(get_db)):
+    return list_statement_months(conn)
+
+
+@app.get("/card-types")
+def read_card_types(conn=Depends(get_db)):
+    return list_card_types(conn)

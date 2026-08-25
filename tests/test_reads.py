@@ -4,7 +4,7 @@ import pytest
 
 from storage.cards import create_card
 from storage.db import get_connection, init_db
-from storage.reads import get_transactions
+from storage.reads import get_transactions, list_card_types, list_statement_months
 from storage.writes import insert_statement
 
 # All bank names, merchants, and amounts below are fabricated for testing.
@@ -176,6 +176,137 @@ def test_ordering_is_date_desc_then_id_desc_for_same_day_transactions(db_path):
             "THIRD INSERTED",
             "SECOND INSERTED",
             "FIRST INSERTED",
+        ]
+    finally:
+        conn.close()
+
+
+def test_statement_month_filter_narrows_to_matching_statement(db_path):
+    conn = get_connection()
+    try:
+        card_id = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+        insert_statement(conn, card_id, date(2026, 1, 1), date(2026, 1, 31), [_txn(5, "JAN TXN")])
+        insert_statement(
+            conn, card_id, date(2026, 2, 1), date(2026, 2, 28), [_txn(5, "FEB TXN", month=2)]
+        )
+
+        rows = get_transactions(conn, statement_month="February-2026")
+
+        assert _descriptions(rows) == {"FEB TXN"}
+    finally:
+        conn.close()
+
+
+def test_bank_filter_narrows_to_matching_card(two_cards):
+    conn = get_connection()
+    try:
+        rows = get_transactions(conn, bank="FAKE BANK A")
+        assert _descriptions(rows) == {"CARD A TXN 1", "CARD A TXN 2", "CARD A TXN 3"}
+    finally:
+        conn.close()
+
+
+def test_card_type_filter_narrows_to_matching_card(db_path):
+    conn = get_connection()
+    try:
+        card_diners = create_card(conn, "FAKE BANK", "Diners")
+        card_signature = create_card(conn, "FAKE BANK", "Signature")
+        insert_statement(
+            conn, card_diners, date(2026, 1, 1), date(2026, 1, 31), [_txn(5, "DINERS TXN")]
+        )
+        insert_statement(
+            conn, card_signature, date(2026, 1, 1), date(2026, 1, 31), [_txn(5, "SIGNATURE TXN")]
+        )
+
+        rows = get_transactions(conn, card_type="Diners")
+
+        assert _descriptions(rows) == {"DINERS TXN"}
+    finally:
+        conn.close()
+
+
+def test_statement_month_composes_with_card_id_and_date_range(db_path):
+    conn = get_connection()
+    try:
+        card_id = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+        other_card_id = create_card(conn, "FAKE BANK B", "FAKE CARD TYPE")
+
+        insert_statement(
+            conn,
+            card_id,
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            [_txn(5, "TARGET"), _txn(20, "OUT OF RANGE")],
+        )
+        insert_statement(
+            conn, other_card_id, date(2026, 1, 1), date(2026, 1, 31), [_txn(5, "OTHER CARD")]
+        )
+
+        rows = get_transactions(
+            conn,
+            card_id=card_id,
+            statement_month="January-2026",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 10),
+        )
+
+        assert _descriptions(rows) == {"TARGET"}
+    finally:
+        conn.close()
+
+
+def test_list_statement_months_orders_by_period_end_desc_across_year_boundary(db_path):
+    conn = get_connection()
+    try:
+        card_id = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+        insert_statement(
+            conn, card_id, date(2025, 11, 17), date(2025, 12, 16), [_txn(1, "DEC TXN", month=12)]
+        )
+        insert_statement(
+            conn, card_id, date(2025, 12, 17), date(2026, 1, 16), [_txn(1, "JAN TXN")]
+        )
+
+        # Alphabetically "December-2025" sorts before "January-2026" (D < J),
+        # but chronologically January-2026 is the more recent statement --
+        # this is exactly the case a naive alphabetical sort would get wrong.
+        months = list_statement_months(conn)
+
+        assert months == ["January-2026", "December-2025"]
+    finally:
+        conn.close()
+
+
+def test_list_card_types_excludes_cards_without_statements(db_path):
+    conn = get_connection()
+    try:
+        card_with_statement = create_card(conn, "FAKE BANK A", "FAKE CARD TYPE A")
+        create_card(conn, "FAKE BANK B", "FAKE CARD TYPE B")  # no statement imported
+        insert_statement(
+            conn, card_with_statement, date(2026, 1, 1), date(2026, 1, 31), [_txn(5, "TXN")]
+        )
+
+        pairs = list_card_types(conn)
+
+        assert pairs == [{"bank": "FAKE BANK A", "card_type": "FAKE CARD TYPE A"}]
+    finally:
+        conn.close()
+
+
+def test_list_card_types_alphabetical_ordering(db_path):
+    conn = get_connection()
+    try:
+        card_z = create_card(conn, "ZZZ BANK", "FAKE CARD TYPE")
+        card_a = create_card(conn, "AAA BANK", "FAKE CARD TYPE")
+        insert_statement(conn, card_z, date(2026, 1, 1), date(2026, 1, 31), [_txn(5, "TXN 1")])
+        insert_statement(
+            conn, card_a, date(2026, 2, 1), date(2026, 2, 28), [_txn(5, "TXN 2", month=2)]
+        )
+
+        pairs = list_card_types(conn)
+
+        assert pairs == [
+            {"bank": "AAA BANK", "card_type": "FAKE CARD TYPE"},
+            {"bank": "ZZZ BANK", "card_type": "FAKE CARD TYPE"},
         ]
     finally:
         conn.close()

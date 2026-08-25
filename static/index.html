@@ -9,12 +9,15 @@
     margin: 2rem;
   }
   #filters {
+    margin-bottom: 1.5rem;
+  }
+  .filter-row {
     display: flex;
     gap: 1.5rem;
     align-items: flex-end;
-    margin-bottom: 1.5rem;
+    margin-bottom: 1rem;
   }
-  #filters label {
+  .filter-row label {
     display: flex;
     flex-direction: column;
     font-size: 0.85rem;
@@ -42,20 +45,36 @@
   <h1>Transactions</h1>
 
   <div id="filters">
-    <label>
-      Card
-      <select id="card-filter">
-        <option value="">All cards</option>
-      </select>
-    </label>
-    <label>
-      Start date
-      <input type="date" id="start-filter">
-    </label>
-    <label>
-      End date
-      <input type="date" id="end-filter">
-    </label>
+    <div class="filter-row">
+      <label>
+        Card
+        <select id="card-filter">
+          <option value="">All cards</option>
+        </select>
+      </label>
+      <label>
+        Bank / card type
+        <select id="bank-card-type-filter">
+          <option value="">All banks &amp; card types</option>
+        </select>
+      </label>
+    </div>
+    <div class="filter-row">
+      <label>
+        Statement month
+        <select id="statement-month-filter">
+          <option value="">All months</option>
+        </select>
+      </label>
+      <label>
+        Start date
+        <input type="date" id="start-filter">
+      </label>
+      <label>
+        End date
+        <input type="date" id="end-filter">
+      </label>
+    </div>
   </div>
 
   <div id="status">Loading…</div>
@@ -76,6 +95,8 @@
     const tableEl = document.getElementById("transactions-table");
     const bodyEl = document.getElementById("transactions-body");
     const cardFilterEl = document.getElementById("card-filter");
+    const bankCardTypeFilterEl = document.getElementById("bank-card-type-filter");
+    const statementMonthFilterEl = document.getElementById("statement-month-filter");
     const startFilterEl = document.getElementById("start-filter");
     const endFilterEl = document.getElementById("end-filter");
 
@@ -88,25 +109,6 @@
     let debounceTimer = null;
     const DEBOUNCE_MS = 300;
 
-    function currentFilters() {
-      return {
-        cardId: cardFilterEl.value,
-        start: startFilterEl.value,
-        end: endFilterEl.value,
-      };
-    }
-
-    function updateURL(filters) {
-      const params = new URLSearchParams();
-      if (filters.cardId) params.set("card_id", filters.cardId);
-      if (filters.start) params.set("start", filters.start);
-      if (filters.end) params.set("end", filters.end);
-
-      const query = params.toString();
-      const newURL = window.location.pathname + (query ? "?" + query : "");
-      window.history.replaceState(null, "", newURL);
-    }
-
     function extractErrorMessage(response) {
       return response
         .json()
@@ -114,6 +116,52 @@
           (body) => (body && body.detail ? body.detail : String(response.status)),
           () => String(response.status),
         );
+    }
+
+    function fetchJSON(url) {
+      return fetch(url).then((response) => {
+        if (!response.ok) {
+          return extractErrorMessage(response).then((message) => {
+            throw new Error(message);
+          });
+        }
+        return response.json();
+      });
+    }
+
+    function currentBankCardType() {
+      if (!bankCardTypeFilterEl.value) return { bank: "", cardType: "" };
+      const parsed = JSON.parse(bankCardTypeFilterEl.value);
+      return { bank: parsed.bank, cardType: parsed.card_type };
+    }
+
+    function currentFilters() {
+      const { bank, cardType } = currentBankCardType();
+      return {
+        cardId: cardFilterEl.value,
+        statementMonth: statementMonthFilterEl.value,
+        bank,
+        cardType,
+        start: startFilterEl.value,
+        end: endFilterEl.value,
+      };
+    }
+
+    function buildParams(filters) {
+      const params = new URLSearchParams();
+      if (filters.cardId) params.set("card_id", filters.cardId);
+      if (filters.statementMonth) params.set("statement_month", filters.statementMonth);
+      if (filters.bank) params.set("bank", filters.bank);
+      if (filters.cardType) params.set("card_type", filters.cardType);
+      if (filters.start) params.set("start", filters.start);
+      if (filters.end) params.set("end", filters.end);
+      return params;
+    }
+
+    function updateURL(filters) {
+      const query = buildParams(filters).toString();
+      const newURL = window.location.pathname + (query ? "?" + query : "");
+      window.history.replaceState(null, "", newURL);
     }
 
     function renderTransactions(transactions) {
@@ -157,21 +205,9 @@
       statusEl.textContent = "Loading…";
       tableEl.style.display = "none";
 
-      const params = new URLSearchParams();
-      if (filters.cardId) params.set("card_id", filters.cardId);
-      if (filters.start) params.set("start", filters.start);
-      if (filters.end) params.set("end", filters.end);
-      const query = params.toString();
+      const query = buildParams(filters).toString();
 
-      fetch("/transactions" + (query ? "?" + query : ""))
-        .then((response) => {
-          if (!response.ok) {
-            return extractErrorMessage(response).then((message) => {
-              throw new Error(message);
-            });
-          }
-          return response.json();
-        })
+      fetchJSON("/transactions" + (query ? "?" + query : ""))
         .then((transactions) => {
           if (seq !== requestSeq) return; // a newer request has since been issued
           renderTransactions(transactions);
@@ -182,9 +218,70 @@
         });
     }
 
+    function populateCardPicker(cards) {
+      if (cards.length === 0) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No cards with statements yet";
+        option.disabled = true;
+        option.selected = true;
+        cardFilterEl.appendChild(option);
+        return;
+      }
+
+      for (const card of cards) {
+        const option = document.createElement("option");
+        option.value = String(card.id);
+        option.textContent =
+          card.bank + " " + card.card_type + (card.nickname ? " (" + card.nickname + ")" : "");
+        cardFilterEl.appendChild(option);
+      }
+    }
+
+    function populateStatementMonthPicker(statementMonths) {
+      if (statementMonths.length === 0) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No statement months yet";
+        option.disabled = true;
+        option.selected = true;
+        statementMonthFilterEl.appendChild(option);
+        return;
+      }
+
+      for (const month of statementMonths) {
+        const option = document.createElement("option");
+        option.value = month;
+        option.textContent = month;
+        statementMonthFilterEl.appendChild(option);
+      }
+    }
+
+    function populateBankCardTypePicker(cardTypes) {
+      if (cardTypes.length === 0) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No banks/card types yet";
+        option.disabled = true;
+        option.selected = true;
+        bankCardTypeFilterEl.appendChild(option);
+        return;
+      }
+
+      for (const pair of cardTypes) {
+        const option = document.createElement("option");
+        option.value = JSON.stringify({ bank: pair.bank, card_type: pair.card_type });
+        option.textContent = pair.bank + " " + pair.card_type;
+        bankCardTypeFilterEl.appendChild(option);
+      }
+    }
+
     function fetchFiltersThenTransactions() {
       const params = new URLSearchParams(window.location.search);
       const urlCardId = params.get("card_id") || "";
+      const urlStatementMonth = params.get("statement_month") || "";
+      const urlBank = params.get("bank") || "";
+      const urlCardType = params.get("card_type") || "";
       const urlStart = params.get("start") || "";
       const urlEnd = params.get("end") || "";
 
@@ -193,38 +290,48 @@
 
       statusEl.textContent = "Loading…";
 
-      fetch("/cards")
-        .then((response) => {
-          if (!response.ok) {
-            return extractErrorMessage(response).then((message) => {
-              throw new Error(message);
-            });
-          }
-          return response.json();
-        })
-        .then((cards) => {
-          if (cards.length === 0) {
-            const option = document.createElement("option");
-            option.value = "";
-            option.textContent = "No cards with statements yet";
-            option.disabled = true;
-            option.selected = true;
-            cardFilterEl.appendChild(option);
-          } else {
-            for (const card of cards) {
-              const option = document.createElement("option");
-              option.value = String(card.id);
-              option.textContent =
-                card.bank + " " + card.card_type + (card.nickname ? " (" + card.nickname + ")" : "");
-              cardFilterEl.appendChild(option);
-            }
-          }
+      // /cards, /statement-months, and /card-types are independent of each
+      // other, so they're fetched together -- but all three must resolve
+      // before /transactions is fetched, since hydrating filter values from
+      // the URL requires validating them against these three lists first.
+      Promise.all([
+        fetchJSON("/cards"),
+        fetchJSON("/statement-months"),
+        fetchJSON("/card-types"),
+      ])
+        .then(([cards, statementMonths, cardTypes]) => {
+          populateCardPicker(cards);
+          populateStatementMonthPicker(statementMonths);
+          populateBankCardTypePicker(cardTypes);
 
           const knownCardIds = new Set(cards.map((card) => String(card.id)));
           const resolvedCardId = knownCardIds.has(urlCardId) ? urlCardId : "";
           cardFilterEl.value = resolvedCardId;
 
-          const filters = { cardId: resolvedCardId, start: urlStart, end: urlEnd };
+          const knownMonths = new Set(statementMonths);
+          const resolvedStatementMonth = knownMonths.has(urlStatementMonth)
+            ? urlStatementMonth
+            : "";
+          statementMonthFilterEl.value = resolvedStatementMonth;
+
+          const matchingPair =
+            urlBank && urlCardType
+              ? cardTypes.find(
+                  (pair) => pair.bank === urlBank && pair.card_type === urlCardType,
+                )
+              : undefined;
+          bankCardTypeFilterEl.value = matchingPair
+            ? JSON.stringify({ bank: matchingPair.bank, card_type: matchingPair.card_type })
+            : "";
+
+          const filters = {
+            cardId: resolvedCardId,
+            statementMonth: resolvedStatementMonth,
+            bank: matchingPair ? matchingPair.bank : "",
+            cardType: matchingPair ? matchingPair.card_type : "",
+            start: urlStart,
+            end: urlEnd,
+          };
           updateURL(filters);
           fetchTransactions(filters);
         })
@@ -233,21 +340,20 @@
         });
     }
 
-    cardFilterEl.addEventListener("change", () => {
+    function onFilterChange() {
       const filters = currentFilters();
       updateURL(filters);
       fetchTransactions(filters);
-    });
+    }
 
     function onDateInput() {
       clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        const filters = currentFilters();
-        updateURL(filters);
-        fetchTransactions(filters);
-      }, DEBOUNCE_MS);
+      debounceTimer = setTimeout(onFilterChange, DEBOUNCE_MS);
     }
 
+    cardFilterEl.addEventListener("change", onFilterChange);
+    bankCardTypeFilterEl.addEventListener("change", onFilterChange);
+    statementMonthFilterEl.addEventListener("change", onFilterChange);
     startFilterEl.addEventListener("input", onDateInput);
     endFilterEl.addEventListener("input", onDateInput);
 

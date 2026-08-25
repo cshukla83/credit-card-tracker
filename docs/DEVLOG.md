@@ -2827,3 +2827,348 @@ ten scenarios passed.
 (nicknames vs. statement periods, and a future `statement_month` label +
 bank/card-type filter) surfaced during this verification and was scoped
 separately as Session 26 — see carry-over.
+
+---
+
+## Session 26 — 2026-08-25
+
+### Goal
+Add a `statement_month` field (derived from `period_end`, e.g. `July-2026`)
+and bank/card-type filtering, end to end: schema, storage, API, and the
+page. This is the follow-on named in Session 25's post-session note — the
+month label that had been misused as a card nickname now becomes a real,
+derived, queryable field instead.
+
+### What happened
+
+**Schema (`storage/schema.py`).** Added `statement_month` as a `GENERATED
+ALWAYS AS (...) VIRTUAL` column on `statements`, computed from
+`period_end`. SQLite's `strftime()` has no month-name specifier, so the
+generated expression is an inline `CASE` mapping the numeric month (1–12)
+to its full capitalized name, concatenated with the four-digit year:
+`CASE CAST(strftime('%m', period_end) AS INTEGER) WHEN 1 THEN 'January'
+... END || '-' || strftime('%Y', period_end)`. This expression is a single
+shared string constant (`STATEMENT_MONTH_EXPRESSION`), used identically by
+both the fresh-DB `CREATE TABLE` definition and the existing-DB `ALTER
+TABLE` migration path below, so the two can never drift into computing the
+value differently.
+
+**STORED vs VIRTUAL — verified empirically, not assumed.** A first
+throwaway repro (in-memory DB, `CREATE TABLE` without the column, then
+`ALTER TABLE ADD COLUMN ... STORED`) *succeeded*, which looked like it
+contradicted the documented restriction. But that repro added the column
+before inserting any rows. A second repro — insert a row first, *then*
+`ALTER TABLE ADD COLUMN ... STORED` — reproduced the real restriction:
+`sqlite3.OperationalError: cannot add a STORED column`. `VIRTUAL` succeeded
+in both cases, including correctly recomputing the value for the
+pre-existing row. The distinction matters because the second repro is the
+actually-relevant case: any real database from an earlier session already
+has statement rows in it by the time this migration runs, so `STORED`
+would fail on every existing database and only work on a database with
+zero statements — the opposite of useful. `VIRTUAL` was used for both the
+`CREATE TABLE` definition and the `ALTER TABLE` migration path, per this
+session's instruction to keep the two consistent rather than having fresh
+and migrated databases store the column differently.
+
+**Migration (`storage/db.py`).** `init_db()` now calls
+`_ensure_statement_month_column(conn)` after the three `CREATE TABLE IF
+NOT EXISTS` statements, which is a no-op against a database created before
+this column existed (the table already exists, so `IF NOT EXISTS` does
+nothing) — hence the explicit `ALTER TABLE` step. The existence check
+originally used `PRAGMA table_info`, per this session's instructions, but
+that surfaced a real bug during verification: `PRAGMA table_info` **omits
+generated columns entirely** — confirmed empirically by running it
+immediately after a `CREATE TABLE` that already included
+`statement_month`, and seeing only 5 of the table's 6 columns come back.
+Because of that, the existence check always reported the column as
+missing, so `init_db()` unconditionally tried to re-add it and crashed
+with `duplicate column name: statement_month` — on *every* database,
+including a completely fresh one, not just a migrated one. Switched the
+check to `PRAGMA table_xinfo`, which does list generated columns (via a
+nonzero `hidden` value: `2` for `VIRTUAL`, `3` for `STORED`, confirmed
+empirically alongside the STORED/VIRTUAL repro above). This is the actual
+idempotency check now, and running `init_db()` any number of times, against
+either a fresh database or one migrated from an earlier session, is
+verified safe.
+
+**No index on `statement_month`.** Explicit decision, not an omission:
+this is a single-user, local-file database with, realistically, dozens to
+low hundreds of statement rows — an index would add write overhead and
+maintenance surface for a filter that scans a table this small in
+effectively no time either way. Revisit if that volume assumption ever
+stops holding, but there's no evidence it will.
+
+**Storage (`storage/reads.py`).** `get_transactions()` gained three new
+optional filters: `statement_month`, `bank`, `card_type`, all composing
+with `AND` alongside the existing `card_id`/`start_date`/`end_date`
+filters. The `statements` JOIN is added once if *any* of `card_id`,
+`statement_month`, `bank`, or `card_type` is present (previously only
+`card_id` triggered it); the `cards` JOIN is added separately, only when
+`bank` or `card_type` is present, since `statement_month` needs no card
+data at all. Both JOINs stay conditional — never added unconditionally —
+so a plain `/transactions` call with no filters still runs the same
+unjoined query it always has. Continued selecting `transactions.*`
+explicitly rather than a bare `*`, per the Session 16/21 rule about
+avoiding an `id` column collision across joined tables.
+
+Added `list_statement_months(conn)`, grouping by `statement_month` and
+ordering by `MAX(period_end) DESC` per group — deliberately not an
+alphabetical sort on the label itself, since alphabetically
+`"December-2025"` sorts before `"January-2026"` (D < J) even though
+January-2026 is the more recent month. Verified with a dedicated test
+seeding statements across a year boundary and asserting the January
+statement comes first.
+
+Added `list_card_types(conn)`, returning distinct `(bank, card_type)`
+pairs for cards with at least one statement — the same "has a statement"
+filter `storage.cards.list_cards_with_statements()` already applies, but
+placed in `storage/reads.py` instead per this session's explicit
+instruction not to touch `storage/cards.py`. Worth naming as a second,
+conscious asymmetry alongside the `id`-vs-`created_at` ordering asymmetry
+already on record from Session 25 — the same filter now exists in two
+places for two different shapes of result (full card rows vs. bank/type
+pairs), rather than one being built on top of the other.
+
+**API (`main.py`).** Two new endpoints, both on the existing
+`Depends(get_db)` pattern: `GET /statement-months` (array of strings) and
+`GET /card-types` (array of `{bank, card_type}` objects), both `200` + `[]`
+on an empty database, matching the established convention. `GET
+/transactions` gained the same three query params as
+`get_transactions()`, passed through directly with no format validation —
+an unknown `statement_month`, `bank`, or `card_type` produces `200` + `[]`,
+the same "no second lookup to distinguish absent-value from
+no-matches" reasoning already applied to `card_id`. Only `start`/`end`
+retain date-format validation and the `start > end` 400, since those are
+the only params with a format to be malformed in the first place.
+
+**Frontend (`static/index.html`).** Two-row filter layout: card picker and
+a combined bank/card-type picker on the first row, statement-month picker
+and the two date inputs on the second. The bank/card-type picker is a
+single `<select>` because a bank and card type only make sense as a pair
+here — its options carry a JSON-encoded `{bank, card_type}` string as the
+`value`, decoded on read rather than tracked as two separate dropdowns
+that could disagree with each other.
+
+On page load, `/cards`, `/statement-months`, and `/card-types` are fetched
+together via `Promise.all` (they're independent of each other), but the
+first `/transactions` fetch waits for all three to resolve before firing —
+hydrating filter values from the URL requires validating a `card_id`,
+`statement_month`, or `bank`+`card_type` pair against the real fetched
+lists first, so there's nothing to validate against until they're back.
+An unknown or invalid value in any of the three (including a `bank`
+present without a matching `card_type`, or vice versa) is dropped silently
+and the corresponding control falls back to "All," extending the
+unknown-`card_id`-in-URL handling already established in Session 25 to the
+two new controls.
+
+Card picker, bank/card-type picker, and statement-month picker all fetch
+immediately on `change`, no debounce — debouncing only matters for a
+high-frequency event like typing into a date field, not a single discrete
+selection. The two date inputs keep the ~300ms debounce on `input`
+established in Session 25. Every filter change still updates the URL via
+`history.replaceState` (never `pushState`) with all six parameter names
+matching `/transactions` exactly (`card_id`, `statement_month`, `bank`,
+`card_type`, `start`, `end`), omitting empty ones entirely rather than
+writing them as blank. The Session 25 stale-response guard (an
+incrementing sequence number on every `/transactions` fetch, so a slow
+response to an older filter change can't overwrite a newer one) and the
+backend-error-detail surfacing (reading the response body's `detail`
+field on a non-2xx response) both carry over unchanged — they apply to
+`/transactions` regardless of which filter triggered the fetch.
+
+**Design call made during implementation, not explicitly specified:**
+Session 25 established that an empty `/cards` response shows a disabled
+"No cards with statements yet" placeholder option rather than an empty
+dropdown. This session extends that same convention to the two new
+pickers ("No statement months yet" / "No banks/card types yet") for
+consistency, since an empty result from any of the three lookups is the
+same kind of legitimate-but-early state, not an error.
+
+**Tests.** 20 new tests, 120 total. `tests/test_storage.py`: `
+statement_month` populates correctly on a fresh insert, and a dedicated
+migration test that builds a pre-Session-26 schema directly (bypassing
+`storage.db` entirely, so it's a faithful stand-in for a real database
+left over from an earlier session) and confirms `init_db()` — called
+twice, to check idempotency — both backfills the pre-existing row's
+`statement_month` correctly and computes it correctly for a subsequent
+new insert. `tests/test_reads.py`: `list_statement_months()`'s
+year-boundary ordering, `list_card_types()`'s "only cards with statements"
+filter and alphabetical ordering, each new `get_transactions()` filter in
+isolation, and one test combining `statement_month` with `card_id` and a
+date range. `tests/test_api.py`: both new endpoints (including their
+empty-database cases), each new `/transactions` param filtering correctly
+and returning `[]` rather than `400` for an unknown value, and one test
+composing all three new filters with the pre-existing ones. No frontend or
+browser-level tests, same reasoning as Sessions 24 and 25.
+
+**What was deliberately not done, and why:** no pagination or aggregation
+endpoints (still out of scope, still no evidence they're needed), no value
+formatting on the page (unchanged deferral from Session 24), no new bank
+parser, no changes to `parsers/`, the three CLI scripts, or
+`_BANK_PASSWORD_ENV_KEYS`, no index on `statement_month` (explicit decision
+above), no case-normalization anywhere (bank/card-type filtering is
+exact-match, consistent with the existing case-sensitive card-identity
+behavior already on record in `docs/STATE.md`'s open flags — not something
+this session tried to quietly fix).
+
+**Verification:**
+```bash
+python3 -m pytest
+```
+```
+120 passed, 1 warning in 6.63s
+```
+(100 previous + 20 new, all passing. The pre-existing `httpx`/`starlette`
+deprecation warning is still present, still not acted on.) Per this
+session's instructions, no `uvicorn`, `curl`, or `data/tracker.db` access
+was performed.
+
+### Outcome
+Statements now carry a derived, always-consistent `statement_month` label
+instead of that information being smuggled into a card's nickname (the
+exact misuse Session 25's post-session note flagged and fixed manually).
+The transactions page can now be filtered by statement month and by
+bank/card type, in addition to the card and date-range filters from
+Session 25 — all six filters compose together, stay synced to the URL, and
+degrade the same way (loading/empty/error states, stale-response
+guarding) regardless of which filter triggered the fetch. The schema
+migration is verified idempotent and safe against both a fresh database
+and one carried over from before this session. 120 tests pass;
+`parsers/`, the three CLI scripts, `_BANK_PASSWORD_ENV_KEYS`, and
+`storage/cards.py` are all untouched.
+
+### In plain English
+
+Every statement now automatically carries its own month label, computed
+from the dates already on file rather than typed in by hand. This closes
+a gap from the previous session, where that same information had been
+stuffed into a field meant to name the physical card instead — a mix-up
+that would have quietly created a new "card" every month instead of
+tracking one card's history over time.
+
+The transactions page can now be narrowed down further: by which month a
+statement covers, and by which bank and card type it belongs to, on top of
+the card and date filters already there. All of these work together at
+once, and the page's address still reflects whatever combination is
+currently selected, so a specific filtered view stays shareable.
+
+Getting the underlying database change right took real verification, not
+just writing code and hoping. A rule about how this kind of computed field
+can be added to an existing database turned out to behave differently
+depending on whether that database already had data in it, and a related
+check for whether the field already existed was found to silently miss it
+every time, which would have broken the whole feature on first use. Both
+were caught by actually testing the behavior rather than assuming it, and
+fixed before anything shipped.
+
+### Next steps
+Manual verification against the live server and the real database is next,
+in a separate terminal, per this project's standing practice — including
+confirming the migration behaves correctly against the real, existing
+database rather than only the fabricated test databases used here.
+Session 27 onward remains open, per the project's standing anti-speculation
+rule: nothing further is planned until a real need surfaces one. The
+pagination/result-count question named in `docs/STATE.md`'s open flags
+remains unresolved and untouched.
+
+### Addendum — latent Session 23 threading bug uncovered during verification
+
+**What manual verification found.** Exercising the two new Session 26
+endpoints (`/statement-months`, `/card-types`) against the live server
+produced real `500` responses, with `sqlite3.ProgrammingError: SQLite
+objects created in a thread can only be used in that same thread` in the
+server logs. Looking closer at those same logs turned up the identical
+error firing silently against `/cards` too — silent in the sense that
+`/cards` still returned its correct `200` response before the crash hit,
+because the failure happened during dependency teardown, after the
+response body had already been generated and sent.
+
+**Root cause.** Not Session 26 code. `main.py`'s `get_db()` dependency
+(the `Depends(get_db)` pattern introduced in Session 23 and used by every
+endpoint in this file, including `/transactions` itself) opens a
+`sqlite3.Connection`, `yield`s it to the endpoint handler, and closes it
+in a `finally` block afterward. FastAPI's threadpool executor doesn't
+guarantee that a dependency's setup code, the endpoint handler body, and
+the dependency's teardown code all run on the same OS thread — they can,
+and apparently do, hop across different threadpool threads within a
+single request. `sqlite3` connections default to `check_same_thread=True`,
+which raises the moment a connection object is touched from any thread
+other than the one that created it. Every endpoint in `main.py` was
+exposed to this from the moment `Depends(get_db)` was introduced.
+
+**Why this went undetected for three sessions.** `fastapi.testclient
+.TestClient` — what every test in `tests/test_api.py` uses, across
+Sessions 23 through 26 — runs requests synchronously, in-process, on a
+single thread. It never exercises FastAPI's real threadpool dispatch, so
+this class of bug is structurally invisible to it; all 120 tests passed
+throughout, correctly, without ever coming close to this code path.
+Session 25's manual browser verification exercised the real server but
+didn't inspect server-side logs closely enough to notice `/cards`'
+teardown-phase crash riding along behind an otherwise-correct response —
+an easy thing to miss precisely because the user-visible behavior looked
+fine. Session 26's two new endpoints happened to land their setup and
+handler code on different threadpool threads than `/cards` had, so the
+crash surfaced mid-query as a real `500` instead of after the response
+was already out the door — a worse user-facing symptom, but a much more
+diagnosable one, which is what actually surfaced this session.
+
+**Empirical verification before touching production code**, matching the
+same discipline this session already applied to the `STORED`/`VIRTUAL`
+and `PRAGMA table_info`/`table_xinfo` questions: a throwaway repro created
+a `sqlite3.Connection` in the main thread with default settings, handed it
+to a `threading.Thread` that called `conn.execute()` on it, and confirmed
+the exact `ProgrammingError` from the server logs. Repeating the same repro
+with `check_same_thread=False` passed to `sqlite3.connect()` confirmed the
+error disappears. This locked in that the flag actually controls the
+behavior in question before it went anywhere near `storage/db.py`.
+
+**The fix.** `storage/db.py`'s `get_connection()` now passes
+`check_same_thread=False` to `sqlite3.connect()`, with an inline comment
+recording the reasoning. This is safe specifically because of how
+connections are actually used here: `check_same_thread=False` disables a
+guard against *concurrent* multi-thread use of one connection object, and
+every caller in this codebase uses a connection *sequentially* from at
+most one thread at a time — the CLIs are single-threaded end to end, and
+the FastAPI dependency opens a brand-new connection per request rather
+than sharing one across requests. What's actually happening under FastAPI
+is one connection touched by more than one thread, but never at the same
+time — which is exactly the case this flag is safe to relax for. It would
+not be safe to relax if two threads could genuinely be executing queries
+against the same connection object concurrently, which never happens
+here.
+
+**Deliberately not tested.** No test was added attempting to reproduce the
+FastAPI threadpool scenario itself. `TestClient`'s synchronous execution
+model means this class of bug is structurally out of reach of the test
+suite as currently built — closing that gap for real would mean running
+an actual `uvicorn` server process inside the test suite, which is a
+tooling decision of the same weight as the frontend/browser-testing
+decision this project has deferred since Session 24, not something to
+fold in as a side effect of a one-line bug fix. Named here explicitly,
+rather than adding a test that exercises `check_same_thread=False`
+directly without ever reproducing the actual cross-thread failure mode —
+that would pass regardless of whether the real bug were still present,
+which is worse than no test at all: it would look like coverage without
+being coverage.
+
+**In plain English.** A bug that had been quietly present since the very
+first API endpoint was added, three sessions ago, only became visible now
+because this session's new features happened to trigger it in a way that
+produced a clear, visible failure instead of a silent one. The underlying
+issue was a mismatch between how the web server hands work between
+background threads and a database library's assumption that the same
+piece of code stays on one thread throughout a single request — an
+assumption that didn't hold here, but had been failing silently at the
+very last step of handling earlier requests, after the correct answer had
+already been sent back.
+
+The fix relaxes a safety check that exists to prevent two things from
+using the same database connection at the exact same moment. That
+situation doesn't actually happen anywhere in this project — each request
+gets its own connection, and command-line tools never run at the same time
+as the server — so relaxing the check closes the gap without opening a new
+one. What's still missing is a way to automatically test for this specific
+kind of bug going forward; the current test setup runs everything in a
+simplified, single-threaded way that can't reproduce it, and building a
+proper test for it is being treated as its own future decision rather than
+something to bolt on hastily here.
