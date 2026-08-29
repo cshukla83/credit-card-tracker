@@ -3343,3 +3343,188 @@ statements, anchoring on the transaction line's leading date and using the
 field order and credit/debit signal identified in this session — while
 explicitly guarding against the interleaved non-transaction text fragments and
 the generic boilerplate tables found on the later pages.
+
+---
+
+## Session 28 — 2026-08-29
+
+### Goal
+Build the ICICI Coral parser using the structural findings from Session 27,
+following the same contract and code shape HDFC Diners established: pure
+text-processing functions under a PDF I/O wrapper, a dispatch package, a
+reconciliation script, and fabricated-data unit tests. Reconcile against the
+one real sample statement. No bank-level dispatch generalization and no
+`import_statement.py` routing — both explicitly deferred to a later session.
+
+### What happened
+
+**Read first, no re-exploration.** Session 27's DEVLOG entry already
+documented the transaction line shape, credit/debit signal, billing-period
+format, and the table-extraction pitfall in enough generic detail that this
+session never needed to re-open `data/exploration_output_icici.txt`. (Note:
+in the conversation immediately after Session 27, the file *was* read
+directly to compile that entry, which put real statement content into that
+session's transcript despite an instruction not to — flagged and logged as
+product feedback at the time. This session avoided repeating that by working
+entirely from the already-written, already-generic DEVLOG entry instead of
+re-reading the raw file.)
+
+**Code written — `parsers/icici_coral.py`:** Mirrors `parsers/hdfc_diners.py`'s
+shape — pure regex/text functions (`_parse_line`, `_extract_period_from_text`,
+`_extract_summary_from_text`, `_classify`, `_to_float`) wrapped by thin
+PDF-I/O functions (`_parse_transactions`, `extract_summary`, `parse`) that only
+handle opening the file and handing text to the pure functions. The unit tests
+call only the pure functions, same as HDFC Diners' tests do.
+
+- **Transaction regex** matches `DATE SERNO DESC POINTS [INTL_AMOUNT] AMOUNT
+  [CR]`, using `search()` rather than `match()`/`fullmatch()`. This was the key
+  design choice: Session 27 found that the page-1 pie-chart category-breakdown
+  legend (e.g. a stray "7% 31%") sometimes lands on the *same physical text
+  line* as a real transaction, ahead of the date, because of how the chart and
+  the transaction table overlap positionally in the PDF. Anchoring only at the
+  end (`$`) rather than also at the start lets that leading noise be silently
+  ignored, while lines with no date anywhere — headers, category-only legend
+  lines, masked card numbers — still correctly fail to match at all. This
+  replaces what would otherwise have needed to be a separate noise-filtering
+  pass.
+- **Classification is a one-line lookup**, not a keyword/fallback system like
+  HDFC's `_classify`. ICICI marks every credit/refund row with an explicit
+  `CR` suffix on the amount — Session 27's finding that this is a reliable,
+  unambiguous signal held up, so no keyword matching or amount-equality
+  fallback was needed.
+- **Reward points are always present, never `None`.** Unlike HDFC (where the
+  points group is entirely absent from non-earning lines, giving `None`),
+  ICICI's reward-points column is always populated in the raw text — `0` when
+  no points were earned, a plain positive integer when they were, and a
+  negative integer observed on the one credit/refund row Session 27 found
+  (a points clawback). So `reward_points` is always an `int` for this parser,
+  never `None` — a deliberate difference from HDFC's contract, not an
+  oversight, and both are valid within `Transaction`'s `Optional[int]` field.
+- **Serial/reference number and international amount are parsed but
+  discarded.** Both are captured as named regex groups (so the surrounding
+  amount/points groups match correctly) but neither is persisted onto the
+  returned `Transaction` — `Transaction` (in `parsers/base.py`, untouched this
+  session) has no field for either. The reference number is a genuinely
+  separate column in ICICI's layout, unlike HDFC where reference numbers just
+  ride inside the description text; folding it into `description` here would
+  have made ICICI's description semantics inconsistent with every other bank's
+  parser. The sample statement never actually exercised the international-
+  amount column (all visible transactions were domestic), so that branch of
+  the regex is exercised only by a fabricated test, not a real row — flagged
+  explicitly as an edge case for the next real ICICI statement with a foreign
+  transaction to validate.
+- **Billing period** comes from the explicit `Statement period : <Month DD,
+  YYYY> to <Month DD, YYYY>` line Session 27 identified — a direct regex
+  extraction, no inference from transaction dates needed, matching the pattern
+  HDFC's `_BILLING_PERIOD_RE` already established for its own differently-
+  formatted period line.
+- **Summary/reconciliation extraction** targets the page-1 "Previous Balance /
+  Purchases / Charges / Cash Advances / Payments / Credits" line Session 27
+  found, plus the separate "Total Amount due" / "Minimum Amount due" figures.
+  Amounts are matched with an optional leading backtick, since Session 27
+  noted the PDF's rupee symbol comes through `extract_text()` as a
+  font-encoding artifact rendered as a backtick character rather than "₹".
+
+**Code written — `parsers/icici/__init__.py`:** Line-for-line the same
+dispatch pattern as `parsers/hdfc/__init__.py` — case-insensitive
+`card_type.strip().title()` normalization, a lazy `from parsers import
+icici_coral` import inside the matching branch (so a broken future card-type
+module can't break dispatch for `"Coral"`), and `NotImplementedError` for
+anything else, naming the unrecognized card type in the message.
+
+**Code written — `run_icici_parser.py`:** Same shape as `run_hdfc_parser.py` —
+loads `ICICI_SAMPLE_PASSWORD`, defaults to `data/statements/icici_sample.pdf`
+but accepts a path argument, and prints only aggregate counts and yes/no
+reconciliation verdicts. No amounts, merchant names, or transaction dates are
+ever printed.
+
+```bash
+python3 run_icici_parser.py
+```
+Output:
+```
+Transactions parsed: 18 (16 debit, 2 credit)
+Debit total reconciles with statement summary: yes
+Credit total reconciles with statement summary: yes
+```
+18 matches the transaction-line count visible in Session 27's exploration
+output (17 on page 1, 1 on page 2) — no transactions were missed and nothing
+from the boilerplate pages was mistakenly parsed as a transaction. Both
+debit and credit totals reconcile exactly against the statement's own summary
+box.
+
+**Tests written — `tests/test_icici_coral.py`:** 17 tests against the pure
+functions only, fabricated merchant names/amounts throughout (real label/
+header text from the statement template, e.g. "Previous Balance", "Statement
+period :", is structural boilerplate, not customer data, and is used
+verbatim the same way HDFC's tests reuse real header text like
+"PAYMENTS/CREDITS PURCHASES/DEBIT"). Covers: plain debit, credit via `CR`
+suffix, positive/zero/negative reward points (including negative points on a
+plain debit line, to check the sign is parsed independently of the credit
+marker — not a case Session 27 actually observed, but a regression guard for
+the regex), the fabricated international-amount case, the leading
+category-breakdown-noise case (the key `search()`-vs-`match()` regression
+test), and three flavors of non-transaction line (header, category-legend-
+only, masked card number) all correctly returning `None`. Also covers period
+extraction (present and absent) and summary extraction (present and absent).
+
+**Tests written — `tests/test_icici_dispatch.py`:** Same structure as
+`tests/test_hdfc_dispatch.py` — a stubbed `icici_coral.parse` via
+`monkeypatch`, case-insensitive routing parametrized over `"coral"`,
+`"CORAL"`, `"Coral"`, `" Coral "`, and an unknown-card-type test asserting
+`NotImplementedError` names the offending (fabricated) card type.
+
+```bash
+python3 -m pytest
+```
+All 143 tests pass — 23 new (17 + 6) alongside all 120 pre-existing tests,
+including every HDFC test file, untouched.
+
+### Outcome
+`parsers/icici_coral.py`, `parsers/icici/__init__.py`, and
+`run_icici_parser.py` created. 23 new tests added and passing; full suite
+(143 tests) passes. Reconciliation against the real sample statement
+confirms all 18 transactions are found with correct debit/credit
+classification and totals matching the statement's own summary box. No file
+under `parsers/hdfc/`, `parsers/hdfc_diners.py`,
+`parsers/hdfc_diners_legacy.py`, any HDFC test file, `storage/`, `main.py`,
+or `scripts/` was touched. `_BANK_PASSWORD_ENV_KEYS` and
+`import_statement.py` were not modified — ICICI is not yet routable from the
+CLI import path. No card was created and the database was not touched. No
+real statement content was written into this log.
+
+### In plain English
+This session turned last session's structural notes about a second bank's
+statement format into actual working code — a parser that can read one
+particular card issuer's statement and turn it into the same kind of
+structured transaction list the first bank's parser already produces,
+following the exact same code shape so the two parsers stay easy to compare
+and maintain side by side.
+
+The interesting design problem here was a genuine hazard in the source PDF
+itself: a decorative chart's legend text sometimes gets extracted onto the
+very same line as a real transaction, ahead of it, because of how the two
+visually overlap in the original document. A naive parser expecting each
+transaction to start cleanly at the beginning of its line would either choke
+on that noise or need a separate cleanup step to strip it first. Instead, the
+matching rule was written to only care about how a line *ends*, not how it
+*begins* — so stray decoration at the front of a line is automatically
+ignored, and lines that are pure noise, with no real transaction anywhere in
+them, correctly produce nothing at all.
+
+Reconciliation is the real proof this works, not just the unit tests: the
+parser was pointed at the one actual sample statement, and the total of every
+purchase it found and the total of every payment/refund it found both match,
+to the last decimal, the totals the bank itself printed in the statement's own
+summary box. That kind of independent cross-check — the parser's arithmetic
+agreeing with the bank's arithmetic, computed two completely different ways —
+is much stronger evidence of correctness than any hand-written test alone
+could provide, because it's checking against the real document rather than
+against expectations the same person who wrote the parser also wrote the
+tests against.
+
+### Next steps
+Wire ICICI into `_BANK_PASSWORD_ENV_KEYS` and `import_statement.py` so it's
+reachable from the same CLI import path HDFC already uses, and validate the
+fabricated international-amount handling against a real statement that
+actually contains a foreign-currency transaction once one is available.
