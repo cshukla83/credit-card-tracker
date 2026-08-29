@@ -3528,3 +3528,127 @@ Wire ICICI into `_BANK_PASSWORD_ENV_KEYS` and `import_statement.py` so it's
 reachable from the same CLI import path HDFC already uses, and validate the
 fabricated international-amount handling against a real statement that
 actually contains a foreign-currency transaction once one is available.
+
+---
+
+## Session 29 — 2026-08-29
+
+### Goal
+Stress-test Session 28's ICICI Coral parser against three additional sample
+statements (`icici_sample_2.pdf`, `_3.pdf`, `_4.pdf`) to check whether the
+regex, classification rule, and summary extraction generalize beyond the one
+sample they were designed against — the same kind of exercise Sessions 9 and
+12 did for HDFC, which is where HDFC's word-boundary and keyword-classification
+bugs were actually found. Fix anything that breaks; add regression tests for
+any fix.
+
+### What happened
+
+**Read first, no re-exploration.** Worked from the already-written Session 28
+DEVLOG entry (regex rationale, classification rule, summary/period extraction
+design) and a review of the current `parsers/icici_coral.py`, without
+re-opening any raw exploration or sample-statement text.
+
+**Per-sample run:**
+```bash
+python3 run_icici_parser.py data/statements/icici_sample_2.pdf
+python3 run_icici_parser.py data/statements/icici_sample_3.pdf
+python3 run_icici_parser.py data/statements/icici_sample_4.pdf
+```
+| Sample | Transactions | Debit / Credit | Debit reconciles | Credit reconciles |
+|---|---|---|---|---|
+| `icici_sample_2.pdf` | 10 | 9 / 1 | yes | yes |
+| `icici_sample_3.pdf` | 24 | 23 / 1 | yes | yes |
+| `icici_sample_4.pdf` | 12 | 11 / 1 | yes | yes |
+
+All three reconciled cleanly against their own summary boxes on the first
+run — unlike HDFC, where Sessions 9 and 12 found real bugs this way. Per the
+session's own instructions ("for any sample that fails to reconcile or has a
+suspicious transaction count, investigate"), none of the three met either
+trigger condition, so no root-cause narrowing was strictly required.
+
+**Independent verification anyway, not just trusting the reconciliation
+check.** Reconciliation matching to the cent is strong evidence of
+correctness, but it isn't airtight on its own — a missed real transaction and
+a spuriously-matched non-transaction line could in principle net to the same
+total by coincidence. To rule that out (the "verify the conservation
+identity" and "check for lines the regex missed / incorrectly matched" steps
+in the brief), a throwaway audit script (kept in the session scratchpad, not
+committed) was run against all four samples — the original plus the three new
+ones. For every page of every sample, it counted raw-text lines containing a
+`DD/MM/YYYY`-shaped date (the structural signal a real transaction line must
+contain, per Session 27/28) and compared that count against how many of those
+lines the parser's `_parse_line()` actually turned into a `Transaction`.
+
+Result, for all four samples: **lines-with-a-date count == parsed-transaction
+count, with zero unmatched date-lines**, in every sample. This means no
+transaction-shaped line was silently dropped, and — since the parsed count
+never exceeded the date-line count — no non-transaction line was ever
+incorrectly matched either. Combined with exact reconciliation on both totals,
+this is a materially stronger correctness signal than either check alone:
+reconciliation confirms the *amounts* are right, and the line-count audit
+confirms the *set of lines* being summed is exactly the real transaction set,
+not some other set that happens to sum to the same figure.
+
+**Root cause / fix: none.** Sessions 9 and 12's investigations for HDFC found
+real classification bugs (a keyword false-positive on a glued merchant/city
+token, an amount-equality edge case) precisely because HDFC's `_classify`
+function made judgment calls — keyword matching, amount-equality fallbacks —
+that could disagree with reality on statements the parser hadn't been built
+against. ICICI Coral's parser was deliberately built *without* any such
+judgment call: classification is a direct read of an explicit `CR` marker the
+bank itself prints on every credit/refund row (Session 28's design choice),
+and the `search()`-not-`match()` regex was already built specifically to
+tolerate the one real noise pattern Session 27 found (interleaved
+category-breakdown text). Both of those design choices, made from Session 27's
+structural findings rather than fitted to Session 28's one sample after the
+fact, appear to be why nothing broke against three additional real statements.
+No line in `parsers/icici_coral.py` was changed this session.
+
+**Full-suite and all-four-samples re-verification** (unchanged code, run for
+completeness per the brief):
+```bash
+python3 run_icici_parser.py data/statements/icici_sample.pdf
+python3 run_icici_parser.py data/statements/icici_sample_2.pdf
+python3 run_icici_parser.py data/statements/icici_sample_3.pdf
+python3 run_icici_parser.py data/statements/icici_sample_4.pdf
+python3 -m pytest
+```
+All four samples reconcile (debit and credit, all "yes"); all 143 tests pass,
+unchanged from Session 28 — no new tests were added, since no fix was made to
+generate a regression case for.
+
+### Outcome
+The ICICI Coral parser built in Session 28 generalizes cleanly to three
+additional real statements with zero code changes: every transaction-shaped
+line was found, no non-transaction line was misclassified as one, and every
+sample's debit and credit totals reconcile exactly against that statement's
+own summary box. `parsers/icici_coral.py` is unmodified. No file under
+`parsers/hdfc/`, any HDFC test, `storage/`, `main.py`, or `scripts/` was
+touched. `_BANK_PASSWORD_ENV_KEYS` and bank-level dispatch remain untouched.
+No real statement content was written into this log.
+
+### In plain English
+Last session's parser for the second bank was tested against three more real
+statements it had never seen, to find out whether it was actually general or
+had just gotten lucky matching the one sample it was built against. This is
+the same exercise that, for the first bank several sessions ago, turned up two
+real bugs — so it was a genuine test, not a formality.
+
+This time nothing broke. Every one of the three new statements reconciled
+perfectly on the first try, and a second, independent check — counting how
+many date-shaped lines existed in each statement's raw text and confirming
+every single one of them turned into a parsed transaction, no more and no
+fewer — confirmed that the clean reconciliation wasn't a coincidence where a
+missed transaction and a wrongly-added one happened to cancel out. The likely
+reason this held up where the first bank's parser didn't, on its first pass,
+is a design choice made last session: rather than guessing at credits using
+keywords or judgment calls the way the first bank's parser has to, this
+bank's statements print an explicit, unambiguous marker on every credit
+directly, so there was no judgment call left to get wrong.
+
+### Next steps
+Wire ICICI into `_BANK_PASSWORD_ENV_KEYS` and `import_statement.py` (still
+deferred, now with four reconciled samples backing it), and continue to treat
+the fabricated international-amount handling as unvalidated against real data
+until a sample statement with an actual foreign-currency transaction turns up.
