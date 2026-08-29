@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 import pytest
 
-from storage.adapters import from_hdfc
+from storage.adapters import from_parsed_statement
 from storage.cards import create_card
 from storage.db import get_connection, init_db
 from storage.writes import insert_statement
@@ -39,8 +39,10 @@ def db_path(tmp_path, monkeypatch):
     return str(path)
 
 
-def test_from_hdfc_returns_correctly_shaped_tuple():
-    card_id, period_start, period_end, transactions = from_hdfc(_FAKE_PARSED_STATEMENT, card_id=42)
+def test_from_parsed_statement_returns_correctly_shaped_tuple():
+    card_id, period_start, period_end, transactions = from_parsed_statement(
+        _FAKE_PARSED_STATEMENT, card_id=42
+    )
 
     assert card_id == 42
     assert period_start == date(2026, 1, 1)
@@ -48,8 +50,8 @@ def test_from_hdfc_returns_correctly_shaped_tuple():
     assert len(transactions) == 2
 
 
-def test_from_hdfc_maps_field_names_correctly():
-    _, _, _, transactions = from_hdfc(_FAKE_PARSED_STATEMENT, card_id=1)
+def test_from_parsed_statement_maps_field_names_correctly():
+    _, _, _, transactions = from_parsed_statement(_FAKE_PARSED_STATEMENT, card_id=1)
     txn = transactions[0]
 
     assert set(txn.keys()) == {"txn_date", "description", "amount", "txn_type", "reward_points"}
@@ -60,19 +62,19 @@ def test_from_hdfc_maps_field_names_correctly():
     assert txn["reward_points"] == 15
 
 
-def test_from_hdfc_reward_points_none_passes_through():
-    _, _, _, transactions = from_hdfc(_FAKE_PARSED_STATEMENT, card_id=1)
+def test_from_parsed_statement_reward_points_none_passes_through():
+    _, _, _, transactions = from_parsed_statement(_FAKE_PARSED_STATEMENT, card_id=1)
 
     assert transactions[1]["reward_points"] is None
     assert transactions[1]["txn_type"] == "credit"
 
 
-def test_from_hdfc_round_trip_through_insert_statement(db_path):
+def test_from_parsed_statement_round_trip_through_insert_statement(db_path):
     conn = get_connection()
     try:
         card_id = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
 
-        args = from_hdfc(_FAKE_PARSED_STATEMENT, card_id=card_id)
+        args = from_parsed_statement(_FAKE_PARSED_STATEMENT, card_id=card_id)
         statement_id = insert_statement(conn, *args)
 
         assert statement_id is not None

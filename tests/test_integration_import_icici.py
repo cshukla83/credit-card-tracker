@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from dotenv import load_dotenv
 
-import parsers.hdfc as hdfc_dispatch
+import parsers.icici as icici_dispatch
 from storage.adapters import from_parsed_statement
 from storage.cards import create_card
 from storage.db import get_connection, init_db
@@ -12,25 +12,28 @@ from storage.writes import insert_statement
 
 # End-to-end integration test: real sample PDFs, through the full
 # parse -> adapt -> insert_statement pipeline, into an isolated tmp_path DB.
-# Skips cleanly if .env/HDFC_SAMPLE_PASSWORD or the sample files aren't
-# present locally, matching the pattern in test_hdfc_real_statements.py.
+# Skips cleanly if .env/ICICI_SAMPLE_PASSWORD or the sample files aren't
+# present locally, matching the pattern in test_integration_import.py.
 # Only counts, ids, and statement periods are asserted on or would appear in
 # failure output -- never amounts, merchants, or individual transaction dates.
+#
+# This is the ICICI half of the Session 30 generalization check: the pipeline
+# below is byte-for-byte the HDFC one with a different dispatch module and
+# card_type, which is the evidence that the adapter and storage layers are
+# genuinely bank-agnostic rather than HDFC-shaped by coincidence.
 
 load_dotenv()
 
-PASSWORD = os.environ.get("HDFC_SAMPLE_PASSWORD")
+PASSWORD = os.environ.get("ICICI_SAMPLE_PASSWORD")
 
 SAMPLE_PATHS = [
-    "data/statements/hdfc_sample.pdf",
-    "data/statements/hdfc_sample_2.pdf",
-    "data/statements/hdfc_sample_3.pdf",
-    "data/statements/hdfc_sample_4.PDF",
-    "data/statements/hdfc_sample_5.PDF",
-    "data/statements/hdfc_sample_6.pdf",
+    "data/statements/icici_sample.pdf",
+    "data/statements/icici_sample_2.pdf",
+    "data/statements/icici_sample_3.pdf",
+    "data/statements/icici_sample_4.pdf",
 ]
 
-pytestmark = pytest.mark.skipif(not PASSWORD, reason="HDFC_SAMPLE_PASSWORD not set in .env")
+pytestmark = pytest.mark.skipif(not PASSWORD, reason="ICICI_SAMPLE_PASSWORD not set in .env")
 
 
 @pytest.fixture
@@ -41,7 +44,7 @@ def card_id(tmp_path, monkeypatch):
 
     conn = get_connection()
     try:
-        new_card_id = create_card(conn, "HDFC", "Diners")
+        new_card_id = create_card(conn, "ICICI", "Coral")
     finally:
         conn.close()
 
@@ -51,7 +54,7 @@ def card_id(tmp_path, monkeypatch):
 def _import(pdf_path, card_id):
     conn = get_connection()
     try:
-        parsed = hdfc_dispatch.parse(pdf_path, PASSWORD, card_type="Diners")
+        parsed = icici_dispatch.parse(pdf_path, PASSWORD, card_type="Coral")
         insert_args = from_parsed_statement(parsed, card_id=card_id)
         statement_id = insert_statement(conn, *insert_args)
         return statement_id, parsed

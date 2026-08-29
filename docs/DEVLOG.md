@@ -3652,3 +3652,150 @@ Wire ICICI into `_BANK_PASSWORD_ENV_KEYS` and `import_statement.py` (still
 deferred, now with four reconciled samples backing it), and continue to treat
 the fabricated international-amount handling as unvalidated against real data
 until a sample statement with an actual foreign-currency transaction turns up.
+
+## Session 30 — 2026-08-29
+
+### Goal
+Generalize the import pipeline from HDFC-only to bank-agnostic, using HDFC and
+ICICI as the two concrete cases, so that adding a third bank parser requires
+zero changes to the adapter, the CLI, or the dispatch infrastructure. This is
+the "second bank exists to generalize against" precondition that Sessions 20
+and 29 explicitly deferred this work on.
+
+### What happened
+
+**Read first.** Reviewed `scripts/import_statement.py`
+(`_BANK_PASSWORD_ENV_KEYS` and its hardcoded `parsers.hdfc` call),
+`storage/adapters.py` (`from_hdfc`), `parsers/base.py` (the `ParsedStatement`
+contract), and both `parsers/hdfc/__init__.py` and `parsers/icici/__init__.py`,
+to separate what was genuinely HDFC-specific from what was already general.
+
+**The adapter needed a rename, not a rewrite.** `from_hdfc()` was checked
+against the actual field names both banks produce, rather than assumed to be
+HDFC-shaped. `_FIELD_MAP` reads only `description`/`amount`/`type`/
+`reward_points`, plus the explicit `date` -> `txn_date` conversion — every one
+of which is declared in `parsers/base.py`'s `Transaction`/`ParsedStatement`
+contract, not in either bank's parser. Both `parsers/hdfc_diners.py` and
+`parsers/icici_coral.py` return exactly that shape, so the function body has
+zero bank-conditional logic and needed none added. Renamed to
+`from_parsed_statement()`, docstring updated to state the bank-agnostic
+guarantee and what it was verified against; body unchanged. Callers updated:
+`scripts/import_statement.py`, `tests/test_integration_import.py`, and the
+four test names in `tests/test_adapters.py`.
+
+**Two single-entry structures collapsed into one registry.** The old code had
+the bank-specific knowledge split across two places — a
+`_BANK_PASSWORD_ENV_KEYS` dict for the password env var, and a hardcoded
+`hdfc_dispatch.parse(...)` call for the parser. Adding a bank would have meant
+editing both, and the second would have grown into an if/elif chain. These are
+now a single module-level registry keyed by `cards.bank`:
+
+```python
+class _Bank(NamedTuple):
+    password_env_key: str
+    parse: Callable[..., dict]
+
+_BANKS = {
+    "HDFC": _Bank(password_env_key="HDFC_SAMPLE_PASSWORD", parse=hdfc_dispatch.parse),
+    "ICICI": _Bank(password_env_key="ICICI_SAMPLE_PASSWORD", parse=icici_dispatch.parse),
+}
+```
+
+Adding a third bank is now one entry in this dict. The registry holds each
+bank's *dispatch package* (`parsers/<bank>/__init__.py`), never a card-type
+specific parser, so `card_type` is still passed straight through
+(`bank.parse(pdf_path, password, card_type=card["card_type"])`) and card-type
+routing stays inside each bank's own `__init__.py` where it already lived —
+the two-level structure (bank -> card type) is preserved, not flattened. The
+unknown-bank error message now lists the known banks, which it could not
+usefully do when there was only one.
+
+**Tests added** (both follow the existing skip-cleanly-if-absent pattern, and
+assert only on counts, ids, periods, and reconciliation results — never
+amounts, merchants, or transaction dates):
+
+| | |
+|---|---|
+| *(new)* | `tests/test_integration_import_icici.py` (2 tests) |
+| *(new)* | `tests/test_icici_real_statements.py` (8 tests) |
+
+`test_integration_import_icici.py` runs all four ICICI samples through the full
+`parse -> from_parsed_statement -> insert_statement` pipeline into a `tmp_path`
+DB, asserting stored transaction counts match parser output per sample, that
+all four land as distinct statement ids (no false dedup across genuinely
+different periods), and that re-importing each returns `None` (dedup works). It
+is deliberately byte-for-byte the HDFC integration test with a different
+dispatch module and `card_type` — that symmetry is itself the evidence that the
+adapter and storage layers are bank-agnostic in fact and not just by intent.
+
+`test_icici_real_statements.py` covers all four samples for period extraction
+and debit/credit reconciliation against the statement's own summary box
+(`purchases_charges` / `payments_credits`), going through the `parsers.icici`
+dispatch layer so that path is exercised too.
+
+**One deliberate asymmetry with the HDFC suite:** there is no ICICI
+layout-detection test. `parsers/hdfc_diners.py` has `_detect_layout()` because
+HDFC has two real statement layouts (current and legacy); ICICI Coral has one
+known layout and `parsers/icici_coral.py` has no counterpart function to assert
+on. Rather than invent one — which would have meant editing a parser this
+session was constrained not to touch — a period-extraction sanity check stands
+in, and the reason is recorded in the test file's header comment so the gap
+reads as a decision rather than an oversight.
+
+**Verification.**
+```bash
+python3 -m pytest
+```
+**153 passed** (143 before, +10 new). All 10 new tests were confirmed to
+actually execute against the real sample PDFs rather than skip — checked with
+`pytest -v` on the two new files, which reports `10 passed`, `0 skipped`. This
+matters because both files are wrapped in a `skipif` on the password env var:
+a green suite alone would not have distinguished "reconciles correctly" from
+"silently skipped everything." The pre-existing `tests/test_integration_import.py`
+and `tests/test_hdfc_real_statements.py` pass unchanged apart from the
+`from_hdfc` -> `from_parsed_statement` rename.
+
+The CLI registry itself has no automated test (it is a `main()`-style script,
+untested by existing convention), so it was verified directly instead:
+`_BANKS["HDFC"].parse is parsers.hdfc.parse` and `_BANKS["ICICI"].parse is
+parsers.icici.parse` both hold, and an unknown bank returns `None` and takes
+the error path.
+
+### Outcome
+The import pipeline is bank-agnostic. Adding a third bank now requires one
+registry entry in `scripts/import_statement.py` plus the parser package
+itself — no adapter change, no CLI logic change, no if/elif chain. Per the
+session's constraints, `parsers/hdfc_diners.py`,
+`parsers/hdfc_diners_legacy.py`, `parsers/icici_coral.py` and their unit tests
+were not touched; neither was `main.py` or the frontend; no cards were created
+and the real database was not modified. No real statement content was written
+into this log or into any test file.
+
+### In plain English
+Until now the app could technically parse two banks' statements, but the
+import command could only actually *use* one of them: the second bank's parser
+existed and was well-tested, yet the command that loads a statement into the
+database was hardcoded to call the first bank's. This session connected the
+second bank and, more importantly, restructured the wiring so a third bank
+won't need this kind of surgery again — the bank-specific details (which
+password to look up, which parser to call) now live together in one small
+table, and adding a bank means adding one row to it.
+
+The nice surprise was the piece that translates parsed statements into
+database rows. It was named after the first bank, which suggested it was
+built around that bank's quirks. Checking rather than assuming showed it never
+actually looked at anything bank-specific — it only ever used the common shape
+every parser promises to return, so it needed a new name and nothing else. The
+old name had been quietly overstating how much work would be involved here.
+
+The new tests were also checked for the failure mode where they pass by doing
+nothing: both files skip themselves when the sample statements aren't
+available, so a green result could have meant "everything reconciled" or
+"everything was skipped." They were confirmed to be the former.
+
+### Next steps
+Build the SBI or IndusInd parser — with the registry in place, that is now the
+only remaining bank-specific work for a new bank. The fabricated
+international-amount handling in the ICICI parser remains unvalidated against
+real data until a sample statement with an actual foreign-currency transaction
+turns up.

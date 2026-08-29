@@ -20,9 +20,11 @@ one, auto-detected from the PDF's own text).
 
 ## Current state
 
-As of Session 26 (120 tests passing, working tree clean), the HDFC Diners
-pipeline works end-to-end against real sample statements: parsing (both
-layouts), an adapter bridging parser output to storage, atomic deduped
+As of Session 30 (153 tests passing, working tree clean), the import
+pipeline works end-to-end against real sample statements for two banks —
+HDFC Diners (both layouts) and ICICI Coral — and is bank-agnostic from
+the CLI down: parsing, an adapter bridging parser output to storage
+(`from_parsed_statement`, shared by both banks), atomic deduped
 writes, a filtered read path, and `GET /transactions`, `GET /cards`,
 `GET /statement-months`, and `GET /card-types` FastAPI endpoints. The
 `statements` table carries a `statement_month` column (e.g. `July-2026`),
@@ -110,10 +112,17 @@ shape, each documented with a usage docstring plus a README section.
 
 ## Open flags
 
-- `_BANK_PASSWORD_ENV_KEYS` (in `scripts/import_statement.py`) and the
-  `parsers/hdfc` dispatch layer's `card_type` routing are both
-  single-entry structures, hardcoded for HDFC only. Real generalization
-  is deferred until a second bank exists to generalize against.
+- ~~`_BANK_PASSWORD_ENV_KEYS` and the bank-level parser call in
+  `scripts/import_statement.py` are single-entry structures, hardcoded
+  for HDFC only.~~ **Closed in Session 30**, generalized against two
+  real banks: both collapsed into one module-level `_BANKS` registry
+  (bank name -> password env key + dispatch package), so adding a bank
+  is one entry rather than edits in two places. `storage.adapters`'
+  `from_hdfc()` was checked at the same time and found to be already
+  bank-agnostic — it reads only `parsers/base.py` contract fields — so
+  it was renamed `from_parsed_statement()` with no body change.
+  Card-type routing inside each bank's `parsers/<bank>/__init__.py` is
+  unchanged and still per-bank by design.
 - `storage.cards.list_cards()` orders by `created_at`;
   `storage.cards.list_cards_with_statements()` (Session 25) orders by
   `id` ASC instead. In practice these agree, since SQLite's

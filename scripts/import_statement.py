@@ -10,22 +10,37 @@ Example:
 import argparse
 import os
 import sys
+from typing import Callable, NamedTuple
 
 from dotenv import load_dotenv
 
 import parsers.hdfc as hdfc_dispatch
-from storage.adapters import from_hdfc
+import parsers.icici as icici_dispatch
+from storage.adapters import from_parsed_statement
 from storage.cards import get_card
 from storage.db import get_connection, init_db
 from storage.writes import insert_statement
 
 load_dotenv()
 
-# TODO: generalize this once a second bank is added. Only HDFC exists right
-# now, so a real per-bank config/lookup mechanism would be speculative -- a
-# single hardcoded entry is honest about the current scope.
-_BANK_PASSWORD_ENV_KEYS = {
-    "HDFC": "HDFC_SAMPLE_PASSWORD",
+
+class _Bank(NamedTuple):
+    """Everything bank-specific about importing a statement, in one place."""
+
+    password_env_key: str
+    # The bank's dispatch package (parsers/<bank>/__init__.py), not a
+    # card-type-specific parser: card_type routing happens inside it.
+    parse: Callable[..., dict]
+
+
+# Bank name (as stored in cards.bank) -> its import config. Generalized in
+# Session 30 against two real banks: what used to be a one-entry
+# _BANK_PASSWORD_ENV_KEYS dict plus a hardcoded parsers.hdfc call is now a
+# single registry, so adding a third bank is one entry here rather than edits
+# scattered across this module.
+_BANKS = {
+    "HDFC": _Bank(password_env_key="HDFC_SAMPLE_PASSWORD", parse=hdfc_dispatch.parse),
+    "ICICI": _Bank(password_env_key="ICICI_SAMPLE_PASSWORD", parse=icici_dispatch.parse),
 }
 
 
@@ -43,18 +58,21 @@ def main():
             print(f"Error: card_id {args.card_id} not found")
             sys.exit(1)
 
-        password_env_key = _BANK_PASSWORD_ENV_KEYS.get(card["bank"])
-        if password_env_key is None:
-            print(f"Error: no password lookup configured for bank {card['bank']!r}")
+        bank = _BANKS.get(card["bank"])
+        if bank is None:
+            print(
+                f"Error: no parser configured for bank {card['bank']!r} "
+                f"(known banks: {', '.join(sorted(_BANKS))})"
+            )
             sys.exit(1)
 
-        password = os.environ.get(password_env_key)
+        password = os.environ.get(bank.password_env_key)
         if not password:
-            print(f"Error: {password_env_key} not set in .env")
+            print(f"Error: {bank.password_env_key} not set in .env")
             sys.exit(1)
 
-        parsed = hdfc_dispatch.parse(args.pdf_path, password, card_type=card["card_type"])
-        insert_args = from_hdfc(parsed, card_id=args.card_id)
+        parsed = bank.parse(args.pdf_path, password, card_type=card["card_type"])
+        insert_args = from_parsed_statement(parsed, card_id=args.card_id)
         statement_id = insert_statement(conn, *insert_args)
 
         if statement_id is None:

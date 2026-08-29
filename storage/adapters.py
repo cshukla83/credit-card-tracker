@@ -25,8 +25,14 @@ def _map_transaction(txn: dict) -> dict:
     return mapped
 
 
-def from_hdfc(parsed: dict, card_id: int) -> "tuple[int, date, date, list[dict]]":
-    """Adapt an HDFC dispatch-layer ParsedStatement into insert_statement()'s argument shape.
+def from_parsed_statement(parsed: dict, card_id: int) -> "tuple[int, date, date, list[dict]]":
+    """Adapt any dispatch-layer ParsedStatement into insert_statement()'s argument shape.
+
+    Bank-agnostic by construction: every parser returns the same
+    parsers.base.ParsedStatement shape, so this reads only the field names in
+    that contract and never branches on which bank produced the statement.
+    Verified against HDFC and ICICI in Session 30 -- the rename from from_hdfc()
+    was the only change needed.
 
     card_id is looked up by the caller (e.g. the CLI) before calling this --
     this adapter never touches the cards table itself.
