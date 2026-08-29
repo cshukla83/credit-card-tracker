@@ -109,6 +109,16 @@ The rule applies to every surface, not just Claude Code prompts — a
 screenshot or a pasted terminal output is exactly as much of a leak as a
 logged prompt.
 
+**Exploration output files.** Exploration output files
+(`data/exploration_output*.txt`) contain raw extracted text from real bank
+statements — account details, merchant names, amounts, dates, everything.
+They are git-ignored under the `data/` rule and must never be committed,
+pushed, or shared. They exist only for local review during parser
+development. If the project is ever published to GitHub or shared
+externally, verify these files are not included — the `.gitignore` rule
+protects against normal `git add`/`push`, but manual uploads, zip
+archives, or alternative publishing methods could bypass it.
+
 ## CLI Invocation
 
 **Rule:** every script under `scripts/` must be run as
