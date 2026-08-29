@@ -3172,3 +3172,174 @@ kind of bug going forward; the current test setup runs everything in a
 simplified, single-threaded way that can't reproduce it, and building a
 proper test for it is being treated as its own future decision rather than
 something to bolt on hastily here.
+
+---
+
+## Session 27 — 2026-08-29
+
+### Goal
+Explore the structure of an ICICI Coral statement PDF, the same way Session 7
+explored HDFC's, to inform a future ICICI parser — pure exploration, no parser
+code, no real statement data pasted into chat or written into this log.
+
+### What happened
+
+**Script written — `explore_icici.py`:** Same shape as `explore_structure.py`
+(Session 7), pointed at `ICICI_SAMPLE_PASSWORD` / `data/statements/icici_sample.pdf`
+instead of the HDFC equivalents, writing to `data/exploration_output_icici.txt`.
+For every page it records `extract_text()`, `extract_table()`, and
+`extract_tables()` output. Only the output file path is printed to stdout.
+
+```bash
+python explore_icici.py
+```
+Ran successfully; wrote `data/exploration_output_icici.txt`.
+
+**`.gitignore`:** Checked with `git check-ignore -v data/exploration_output_icici.txt`
+— confirmed the existing blanket `data/` rule (Session 2) already covers this file.
+No `.gitignore` change was needed (unlike Session 7, which added a redundant
+explicit line for the HDFC equivalent; not repeated here since the blanket rule
+was verified rather than assumed).
+
+**Structural findings (described generically — no real data below):**
+
+- The statement is **10 pages**. Only pages 1–2 contain the customer's actual
+  transactions; pages 3–10 are fixed regulatory/legal boilerplate and generic
+  worked examples (interest calculation, minimum-amount-due calculation, late
+  payment fee calculation) using placeholder illustration figures from unrelated
+  dates — not real transaction data, and structurally distinguishable from real
+  transactions by using a different date format and describing abstract
+  scenarios rather than dated line items.
+  - Page 1: header fields (statement date, payment due date), a statement
+    summary box, a credit summary box, a category-based spend breakdown
+    (percentages by category, rendered as short inline text fragments
+    interleaved with the transaction table in raw text — a hazard for a naive
+    line-by-line parser), the transaction table header, and most of the actual
+    transaction rows, followed by a rewards-points summary and the legal/GST
+    footer block.
+  - Page 2: the tail end of the transaction list (one row in this sample),
+    followed by a footnote about international transactions and the page
+    number.
+  - Pages 3–10: MITC terms, grievance/contact info, and multiple generic
+    illustrative calculation walkthroughs (interest, minimum amount due, late
+    payment charges) — no real transactions, no customer amounts.
+- **Transaction line shape:** one raw-text line per transaction, whitespace-
+  separated, in this field order: date, a long numeric serial/reference number,
+  merchant description (including a trailing country code), a reward-points
+  integer, an international-amount field (blank for domestic transactions), and
+  the amount. There is no visible column-ruling structure in the raw text — same
+  whitespace-separated shape as HDFC, but with an extra reference-number field
+  HDFC's layout didn't have.
+- **Credits vs. debits:** distinguished by a `CR` suffix directly appended to the
+  amount field on credit/refund rows (payments received, refunds); debit
+  (purchase) rows have no suffix. A credit/refund row in this sample also carried
+  a negative reward-points value, reflecting a points reversal tied to that
+  transaction.
+- **Summary box:** yes, in fact several, all on page 1 — a statement summary
+  (total amount due, minimum amount due), a separate credit summary (credit
+  limit, available credit, cash limit, available cash), and a balance
+  reconciliation line (previous balance, purchases/charges, cash advances,
+  payments/credits). A rewards-points summary (points earned this period, points
+  earned via a specific sub-channel) appears separately, after the transaction
+  list.
+- **Billing period / statement date:** stated explicitly in two different
+  places and formats. Near the top of page 1, "STATEMENT DATE" and "PAYMENT DUE
+  DATE" each appear as a textual `Month DD, YYYY` date. Further down page 1,
+  near the GST/legal block, an explicit `Statement period : Month DD, YYYY to
+  Month DD, YYYY` line gives the billing period start and end directly — no need
+  to infer the period from transaction dates.
+- **`extract_table()` / `extract_tables()`:** unreliable and inconsistent within
+  the same page, unlike HDFC (where it uniformly failed to split columns).
+  - On the crowded first page, `extract_table()` picks up only the transaction
+    table's header row — none of the actual data rows. `extract_tables()`
+    returns several fragments (mangled summary/spend-breakdown boxes each
+    collapsed into one cell, duplicate header rows, a couple of empty
+    placeholder tables) and, notably, correctly captures one transaction row as
+    a clean multi-column table — but only the one row that happened to be a
+    `CR` (credit) row, not the bulk of ordinary transaction rows on that page.
+  - On the second page, which has only one transaction row and no surrounding
+    clutter, both `extract_table()` and `extract_tables()` cleanly capture the
+    full table (header + the one data row), correctly split into columns.
+  - The generic illustrative calculation tables on pages 5–10 (not real
+    transactions) extract cleanly and completely as structured tables — the
+    underlying PDF does contain real tabular structures in places, extraction
+    just isn't reliable specifically for the crowded, real transaction section.
+  - **Takeaway:** table extraction on this page 1 layout silently drops most
+    transaction rows rather than failing loudly, which is a worse failure mode
+    than HDFC's — code that only checked "did `extract_table()` return
+    anything?" could easily ship missing real transactions. As with HDFC, a
+    regex/positional parser over `extract_text()` is the safer general approach,
+    since it captures every transaction line consistently regardless of a given
+    page's table-detection quirks. A parser will also need to skip non-
+    transaction lines (spend-breakdown percentage fragments) that get
+    interleaved with real transaction lines in the page 1 raw text, likely by
+    anchoring on a leading date pattern.
+- **Date format:** transaction lines use `DD/MM/YYYY` (slash-separated,
+  two-digit day and month, four-digit year) — different from the `Month DD,
+  YYYY` textual format used for the statement date, due date, and statement
+  period near the top of page 1. A parser needs to handle both formats
+  depending on which part of the document it's reading.
+- **Reward points:** yes, a plain integer per transaction line — positive when
+  points were earned, `0` for non-earning categories, and negative on at least
+  one credit/refund row (a points reversal). A page-1 summary section separately
+  states total points earned for the period and points earned via a specific
+  sub-channel, both as plain integers. No redemption/points-used data was
+  present in this sample.
+- **Other structural observations:**
+  - A handful of glyph-code artifacts (unrenderable font references) appear at
+    the very top of page 1's raw text, around a logo/security-image area —
+    not real data, and positioned above the parseable content, so easy to skip.
+  - Domestic transaction descriptions end with a trailing country code; an
+    "international amount" column exists for foreign-currency transactions but
+    is blank for domestic ones, with a footnote symbol marking what it means.
+  - The amount-column header renders its currency symbol as a font/encoding
+    artifact rather than a plain character — worth normalizing/ignoring when
+    matching column headers, though the numeric amount values themselves are
+    plain digit/comma/decimal text.
+  - Unlike HDFC's single page of legal boilerplate, ICICI's boilerplate spans
+    the majority of the document (8 of 10 pages) and includes generic worked
+    examples with their own internal tables — a parser must positively identify
+    the transaction section (e.g., by the table header line or the page 1/2
+    boundary) rather than assuming everything past a certain point is
+    boilerplate, since some of that later boilerplate also contains
+    table-shaped content that could be mistaken for real transactions if a
+    parser scanned indiscriminately for tables.
+
+### Outcome
+`explore_icici.py` created and run successfully; full multi-page raw text and
+table-extraction output saved to the git-ignored `data/exploration_output_icici.txt`
+for local review. Confirmed page count, transaction-vs-boilerplate page
+boundaries, transaction line shape, credit/debit distinction, summary box
+contents, billing period format, date format, reward points format, and that
+table extraction is unreliable (not just uniformly absent, as with HDFC) for
+this statement's transaction section. No real statement content was written
+into this log. No parser code, and no existing scripts, parsers, storage, or
+database files were touched.
+
+### In plain English
+This session looked at the internal structure of a second bank's statement
+format — ICICI, following the same one-time exploration approach used for the
+first bank back in Session 7 — without writing any code that actually parses
+it yet. The goal was purely to understand the shape of the document so a real
+parser can be designed correctly later, without needing to re-open the sample
+file and stare at real financial data again.
+
+The two statements turn out to differ in a few ways that matter for how a
+future parser gets built. ICICI's transaction lines carry an extra reference
+number HDFC's didn't have, credits are marked with a distinct suffix rather
+than some other signal, and dates appear in two different formats depending on
+which part of the document you're reading. Most notably, the bank's PDF
+occasionally produces oddly convenient exceptions in the tools' automated
+table detection — it looks like it worked, for exactly one row — creating a
+trap where relying on "did the table extractor return something?" would
+quietly drop most of the real transactions while appearing to work. That
+finding steers a future parser toward reading and pattern-matching the raw
+text directly, the same conclusion Session 7 reached for the other bank, but
+now for a document-shape reason specific to this one.
+
+### Next steps
+Write a regex/positional parser over `extract_text()` output for ICICI
+statements, anchoring on the transaction line's leading date and using the
+field order and credit/debit signal identified in this session — while
+explicitly guarding against the interleaved non-transaction text fragments and
+the generic boilerplate tables found on the later pages.
