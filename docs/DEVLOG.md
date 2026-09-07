@@ -3799,3 +3799,192 @@ only remaining bank-specific work for a new bank. The fabricated
 international-amount handling in the ICICI parser remains unvalidated against
 real data until a sample statement with an actual foreign-currency transaction
 turns up.
+
+---
+
+## Session 31 — 2026-08-31
+
+### Goal
+Structural exploration only of the SBI Card (Titan) statement PDF — establish
+what a future SBI parser will face, and how it compares to the HDFC and ICICI
+layouts already handled. No parser code, no changes to `parsers/`, `storage/`,
+`main.py`, or existing tests.
+
+### What happened
+
+**Tooling.** Wrote `explore_sbi.py`, a direct sibling of `explore_structure.py`
+(HDFC) and `explore_icici.py`. It loads `SBI_SAMPLE_PASSWORD` from `.env`,
+opens `data/statements/sbi_sample.pdf` with pdfplumber, and for every page
+records `extract_text()`, `extract_table()`, and `extract_tables()` output into
+`data/exploration_output_sbi.txt`. Only the output path is printed to stdout.
+`.gitignore` already carries a blanket `data/` entry, so the output file is
+ignored — verified with `git check-ignore -v` rather than assumed, and no new
+rule was added.
+
+**Structural findings** (shape only — no real statement content recorded here):
+
+- **Page count:** 7 pages in the primary sample.
+- **Transaction pages:** page 1 only, in this sample. Pages 3 and 4 extract as
+  completely empty (`extract_text()` returns nothing — image-only or blank
+  pages, a failure mode neither HDFC nor ICICI presented). Pages 2 and 5–7 are
+  boilerplate: benefits/savings tables, the full SBI-wide "Schedule of Charges"
+  card-fee catalogue, interest/EMI terms, and contact/payment-methods pages.
+- **Transaction section spans pages in other samples.** Cross-checked the three
+  sibling samples structurally (page counts and per-page counts of
+  transaction-shaped lines only, nothing else read): two are 7 pages with all
+  transactions on page 1, and two are 8 pages with the transaction list
+  continuing onto page 2 under a repeated header. A parser must therefore not
+  hardcode "page 1", and must handle a continuation page — the same lesson
+  ICICI taught, arrived at here before any parser was written.
+- **Transaction line shape:** one raw-text line per transaction, whitespace-
+  separated with no visible column ruling:
+  `DD Mon YY  DESCRIPTION  AMOUNT  <C|D>`. The description is free text of
+  variable word count; the amount is comma-grouped Indian-format digits with two
+  decimals; the trailing single-letter flag is the only debit/credit signal.
+- **Date format:** `DD Mon YY` — two-digit day, three-letter English month
+  abbreviation, **two-digit year** (e.g. the shape `07 Mar 26`). This is a third
+  distinct format for the codebase: HDFC uses a date-with-time prefix, ICICI
+  uses `DD/MM/YYYY` for transactions and `Month DD, YYYY` for header dates. SBI
+  is the first to use a two-digit year, which means century inference is now a
+  real parser concern rather than a theoretical one. Header dates (statement
+  date, payment due date) use the same `DD Mon YYYY` shape but with a full
+  four-digit year — so even within one SBI statement two year-widths coexist.
+- **Credit vs. debit markers:** a trailing single-character flag separated from
+  the amount by a space. The statement's own legend (printed at the foot of the
+  transaction section) enumerates more than the two obvious values — it defines
+  distinct codes for credit, debit, and several EMI/instalment/balance-transfer/
+  temporary-credit varieties. A parser must not assume the flag is binary: it
+  should map the full documented code set, and treat an unrecognized code as a
+  parse failure rather than silently defaulting to debit. This is a meaningfully
+  richer signal than ICICI's presence-or-absence `CR` suffix and HDFC's icon.
+- **Interleaved non-transaction rows — the significant new hazard.** The
+  transaction list is **partitioned by cardholder**: `TRANSACTIONS FOR <NAME>`
+  section headers appear inline, between transaction lines, splitting the list
+  into per-cardholder blocks (primary card plus add-on cards). These lines sit
+  in the same text column and the same extracted table cell as real
+  transactions. Neither HDFC nor ICICI had this. Two consequences:
+  1. A parser must skip these header lines — they carry no date and no amount,
+     so anchoring on a leading date pattern handles them, consistent with the
+     approach already used for the other two banks.
+  2. More importantly, the cardholder name is *structural information the other
+     two banks did not supply* — transactions belong to different physical
+     cards on one account. The current data model has no place for it. A future
+     parser can drop it, but that silently merges two people's spending; this is
+     a product decision to make deliberately, not a detail to discard by
+     default.
+  Also interleaved: a footnote noting that grey-highlighted rows are excluded
+  from the purchases total (a visual distinction that raw text extraction
+  cannot see — a possible source of totals mismatches), and a note that some
+  rows are partially converted to EMI plans.
+- **Summary box:** page 1, above the transaction list, in several labelled
+  blocks rather than one. A header block carries total amount due, minimum
+  amount due, credit limit, cash limit, available credit limit, available cash
+  limit, statement date, payment due date, and a statement number. An `ACCOUNT
+  SUMMARY` block is a five-column reconciliation row — previous balance,
+  payments/reversals/credits, purchases/other debits, fees/taxes/interest, total
+  outstanding — laid out as a header row followed by a row of numbers, so field
+  names and values are on separate text lines and must be matched positionally
+  rather than by an adjacent label. Two further blocks give brand-benefit totals
+  and a `REWARD SUMMARY` (previous balance, earned, redeemed/expired, closing
+  balance, expiry note) — all plain integers, in the same header-line-then-
+  value-line shape.
+- **Billing period:** explicit, and does **not** need derivation from
+  transaction dates — but it is in an awkward place. It appears as a
+  `for Statement Period: DD Mon YY to DD Mon YY` line that is part of the
+  *transaction table's column header*, immediately under the "Transaction
+  Details" heading, using the same two-digit-year format as the transaction
+  rows. Unlike ICICI, which states its period in a standalone line near the
+  legal block, SBI's period is only reliably recoverable from the table header
+  — which is also the natural anchor for locating the transaction section, so
+  one anchor serves both purposes.
+- **Extra fields not seen in HDFC/ICICI:** the per-cardholder attribution
+  described above; a GSTIN and a "place of supply" state code; a statement
+  number distinct from the card number; and, on payment rows, an opaque
+  reference token appended to the description rather than carried in its own
+  column (ICICI's reference number was a separate field). There is **no
+  per-transaction reward-points column** — SBI reports points only in aggregate
+  in the reward summary. This matters: `parsers/base.py`'s `Transaction`
+  contract carries `reward_points`, and both existing parsers populate it
+  per-row. SBI cannot. Whatever the contract does with an absent value needs to
+  be a deliberate decision when the parser is written.
+
+**Table extraction verdict.** `extract_table()` / `extract_tables()` do detect
+the page 1 transaction region as a table, and correctly identify the three
+columns (Date / Transaction Details / Amount) — better than HDFC, where rows
+collapsed into a single cell, and better than ICICI, where most rows were
+dropped outright. But the result is **unusable as structured data**, in a way
+that is worse than either previous failure because it looks correct. Every
+column comes back as one giant cell containing the entire column's values
+joined by newlines, so the "table" is a single data row of three multi-line
+strings. Critically, the columns are *not row-aligned*: the description cell
+contains the inline `TRANSACTIONS FOR <NAME>` header lines, while the date and
+amount cells do not — so the three columns have different line counts, and
+naively zipping them by index silently pairs dates with the wrong descriptions
+and amounts. That is exactly the kind of corruption that produces a full,
+plausible-looking, entirely wrong import. The boilerplate tables on pages 2 and
+5 extract cleanly and genuinely tabularly, confirming the PDF does contain real
+table structure — extraction just isn't trustworthy for the transaction
+section, for the third bank running.
+
+**Takeaway for a future parser:** same conclusion as HDFC and ICICI — a
+regex/line-anchored parser over `extract_text()`, keying on a leading
+`DD Mon YY` date and a trailing amount-plus-flag, is the right approach.
+The SBI-specific work is the two-digit year, the multi-valued transaction-type
+flag, the per-cardholder section headers, transaction continuation onto page 2,
+the absence of per-row reward points, and empty image-only pages that must not
+be mistaken for the end of the document.
+
+### Outcome
+`explore_sbi.py` created and run successfully; full per-page raw text and
+table-extraction output saved to the git-ignored
+`data/exploration_output_sbi.txt` for local review. The structural questions
+the session set out to answer are all answered. No parser code was written;
+`parsers/`, `storage/`, `main.py`, and all existing tests are untouched; the
+server was not started and `data/tracker.db` was not modified. No real
+statement content — merchant names, amounts, individual transaction dates,
+reference numbers — was pasted into chat or written into this log.
+
+### In plain English
+Before writing code to read a new bank's statement, it's worth spending a
+session just looking at what the file actually contains. This session did that
+for SBI, and it turned up three things that would have bitten a parser written
+on assumption.
+
+The first is a trap. For the two banks already supported, the PDF library's
+automatic table detection obviously failed — it either mashed each row into one
+blob or quietly skipped most rows, and either way you'd notice. For SBI it
+appears to succeed: it finds the transaction table and names the three columns
+correctly. But each "column" is really the whole column's worth of values
+stuffed into one box, and the boxes don't line up with each other — the
+description box has a few extra lines in it that the date and amount boxes
+don't. Pairing them up in order would attach the wrong date and the wrong
+amount to almost every transaction, and the result would look completely
+normal. Trusting the easy path here would have been worse than the two cases
+where it visibly failed.
+
+The second is that this statement covers more than one person. SBI prints the
+transactions grouped by cardholder — the main card and any add-on cards, each
+under its own heading. Nothing in the app's current data model records which
+card a transaction came from, so a parser written without noticing would blend
+two people's spending into one list without saying so. That's a decision worth
+making on purpose.
+
+The third is smaller but sharp: SBI writes transaction years with two digits,
+and it's the first of the three banks to do so — so the code has to decide what
+century a two-digit year means. It also doesn't report reward points per
+transaction the way the other two do, only as a monthly total, which the shared
+parser contract currently assumes every bank provides.
+
+Checking the other three SBI samples also showed that on longer statements the
+transaction list runs onto a second page, so a parser can't just look at page
+one. Cheap to learn now; expensive to discover from a silently short import.
+
+### Next steps
+Write the SBI parser as a `parsers/sbi/` package following the ICICI structure,
+registering it in `scripts/import_statement.py`'s `_BANKS` registry — the
+Session 30 generalization means that registry entry plus the parser package is
+the whole integration. Two design questions should be settled before coding
+rather than during: what the parser does with per-cardholder attribution (drop
+it, or extend the model), and what `reward_points` should hold for a bank that
+reports no per-transaction points. The full transaction-type code legend should
+be mapped explicitly, with unknown codes failing loudly.
