@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 import parsers.hdfc as hdfc_dispatch
 import parsers.icici as icici_dispatch
+import parsers.indusind as indusind_dispatch
 import parsers.sbi as sbi_dispatch
 from storage.adapters import from_parsed_statement
 from storage.cards import get_card
@@ -43,6 +44,7 @@ _BANKS = {
     "HDFC": _Bank(password_env_key="HDFC_SAMPLE_PASSWORD", parse=hdfc_dispatch.parse),
     "ICICI": _Bank(password_env_key="ICICI_SAMPLE_PASSWORD", parse=icici_dispatch.parse),
     "SBI": _Bank(password_env_key="SBI_SAMPLE_PASSWORD", parse=sbi_dispatch.parse),
+    "IndusInd": _Bank(password_env_key="INDUSIND_SAMPLE_PASSWORD", parse=indusind_dispatch.parse),
 }
 
 

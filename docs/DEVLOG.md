@@ -4425,3 +4425,175 @@ a payments half and a purchases half, each with its own subtotal row — rows th
 look transaction-ish but must not be counted, or every total would be doubled.
 All of these are handled the same way: a real transaction starts with a date,
 and nothing else does.
+
+---
+
+## Session 35 — 2026-09-07
+
+### Goal
+Build the IndusInd Legend parser from the Session 34 findings, verify it against
+all four samples, and register it as the fourth bank. No changes to
+`parsers/hdfc/`, `parsers/icici/`, `parsers/sbi/`, `storage/`, `main.py`, or the
+HTML page.
+
+### What happened
+
+**Text extraction, not table extraction — stated explicitly because the session
+allowed either.** `extract_table()` was permitted if genuinely reliable. It is
+not: it returns the transaction region as a single column of newline-joined raw
+lines, performing no column separation while adding cell-boundary noise (it
+merges a subtotal row and the following section header into one cell). It offers
+strictly less than `extract_text()` here. Text plus a date-anchored regex it is
+— the same choice as all three existing banks, but for a different reason than
+SBI's (there, table extraction actively misaligned columns; here it simply
+doesn't produce columns).
+
+**The sidebar bleed drove the single most important design decision.** The
+transaction regex is deliberately **not** anchored at the end. Sidebar text
+merges onto the tail of transaction rows, and in the worst case the row ends
+with a second amount-and-marker pair belonging to the summary box:
+
+```
+DD/MM/YYYY <merchant> <category> 6 618.00 DR 5,302.11 DR
+                                   ^^^^^^ real   ^^^^^^^^ sidebar
+```
+
+Anchoring at the end would reject such rows — which at least fails loudly, via
+reconciliation. Anchoring at the end *with a greedy description* would capture
+the sidebar's amount instead, which would **not** fail loudly. Leaving the tail
+unanchored with a lazy description makes the match leftmost, so the first
+points/amount/marker triple after the date always wins, and that is always the
+real transaction. Two unit tests pin this down, including an explicit
+`amount != <sidebar value>` assertion.
+
+**Unknown markers raise — and getting that right required loosening the regex,
+not tightening it.** The obvious spelling is `(?P<marker>DR|CR)`. That would
+make an unfamiliar marker fail to match the line *at all*, so the row would be
+silently **dropped** — precisely the silent-miss the unknown-marker rule exists
+to prevent, arrived at by way of a stricter-looking pattern. The regex therefore
+captures the marker loosely as `[A-Z]{2,4}` and `_classify()` validates it,
+raising `ValueError` on anything unmapped. There is a regression test naming
+this reasoning so a future tidy-up doesn't "simplify" it back.
+
+**`reward_points` is populated, unlike SBI.** IndusInd reports points per
+transaction (like ICICI), including zero and negative values where points are
+clawed back on a credit. No contract change needed.
+
+**Interleaved rows** — section headers (`Payment Details for ...`,
+`Purchases & Cash Transactions for ...`) and per-section subtotals
+(`Total <points> <amount>`) — are checked explicitly and return `None`, even
+though date-anchoring would reject them anyway. The explicit check makes the
+skip intentional and testable, and guards against a future layout that started
+dating its subtotal rows quietly double-counting them.
+
+**Cardholder attribution dropped, with a TODO**, matching the SBI treatment.
+`Transaction` has no field for it and `storage/` has no column.
+
+**Merchant category folded into the description.** It is unstructured, optional
+and undelimited, so separating it from the description by text alone is not
+reliable. Folding it in matches how HDFC and ICICI already treat trailing
+location text. Documented as a cosmetic limitation, since a wrapped category
+also leaves its tail behind on a continuation line.
+
+**No legacy module.** All four samples share one layout, so per the session's
+own instruction no `indusind_legend_legacy.py` was created — the same deliberate
+decision as ICICI, and the opposite of HDFC where two real layouts exist.
+
+**Summary extraction is label-adjacent, which is a step up from SBI.** Each
+label sits alone on its line with its value on the next, so the value is matched
+by its actual neighbouring label rather than by validated column order. The
+label match is anchored at both ends, so a renamed label yields `None` for that
+field instead of a wrong value — and only that field, which a test asserts. The
+end-anchor also stops the prose paragraph beginning "Minimum Amount Due (MAD)
+calculation..." from hijacking the `minimum_amount_due` field; there is a test
+for that too. `total_amount_due` and `total_outstanding` are deliberately **not**
+extracted: their values land at the end of unrelated prose lines with no
+structural relationship to their labels, an offset that happens to hold across
+all four samples but is brittle by construction and needed by nothing.
+
+**Files added:**
+
+| | |
+|---|---|
+| *(new)* | `explore_indusind.py` |
+| *(new)* | `parsers/indusind/__init__.py` — dispatch, "Legend" only |
+| *(new)* | `parsers/indusind/indusind_legend.py` |
+| *(new)* | `tests/test_indusind_legend.py` (32 tests, fabricated data) |
+| *(new)* | `tests/test_indusind_real_statements.py` (12 parametrized cases) |
+| *(edit)* | `scripts/import_statement.py` — one `_BANKS` entry |
+
+### Outcome
+
+Per-sample reconciliation (counts and yes/no only):
+
+| Sample | Pages | Txns | Debit / Credit rows | Txn pages | Debit reconciles | Credit reconciles | Period valid |
+|---|---|---|---|---|---|---|---|
+| `IndusInd_sample.pdf` | 3 | 7 | 5 / 2 | p1 | yes | yes | yes |
+| `IndusInd_sample_2.pdf` | 3 | 4 | 3 / 1 | p1 | yes | yes | yes |
+| `IndusInd_sample_3.pdf` | 3 | 7 | 5 / 2 | p1 | yes | yes | yes |
+| `IndusInd_sample_4.pdf` | 3 | 5 | 4 / 1 | p1 | yes | yes | yes |
+
+All eight sums reconcile at exactly `0.0000` delta, not merely inside the 0.01
+tolerance.
+
+**No parser fixes were needed during multi-sample verification, and that is
+worth stating precisely rather than claiming a clean build.** Nothing broke in
+Phase 2 because the one pattern that *would* have broken it — the sidebar bleed
+— was found in Phase 1 and designed around before any parser code was written.
+Had the regex been written end-anchored, samples 1, 3 and 4 would each have
+dropped two debit rows and failed to reconcile. The exploration phase is what
+made Phase 2 uneventful; it did not happen to be uneventful on its own.
+
+Full suite: **239 passed** (up from 195), no regressions across all four banks.
+
+### In plain English
+This was the fourth bank, and the first one where the parser worked on the first
+try. That's worth being honest about: it wasn't because IndusInd is easy or
+because the code was written especially carefully. It's because the previous
+session went looking for traps before writing anything, and found the one that
+mattered.
+
+The trap was this. IndusInd prints its summary box down the right-hand side of
+the page. Software reading the page as text goes line by line, left to right, so
+those sidebar numbers get stuck onto the end of whatever transaction sits at the
+same height. Some transaction lines therefore end with *two* amounts — the real
+one, and one that wandered in from the summary box.
+
+The natural way to write the pattern-matcher is to say "a transaction line ends
+with an amount and a DR or CR". Do that here and one of two things happens.
+Either those lines get rejected — in which case the totals don't add up and you
+find out immediately, which is annoying but safe — or, if you're slightly less
+careful, the matcher grabs the *last* amount on the line, which is the summary
+box's number, and records it as the transaction. That version adds up to nothing
+suspicious and is simply wrong. Knowing this in advance meant writing the rule
+as "take the first amount after the date, and don't care what follows", which is
+right in both cases.
+
+There's a second decision that looks backwards and isn't. Every IndusInd line is
+marked `DR` or `CR`, so the obvious thing is to have the matcher accept only
+those two. But then a statement using some third code wouldn't match the pattern
+at all, and the row would just... vanish. No error. A quietly missing
+transaction is worse than a loud crash. So the matcher deliberately accepts any
+two-to-four letter code and then checks it separately, which means an unfamiliar
+code stops the import instead of disappearing from it. The looser-looking rule
+is the safer one, and there's a test that says so, because it's exactly the kind
+of thing someone would later "clean up".
+
+The rest was familiar ground. Section headings and subtotal rows get skipped
+because real transactions start with a date and those don't. Reward points
+work like ICICI's. The statement even makes one thing easier than any bank so
+far: it spells out both directions of every transaction, so there's no guessing
+and no assumed default.
+
+Four banks now, all reconciling to the last paisa, and adding this one touched
+nothing outside its own folder plus a single line in the bank registry — which
+is what the Session 30 restructuring was for.
+
+### Next steps
+Four banks are now covered end to end. The natural next work is surfacing
+multi-bank data in the UI, which has not kept pace with the parser layer. The
+outstanding parser-side questions are unchanged and cross-bank: whether
+cardholder attribution deserves a column in `storage/`, whether the merchant
+category IndusInd provides is worth capturing as a real field rather than folded
+into the description, and whether SBI's grey-row detection is worth building
+before a statement actually fails to reconcile.
