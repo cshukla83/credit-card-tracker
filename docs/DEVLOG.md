@@ -3988,3 +3988,181 @@ rather than during: what the parser does with per-cardholder attribution (drop
 it, or extend the model), and what `reward_points` should hold for a bank that
 reports no per-transaction points. The full transaction-type code legend should
 be mapped explicitly, with unknown codes failing loudly.
+
+---
+
+## Session 32 — 2026-09-07
+
+### Goal
+Build the SBI Card (Titan) parser as a `parsers/sbi/` package following the
+ICICI structure, reconcile it against the real sample statement, and register
+it in the `_BANKS` registry — turning Session 31's structural exploration into
+a working third bank. No changes to `parsers/hdfc/`, `parsers/icici/`,
+`storage/`, `main.py`, or the HTML page.
+
+### What happened
+
+**Read the exploration output first, and it corrected the plan.** Session 31's
+notes said header dates carry a four-digit year while transaction dates carry
+two — so the billing-period regex was expected to need a different year width
+from the transaction regex. Reading `data/exploration_output_sbi.txt` showed
+that is true of the *statement date* and *payment due date* fields in the
+page header block, but **not** of the transaction table's column header, which
+is the field the parser actually needs:
+
+```
+for Statement Period: 17 Feb 26 to 16 Mar 26
+```
+
+Two-digit year on both sides, identical in form to the transaction lines.
+Verified against all four samples before writing the regex, so both date
+patterns share the same `%d %b %y` parse. Had this been taken on description
+rather than checked, the period regex would simply never have matched and
+`period_start`/`period_end` would have silently come back `None`.
+
+**Flag-code classification.** The statement prints its own legend:
+`C=Credit ; D=Debit; EN=Encash; FP=Flexipay; EMD=Easy Money Draft;
+BT=Balance Transfer; M=Monthly Installments; TAD=Total Amount Due;
+T=Temporary Credit.` A survey of all four samples found **only `C` and `D`
+actually occur** — the rest are documented but unexercised. `_FLAG_TO_TYPE`
+maps the full documented set anyway, reasoning from the legend's own wording:
+`C` and `T` (temporary credit pending a dispute) are credits; `D`, `EN`, `FP`,
+`EMD`, `BT`, `M` all increase what is owed and are debits. `TAD` is
+deliberately **excluded** — it labels a summary figure, not a transaction, so a
+row flagged `TAD` means the regex matched something it should not have.
+`_classify()` raises `ValueError` on anything unmapped rather than defaulting
+to debit: a silently mis-signed transaction breaks reconciliation with no
+visible error, which is the hardest class of bug to notice after import.
+
+**Cardholder headers dropped, with a TODO.** `TRANSACTIONS FOR <NAME>` lines
+partition the table by primary vs. add-on cardholder. They carry no date, so
+the date-anchored regex would reject them anyway — but `_parse_line()` checks
+for them explicitly first, so the skip is intentional and testable rather than
+incidental. The attribution itself is discarded: `Transaction` has no field for
+it and `storage/` has no column. Flagged as a TODO in the code, since the
+information *is* recoverable from the text if per-cardholder breakdowns are
+ever wanted.
+
+**`reward_points` is `None` for every transaction.** SBI reports points only in
+aggregate (the `REWARD SUMMARY` and `SAVINGS AND BENEFITS` blocks), never
+per-row. This is the first bank to break the shared contract's implicit
+assumption that per-transaction points exist. `None` is the honest answer —
+the field is `Optional[int]` already, and HDFC also returns `None` on rows
+without points, so no contract change was needed.
+
+**Text extraction, not table extraction — and this sample proves why.**
+Session 31 flagged that `extract_table()` misaligns rows. The page-1 table
+comes back as a *single* row whose three cells are newline-joined blobs: 22
+dates, 22 amounts — and **23** description entries, because the two
+`TRANSACTIONS FOR` header lines live inside the description column while
+contributing no date or amount. Zipping those columns back together would
+misalign every row after the first cardholder header, silently and with no
+error. `extract_text()` plus a date-anchored regex sidesteps this entirely.
+
+**Grey-highlighted rows: nothing to exclude by, and a note saying so.** The
+statement's footnote says grey-highlighted transactions do not form part of
+Purchases & Other Debits, and `#` marks EMI conversions. Both distinctions are
+*visual*: `extract_text()` returns a grey row identically to any other, with no
+marker and (in these four samples) no `#` either. There is therefore nothing in
+the text to filter on, and none of the samples appears to contain such a row.
+This is documented in a comment on `_parse_transactions()` as **the first place
+to investigate** if a future statement fails to reconcile — a grey row would be
+counted as a normal debit and inflate the debit total. Detecting one would mean
+dropping to pdfplumber's rect/char objects to read fill colour.
+
+**Summary extraction: order-validated, not positional.** The `ACCOUNT SUMMARY`
+block's five labels wrap across two lines while the five values land together
+on a third, so no value is positionally adjacent to its label in the extracted
+text — direct label-to-value pairing isn't available. Instead
+`_ACCOUNT_SUMMARY_RE` requires the label fragments to appear in a known order
+before consuming the value row. The mapping is thus validated by the layout: a
+statement whose columns were reordered or renamed fails to match and the
+summary comes back all-`None`, rather than silently mapping values onto the
+wrong labels. There is a unit test for exactly that failure mode.
+
+**All pages scanned.** Session 31 found two of four samples continue the table
+onto page 2. `_parse_transactions()` iterates every page; later pages are
+boilerplate containing no date-anchored, flag-terminated lines, so scanning
+them costs nothing and produced no false positives.
+
+**Files added:**
+
+| | |
+|---|---|
+| *(new)* | `parsers/sbi/__init__.py` — dispatch, "Titan" only |
+| *(new)* | `parsers/sbi/sbi_titan.py` — the parser |
+| *(new)* | `tests/test_sbi_titan.py` (30 tests, fabricated data) |
+| *(new)* | `tests/test_sbi_real_statements.py` (3 tests, skip-cleanly) |
+| *(edit)* | `scripts/import_statement.py` — one `_BANKS` entry |
+
+### Outcome
+Reconciliation against `data/statements/sbi_sample.pdf`: **22 transactions
+parsed; debit total and credit total both reconcile exactly** against the
+statement's own `Purchases & Other Debits` and `Payments, Reversals & other
+Credits` figures — to the paise, zero tolerance consumed. Billing period
+extracted, `period_start <= period_end`. Every transaction carries a valid
+`txn_type`, and `reward_points` is `None` throughout.
+
+The other three samples were parsed as a sanity check during development and
+also reconcile exactly on both sides, though per the session scope only
+`sbi_sample.pdf` is covered by the committed integration test.
+
+Full suite: **186 passed**.
+
+The one figure that does *not* reconcile arithmetically is `Total Outstanding`,
+which the statement rounds to whole rupees while the underlying balance carries
+paise. That is the bank's own rounding, not a parse error, and nothing asserts
+on it.
+
+### In plain English
+SBI's statement is the easiest of the three banks to read and the easiest to
+get subtly wrong.
+
+Easiest to read, because every transaction is one clean line — date, shop name,
+amount, and a single letter saying whether money went out (`D`) or came back
+(`C`). No icons to interpret like HDFC, no optional suffix like ICICI. The
+letter is right there.
+
+Easiest to get wrong, because of what sits *between* those lines. The statement
+groups spending by cardholder, with a heading like "TRANSACTIONS FOR <name>"
+partway down the list. If you ask the PDF library to hand you the table as a
+grid, it gives back three columns — dates, descriptions, amounts — and the
+descriptions column has two extra entries, because those headings count as
+descriptions but have no date or amount beside them. Line them back up and
+every transaction after the first heading gets paired with the wrong date and
+the wrong amount. Nothing errors. The numbers just quietly become fiction.
+Reading the page as plain text and picking out lines that *start with a date*
+avoids this completely, which is why that's what the parser does.
+
+Two other decisions worth naming. The statement's own footnote defines nine
+letter codes, not two — for EMI conversions, balance transfers, disputed-
+transaction credits and so on. Only `C` and `D` appear in any of the four
+sample statements, but the parser maps all of them, and refuses outright on a
+letter it doesn't recognise. The tempting shortcut is "if it's not `C`, call it
+a debit" — that would take an unfamiliar credit and record it as a charge, and
+the books would be off with nothing to show why.
+
+And the honest gap: SBI highlights certain rows in grey to mean "this doesn't
+count towards your purchases total". Grey is a colour. Text extraction returns
+a grey row exactly like a normal one — the distinction is invisible to the
+parser. None of the four samples seems to contain one, and all four add up
+exactly, so nothing is wrong today. But a comment in the code says plainly that
+if a future statement ever fails to add up, this is the first thing to look at.
+Better to write down where the floorboard is loose than to pretend the floor is
+solid.
+
+Compared with the other two banks: the pattern held. Adding SBI meant one
+parser package and one line in the registry — no changes to storage, the
+adapter, or the import script's logic, exactly as the Session 30
+generalization promised. Where SBI diverges is that it's the first bank with no
+per-transaction reward points (recorded as "unknown" rather than zero, since
+zero would be a claim the statement never makes) and the first with two-digit
+years.
+
+### Next steps
+Broaden the SBI integration test to the remaining three samples, the way the
+HDFC and ICICI suites already do — they parse correctly today but aren't
+guarded against regression. Beyond that, the open questions are cross-bank
+rather than SBI-specific: whether cardholder attribution is worth a column in
+`storage/`, and whether grey-row detection via pdfplumber's rect objects is
+worth building before a statement actually fails to reconcile.
