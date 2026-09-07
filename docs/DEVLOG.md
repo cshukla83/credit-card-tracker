@@ -4298,3 +4298,130 @@ SBI-specific: whether per-cardholder attribution is worth a column in
 worth building before a real statement actually fails to reconcile. Neither is
 urgent while every sample on disk reconciles exactly. The natural next piece of
 work is a fourth bank, or surfacing the now-three-bank data in the UI.
+
+---
+
+## Session 34 — 2026-09-07
+
+### Goal
+Structural exploration only of the IndusInd Bank Legend credit card statement
+PDF — establish what a parser will face, and how it compares to the HDFC, ICICI
+and SBI layouts already handled. No parser code.
+
+### What happened
+
+**Tooling.** Wrote `explore_indusind.py`, a direct sibling of
+`explore_structure.py` (HDFC), `explore_icici.py` and `explore_sbi.py`. It loads
+`INDUSIND_SAMPLE_PASSWORD` from `.env`, opens
+`data/statements/IndusInd_sample.pdf` with pdfplumber, and for every page
+records `extract_text()`, `extract_table()` and `extract_tables()` output into
+`data/exploration_output_indusind.txt`. `.gitignore`'s blanket `data/` entry
+already covers the output — confirmed with `git check-ignore -v` rather than
+assumed, and no new rule was added.
+
+**Structural findings** (shape only — no real statement content recorded here):
+
+- **Page count:** 3 pages in every one of the four samples — the most uniform
+  set yet (HDFC varied, SBI ran 7–8).
+- **Transaction pages:** page 1 only, in all four samples. Page 2 is
+  promotional messages, page 3 is terms and conditions. Every page still gets
+  scanned by the parser: SBI and ICICI both had samples that spilled onto a
+  later page, so "page 1 only" is treated as an observation about these four
+  files, not a property of the format.
+- **Transaction line shape:** one line per transaction, columns being
+  `date | transaction details | merchant category | reward points | amount |
+  DR/CR marker`. Points may be zero or negative; the marker is always present.
+- **Date format:** `DD/MM/YYYY` — the same form ICICI uses for transaction
+  rows, and the only bank other than ICICI to use a four-digit year in the
+  transaction table.
+- **Credit vs. debit markers:** an explicit `DR` or `CR` on **every** row. This
+  is a first: HDFC infers from an icon plus heuristics, ICICI marks only credits
+  with a `CR` suffix and treats absence as debit, SBI uses a nine-code legend.
+  IndusInd is the first bank where both directions are stated explicitly, so
+  there is no "assume debit" default to fall back on — and none was written.
+- **Extra field not seen elsewhere:** a **merchant category** column
+  (retail categories). It is unstructured free text, optional (absent on some
+  rows), and sits between the description and the points column with no
+  delimiter, so it cannot be reliably separated from the description by text
+  alone.
+- **Reward points:** present **per transaction**, like ICICI and unlike SBI.
+  Negative values occur on credit rows where points are clawed back.
+- **Two-section table.** The table is split into "Payment Details for <name>"
+  (credits) and "Purchases & Cash Transactions for <name>" (debits), each
+  followed by its own `Total <points> <amount>` subtotal row. Both the section
+  headers and the subtotal rows are interleaved non-transaction lines needing
+  filtering; neither carries a leading date, and the subtotals carry no
+  DR/CR marker either, so date-anchoring excludes both.
+- **Wrapped descriptions — new hazard.** When a merchant category is too long
+  for its column it wraps onto a following line carrying only the category tail.
+  That continuation line has no date, so it is skipped; the cost is that the
+  captured description keeps whatever category fragment shared the dated line
+  and loses the wrapped remainder. Cosmetic only — date, amount, sign and points
+  all live on the dated line.
+- **Sidebar bleed — the significant hazard.** The page-1 summary box is a
+  right-hand **sidebar**, and `extract_text()` merges it into the main text
+  flow, appending sidebar labels and values to the END of whichever transaction
+  row shares its vertical position. Two of the five debit rows in the primary
+  sample are affected, and one of them ends with a *second* amount-plus-marker
+  pair belonging to the sidebar rather than the transaction. This is the same
+  class of problem ICICI presented (chart-legend text merging into transaction
+  rows), mirrored to the trailing side.
+- **Summary box:** the sidebar itself, on page 1. Each label sits alone on its
+  line with its value on the line immediately following — genuinely adjacent,
+  unlike SBI where labels and values were separated and had to be matched by
+  validated column order. Because it is a sidebar, a value line may carry
+  unrelated left-column text merged in front of it, so the value is the *last*
+  amount on the line, not the only one. Contains: previous balance, purchases &
+  other charges, cash advance, payment & other credits, total amount due,
+  minimum amount due, and total outstanding.
+- **Billing period:** stated explicitly, no derivation needed, as two
+  `DD/MM/YYYY` dates joined by the word "To". Its sidebar label is separated
+  from the value by unrelated interleaved lines, so the value is better matched
+  by its own distinctive shape than by the label's line offset. The pattern
+  occurs exactly once per statement in all four samples — checked, not assumed.
+- **`extract_table()` / `extract_tables()`: unreliable, differently from SBI.**
+  It does return the transaction region, but as a *single column* whose cells
+  are newline-joined runs of raw lines — it performs no column separation at
+  all, and it merges a subtotal row and the following section header into one
+  cell. It is strictly worse than `extract_text()` here, offering no column
+  structure while adding cell-boundary noise.
+
+**Comparison with the three existing banks.** Nothing here is a new *kind* of
+problem. Explicit two-sided markers are a simplification over all three; the
+merchant category is a genuinely new field but not a new structural challenge;
+the sidebar bleed is ICICI's hazard mirrored; the section headers and subtotals
+are SBI's cardholder headers by another name; wrapped descriptions are new but
+fall out of the same date-anchoring that handles every other interleaved row.
+
+### Outcome
+Exploration complete, no blocking surprises. Per the session's own stop rule —
+stop only on a fundamentally different transaction encoding, encrypted content,
+an image-only page with no text layer, or a layout demanding a design decision
+the three existing banks had not already forced — none applied, so work
+proceeded directly into the Session 35 parser build.
+
+### In plain English
+IndusInd's statement is, on the face of it, the friendliest of the four banks.
+Every transaction line ends with `DR` or `CR` spelled out, so there is no
+guessing which direction money moved — HDFC makes you infer it from an icon,
+ICICI from the absence of a marker, SBI from a nine-letter code table.
+
+It has one nasty trick, though, and it comes from how the page is designed
+rather than from the data. The summary box — previous balance, amount due, and
+so on — is printed down the right-hand side of the page. When software reads the
+page as text, it reads left to right across each line, so those sidebar figures
+get glued onto the end of whatever transaction happens to sit at the same
+height. The result is transaction lines that end with an extra label, or worse,
+an extra amount that belongs to the summary box rather than the transaction.
+
+That second case is the trap. A line can end with two amounts, and only the
+first one is the transaction's. Grab the wrong one and the figure is silently
+wrong — no error, no crash, just a number that doesn't belong. Knowing this
+before writing the parser is the whole value of exploring first.
+
+Two smaller things. Long shop-category names wrap onto the next line, so some
+lines are really just leftovers from the line above. And the table is split into
+a payments half and a purchases half, each with its own subtotal row — rows that
+look transaction-ish but must not be counted, or every total would be doubled.
+All of these are handled the same way: a real transaction starts with a date,
+and nothing else does.
