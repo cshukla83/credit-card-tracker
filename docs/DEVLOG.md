@@ -4426,6 +4426,15 @@ look transaction-ish but must not be counted, or every total would be doubled.
 All of these are handled the same way: a real transaction starts with a date,
 and nothing else does.
 
+### Next steps
+Proceed directly into the parser build, since none of the session's stop
+conditions were met. The findings that must carry forward into it: read the
+transaction line so that trailing sidebar text cannot be mistaken for the
+transaction's own amount, skip the section headers and subtotal rows by
+date-anchoring, use text extraction rather than the table tools, and treat
+"page 1 only" as an observation about these four samples rather than a property
+of the format.
+
 ---
 
 ## Session 35 — 2026-09-07
