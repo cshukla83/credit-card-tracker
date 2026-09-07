@@ -4166,3 +4166,135 @@ guarded against regression. Beyond that, the open questions are cross-bank
 rather than SBI-specific: whether cardholder attribution is worth a column in
 `storage/`, and whether grey-row detection via pdfplumber's rect objects is
 worth building before a statement actually fails to reconcile.
+
+---
+
+## Session 33 — 2026-09-07
+
+### Goal
+Widen `tests/test_sbi_real_statements.py` from the single `sbi_sample.pdf`
+committed in Session 32 to all four SBI samples, matching the HDFC (Session 15)
+and ICICI (Session 29) suites. Investigate and fix any sample that fails to
+reconcile. No changes to `parsers/hdfc/`, `parsers/icici/`, `storage/`,
+`main.py`, or the HTML page.
+
+### What happened
+
+**The structural change was exactly the one anticipated.** Session 32's parser
+was written against the full four-sample survey even though only one sample was
+committed as a test, so this session converted three single-sample tests into
+three `@pytest.mark.parametrize` cases over a `SAMPLES` list — byte-for-byte the
+ICICI suite's shape with a different dispatch module and `card_type`. The
+`_reconciles()` helper, the `pytestmark` skip guard, and the per-sample
+`Path.exists()` skip were already in place and needed no edits.
+
+**No parser fixes were required. Nothing broke.** All four samples reconcile on
+both the debit and the credit side. This is the first SBI session with no
+diagnosis section, so it is worth being precise about why rather than just
+recording a pass: the Session 32 parser was developed against all four samples
+even though only one was committed, so this session was confirming a known
+result under test rather than discovering a new one. The honest framing is that
+this session closed a *coverage* gap, not a *correctness* gap.
+
+**Per-sample results** (counts and yes/no only — no amounts, dates, or
+merchants):
+
+| Sample | Pages | Txns | Debit / Credit rows | Txn pages | Debit reconciles | Credit reconciles | Period valid |
+|---|---|---|---|---|---|---|---|
+| `sbi_sample.pdf` | 7 | 22 | 17 / 5 | p1 | yes | yes | yes |
+| `sbi_sample_2.pdf` | 7 | 21 | 19 / 2 | p1 | yes | yes | yes |
+| `sbi_sample_3.pdf` | 8 | 33 | 31 / 2 | p1 (23) + p2 (10) | yes | yes | yes |
+| `sbi_sample_4.pdf` | 8 | 25 | 21 / 4 | p1 (22) + p2 (3) | yes | yes | yes |
+
+Every reconciliation delta is exactly `0.0000` — not merely inside the 0.01
+tolerance, but zero to the paise on all eight sums. That matters as a signal:
+a parser that dropped or double-counted a row would almost never land exactly
+on zero, so exact-zero across four independent statements is meaningfully
+stronger evidence than "within tolerance" would be.
+
+**The multi-page tests have real bite, and that was checked rather than
+assumed.** A parametrized test can pass for uninteresting reasons, so the
+per-page distribution was measured directly instead of trusting that "all four
+pass" implies the continuation path is covered. Samples 3 and 4 carry 10 and 3
+transactions respectively on page 2. Had `_parse_transactions()` scanned only
+page 1, sample 3 would have come up ten transactions short and its debit total
+would have failed to reconcile — so these two cases genuinely guard the
+all-pages scan that Session 31 identified as necessary, rather than passing
+incidentally. Samples 1 and 2 are single-page and cannot exercise it.
+
+**Two secondary properties confirmed while the deltas were in hand.** The
+`Statement Period` header repeats on page 2 in the two spanning samples;
+`parse()` takes the first match while scanning pages in order, and the page-1
+and page-2 headers agree in both, so first-match is safe here rather than merely
+convenient. And because all four totals land at exactly zero delta, no
+transaction is being double-counted across the page boundary — a plausible
+failure mode for a repeated-header layout, ruled out by the arithmetic rather
+than by inspection.
+
+**Flag-code coverage is unchanged and still partial.** Across all four samples
+only `C` and `D` appear. The other six mapped codes (`T`, `EN`, `FP`, `EMD`,
+`BT`, `M`) remain exercised only by `tests/test_sbi_titan.py`'s fabricated
+cases. Widening the integration suite did not widen real-world flag coverage,
+and it would be wrong to read "all four samples pass" as evidence the EMI and
+balance-transfer codes are handled correctly against real statements. They are
+handled *as the statement's own legend documents them*, which is the best
+available evidence but is not the same thing.
+
+**Files changed:**
+
+| | |
+|---|---|
+| *(edit)* | `tests/test_sbi_real_statements.py` — 3 tests → 12 parametrized cases |
+
+### Outcome
+All four SBI samples parse, reconcile exactly on both sides, and yield a valid
+billing period. SBI integration suite: 3 tests → **12 passing** cases. Full
+suite: **195 passed** (up from 186), no regressions, no parser changes.
+
+SBI now sits at parity with HDFC and ICICI: every sample statement on disk for
+every supported bank is covered by a committed reconciliation test.
+
+### In plain English
+This session was bookkeeping, and it's worth saying so plainly rather than
+dressing it up as a discovery.
+
+Last session the SBI parser was checked against all four sample statements, but
+only one of those checks was written down as a permanent test. The other three
+passed on a developer's screen and then evaporated. This session turned them
+into real tests — the kind that run every time and complain if a future change
+breaks them. The parser itself needed no changes, and nothing was found to be
+wrong, because nothing was wrong.
+
+What that means is the gap being closed here wasn't "the code is broken", it
+was "the code was only *known* to work in a way that would be forgotten". Those
+are different problems and only the second one existed.
+
+One thing genuinely worth confirming: two of the four statements are long
+enough that the transaction list spills onto a second page — ten transactions on
+one, three on the other. It's easy to write a test that passes without actually
+testing anything, so rather than assume those cases cover the page-spilling
+behaviour, the count per page was measured. They do: if the parser ever
+regressed to reading only the first page, one of these statements would come up
+ten transactions short and the totals would stop adding up. The test would
+catch it.
+
+The totals are also exact — not "close enough", but matching the bank's own
+printed figures to the last paisa across all four statements and both
+directions. That's a stronger signal than it might sound. A parser that quietly
+skipped a row or counted one twice would land *near* the right number by luck
+sometimes, but hitting dead-on eight times running essentially can't happen by
+accident.
+
+The honest limitation, unchanged from last session: these four statements only
+ever use two of the nine transaction codes SBI defines. The parser handles the
+other seven the way the statement's own legend says to, and there are unit tests
+for them, but no real statement has yet exercised them. Four green statements is
+good evidence the common path is right. It is not evidence the rare path is.
+
+### Next steps
+The remaining SBI questions are unchanged and both cross-bank rather than
+SBI-specific: whether per-cardholder attribution is worth a column in
+`storage/`, and whether grey-row detection via pdfplumber's rect objects is
+worth building before a real statement actually fails to reconcile. Neither is
+urgent while every sample on disk reconciles exactly. The natural next piece of
+work is a fourth bank, or surfacing the now-three-bank data in the UI.
