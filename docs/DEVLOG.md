@@ -4612,6 +4612,121 @@ before a statement actually fails to reconcile.
 ## Session 36 — 2026-09-08
 
 ### Goal
+Reconcile `docs/STATE.md` and `docs/PRODUCT_VISION.md`, which had drifted from
+actual project state after Sessions 31–35 shipped without a docs update.
+Documentation only — a factual correction to already-shipped state, not a build
+step.
+
+### What happened
+
+**What was stale, and what it was corrected to** — every replacement sourced
+from this log's own Session 31–35 entries:
+
+- **`STATE.md` "Current state"** claimed "As of Session 30 (153 tests passing)"
+  with the pipeline working "for two banks — HDFC Diners (both layouts) and
+  ICICI Coral". Sessions 32 and 35 added SBI Titan and IndusInd Legend, and
+  Sessions 33 and 35 put every sample of both under committed reconciliation
+  tests. Corrected to Session 35, 239 tests, four banks, with the adapter noted
+  as shared by all four rather than both. A sentence was appended recording that
+  all 18 real sample statements on disk — six HDFC, four ICICI, four SBI, four
+  IndusInd — parse, reconcile against each statement's own summary totals, and
+  are covered by committed integration tests. The 18 figure was counted from the
+  sample directory and cross-checked against the four integration suites' own
+  sample lists rather than tallied from memory.
+
+- **`STATE.md` "Next arc"** still described the Sessions 23–26 "HDFC UI
+  end-to-end" arc as current, and anticipated a move to "a second real bank
+  (ICICI)" that has since happened twice over. Replaced with the actual
+  position: the Tier 1 parser arc (Sessions 27–35) is complete, and the project
+  is in the Expense Categorization & Analytics arc. That arc's scope and module
+  breakdown are deliberately *not* restated here — the vision document owns
+  them, and duplicating them is how this drift started.
+
+- **`PRODUCT_VISION.md` Tier 1** read "Current coverage: HDFC Diners, ICICI
+  Coral. Planned: SBI, IndusInd." Replaced with all four built and reconciling
+  as of Session 35. **Sequencing** steps 1 and 2 are now marked complete, step 2
+  noting the Session 30 generalization was done against two real banks rather
+  than speculatively. Step 3 and the "Open questions" section were left
+  untouched: the tier decision genuinely is still open, and staleness in the
+  status lines says nothing about the questions.
+
+- **The card-type auto-detection line** was reworded rather than removed,
+  because the code behavior it describes is still exactly true: `--card-id` is
+  always required and nothing is inferred from the PDF. What changed is that the
+  original deferral has been reversed on paper — auto-detection is a locked
+  requirement of the current arc's upload module — so the line now states that
+  the reversal is decided but not yet built, and stands until it is.
+
+**Two corrections to the session's own framing, both verified before acting.**
+The auto-detection line was described as living in "Open flags"; it does not —
+it sits under "Locked architectural decisions", and there is no auto-detection
+line in "Open flags" at all. It was edited in place, since that is the only
+place it exists, and the edit is the reword that was asked for rather than a
+reinterpretation of any other locked decision. Separately,
+`PRODUCT_VISION.md`'s status banner was to be left as-is; that banner does not
+exist on this branch, so there was nothing to leave.
+
+**Scope held to `main`'s contents.** The PRD and the expense-analytics vision
+document live on an unmerged feature branch, so the PRD/`.docx` propagation and
+the pointer-by-path into the vision doc were both deferred to that branch. The
+"Next arc" and auto-detection rewrites therefore describe the current arc and
+the auto-detect reversal in prose, without citing a filename this branch does
+not carry — a dangling path would have been a second inaccuracy introduced by a
+session whose whole purpose is removing one.
+
+*Numbering note:* the unmerged feature branch also carries a Session 36 (and a
+37). Both were numbered against their own branch's history; whoever merges the
+two lines will need to renumber one side.
+
+### Outcome
+`docs/STATE.md` and `docs/PRODUCT_VISION.md` now agree with each other and with
+the actual codebase on built status: four banks, 239 tests, 18 reconciling
+sample statements, Tier 1 complete, current arc named correctly, and the
+auto-detection entry accurate about both the code and the decision.
+
+Test suite re-run as a sanity check, not as build verification: **239 passing**,
+unchanged, with no code touched — the diff is three documentation files.
+
+Two things are deliberately *not* fixed here and remain inaccurate.
+`STATE.md`'s "What this is" section still says "only HDFC (Diners card type) is
+actually implemented" and lists SBI, ICICI and IndusInd as future targets; it
+was explicitly out of scope for this session. And the PRD on the feature branch
+still carries the source-currency note describing the staleness this session
+just removed, which will be wrong once that branch merges.
+
+### In plain English
+This project's own status documents had fallen behind what the project actually
+does. Over several recent sessions two more banks were added, bringing the total
+to four, and the number of automated checks grew by more than half — but the
+pages describing the current state were never updated to match. Anyone reading
+them would have been told the work stopped two banks ago.
+
+This session brought them back in line. The status pages now say what is
+genuinely true: four banks supported, every sample statement on file adding up
+correctly against the bank's own printed totals, and the parser work finished
+rather than in progress. The description of what comes next was replaced too —
+it had been describing a stretch of work that finished some time ago.
+
+One line was reworded rather than deleted, which is the interesting case. It
+records that the system cannot yet work out which card a statement belongs to,
+so you have to tell it. That is still exactly how the code behaves, so removing
+the line would have made the documentation wrong in the other direction. But a
+decision has since been taken to change it. The line now says both things: this
+is how it works today, and a decision to change it exists but has not been
+built.
+
+No code was changed and nothing new was built. This was housekeeping — the kind
+that is easy to skip and quietly expensive, because a status document that is
+believed and wrong is worse than one nobody reads.
+
+### Next steps
+None new — this was a correction, not a build step.
+
+---
+
+## Session 37 — 2026-09-08
+
+### Goal
 Decide and document the next arc — expense categorization and analytics — as a
 parallel vision document, scoped in a chat-based planning conversation, ahead of
 the parser-tier (Tier 2/3/4) decision that `docs/PRODUCT_VISION.md` had queued
@@ -4714,7 +4829,7 @@ engine, which is step one of the recorded build sequence.
 
 ---
 
-## Session 37 — 2026-09-08
+## Session 38 — 2026-09-08
 
 ### Goal
 Consolidate all current product vision and requirements documents into a single
@@ -4834,3 +4949,135 @@ the PRD's source-currency note can be removed. STATE.md's "What this is",
 "Current state", "Open flags" (the SBI/ICICI/IndusInd targets) and "Next arc"
 sections, and PRODUCT_VISION.md's Tier 1 coverage line and sequencing list, are
 the specific parts that no longer match the built system.
+
+---
+
+## Session 39 — 2026-09-08
+
+### Goal
+Bring this feature branch up to date with `main`'s documentation reconciliation,
+fix the one inaccuracy that reconciliation didn't reach, and stop tracking the
+generated `docs/PRD.docx` binary. Documentation and tooling only; no application
+code.
+
+### What happened
+
+**The merge, and the conflict it produced.** `git merge main` (local only — no
+remote is configured) conflicted on `docs/DEVLOG.md` alone, because both lines of
+work had independently added a Session 36. `docs/PRODUCT_VISION.md` auto-merged
+cleanly and `docs/STATE.md` fast-forwarded.
+
+The conflict's shape mattered. Git placed the markers *inside* the entry: the
+`## Session 36` header and its `### Goal` line were identical on both sides, so
+they sat outside the conflict region while the two entries' bodies fought over
+the space beneath them. Editing the markers by hand would have produced one
+header followed by two spliced bodies. Instead both parents' versions were
+extracted with `git show` and the file rebuilt from them, which is exact rather
+than approximate. That the merge base is a clean 4,608-line prefix of both sides
+was verified first, so "base + main's entry + this branch's entries" is provably
+the whole content with nothing dropped.
+
+**Renumbering rule applied.** `main`'s Session 36 (the STATE/PRODUCT_VISION
+reconciliation) keeps its number, being already merged and real. This branch's
+Session 36 (expense analytics vision) became **37**, and its Session 37 (PRD
+consolidation) became **38**. Headers were rewritten highest-first so 36→37
+could not collide with the existing 37. The result was checked by
+reconstruction: the resolved file equals base + main's block + this branch's
+block byte-for-byte, and the only lines differing from the original branch
+content are the two headers — four diff lines, two removals and two additions.
+No entry body was touched.
+
+**Two cross-references outside the DEVLOG had to move with the renumbering.**
+`docs/PRODUCT_VISION.md`'s status banner and `docs/EXPENSE_ANALYTICS_VISION.md`'s
+provenance line both cited "Session 36" meaning the vision-doc session. Left
+alone they would not merely be stale — they would point at `main`'s
+reconciliation session, actively misattributing this arc to it. Both now read
+Session 37. This is the same renumbering rule reaching the references it created,
+not a content edit.
+
+**`main`'s corrections verified rather than assumed** (step 3 of the session's
+own scope). `docs/STATE.md` is byte-identical to `main`'s version post-merge, and
+`docs/PRODUCT_VISION.md` is `main`'s corrected Tier 1 coverage and sequencing
+plus this branch's status banner, merged without conflict. Nothing unexpected
+surfaced: this branch had never touched those sections, which is exactly why the
+merge was clean.
+
+**The one inaccuracy the reconciliation didn't reach.** `docs/STATE.md`'s "What
+this is" section was out of scope for the Session 36 reconciliation and still
+said the project "parses monthly PDF credit card statements — HDFC today, with
+SBI, ICICI, IndusInd, and Axis identified as future targets" and that "only HDFC
+(Diners card type) is actually implemented" — contradicting "Current state" two
+paragraphs below. Both paragraphs of that section carried the error (the
+"only HDFC" sentence is the second one), so both were rewritten: four bank/card
+types implemented and reconciling, with Axis retained as a genuinely
+not-yet-started future target rather than dropped. A diff against `main`
+confirms no other section of the file changed.
+
+**`docs/PRD.md` corrections.** The Section 0 source-currency note and the
+Section 11 staleness entry were removed — both described a divergence that no
+longer exists. Section 1 now states the four-bank position; Section 6 notes that
+Tier 1 work is absent from the index because it is complete, citing the corrected
+source documents; Section 7.1's sourcing note no longer claims the DEVLOG
+supersedes STATE.md; and Section 7.2 quotes PRODUCT_VISION.md's corrected Tier 1
+line instead of its stale one. The document is now version 1.1, with a revision
+history row recording the change.
+
+**`docs/PRD.docx` is no longer tracked.** Added to `.gitignore` with a comment
+naming what generates it, then removed from the index with `git rm --cached`,
+which leaves the file on disk. It was regenerated from the corrected
+`docs/PRD.md` and confirmed to carry the changes — the source-currency note
+absent, the four-bank summary present, both real Word tables intact, and the new
+revision row in place. The reasoning is that a 44 KB binary rebuilt from a
+tracked text file is duplicated state: it cannot be diffed, it grows history on
+every regeneration, and it can silently disagree with its own source. The
+markdown is tracked, the script is tracked, and the Word file is now built on
+demand.
+
+### Outcome
+This branch's documentation is consistent with `main` and internally with
+itself: `docs/STATE.md` and `docs/PRODUCT_VISION.md` carry `main`'s corrections,
+`docs/PRD.md` reads from those corrected sources rather than a DEVLOG workaround,
+and the DEVLOG has a single unambiguous session sequence — 36, 37, 38 — with no
+duplicate numbers and no altered entry bodies.
+
+`docs/PRD.docx` is regenerable on demand and no longer accumulates in git
+history.
+
+Test suite re-run as a sanity check, not build verification: **239 passing**,
+unchanged, with no application code touched.
+
+One item was deliberately left as written: `main`'s Session 36 entry contains a
+note observing that the feature branch "also carries a Session 36 (and a 37)"
+and that whoever merges will need to renumber one side. That is now a historical
+record of the situation this session resolved, and the renumbering rule was
+explicit that entry bodies are not to be edited.
+
+### In plain English
+This branch had been running alongside the main line of work for a couple of
+sessions, and in the meantime the main line had corrected several project
+records that had fallen out of date. This session pulled those corrections in.
+
+The two lines of work had each numbered their most recent session identically,
+which is the sort of collision that happens when work happens in parallel. The
+rule applied was simple and decided in advance rather than argued case by case:
+the already-finished side keeps its number, and this branch's two entries shift
+up by one. Nothing inside those entries was reworded — only the numbers on their
+headings, plus two places elsewhere that referred to them by number and would
+otherwise have pointed at the wrong session entirely.
+
+One inaccuracy survived the earlier correction because it sat in a section that
+was out of scope at the time: the opening description of the project still said
+only one bank was supported, while a paragraph further down the same page
+correctly said four. That contradiction is now gone.
+
+The other change is housekeeping with a real point to it. The shareable Word
+version of the requirements document was being stored in version control
+alongside the plain-text version it is generated from. That means the same
+content held twice, in a form that cannot be compared or reviewed, and one that
+grows the project's history every time it is rebuilt. It is now produced on
+demand from the text version instead, so there is one source and no chance of
+the two quietly disagreeing.
+
+### Next steps
+Module 1 of the current arc: the categorization data model plus the suggestion
+engine — the actual build work, now unblocked.

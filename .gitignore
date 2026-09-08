@@ -13,3 +13,6 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ipynb_checkpoints/
+
+# Generated from docs/PRD.md by scripts/generate_prd_docx.py
+docs/PRD.docx

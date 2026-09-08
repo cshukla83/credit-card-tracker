@@ -1,6 +1,6 @@
 # Product Vision — Universal Statement Parser
 
-> **Status:** the Tier 2/3/4 decision below is on hold. Session 36
+> **Status:** the Tier 2/3/4 decision below is on hold. Session 37
 > started a parallel arc — expense categorization and analytics — see
 > `docs/EXPENSE_ANALYTICS_VISION.md`. This document resumes once that
 > arc is done.
@@ -23,8 +23,9 @@ check (parsed totals vs. the statement's own summary box).
 
 ### Tier 1 — Pre-built parsers
 Hand-built, verified regex parsers for known banks. Instant, free,
-offline, highest accuracy. Current coverage: HDFC Diners, ICICI Coral.
-Planned: SBI, IndusInd.
+offline, highest accuracy. All four planned parsers are built and
+reconciling as of Session 35: HDFC Diners (two layouts), ICICI Coral,
+SBI Titan, and IndusInd Legend.
 
 ### Tier 2 — Community-shared configs
 Users who have configured their bank's format (via Tier 3 or Tier 4) can
@@ -65,8 +66,9 @@ no LLM call).
 
 ## Sequencing
 
-1. Finish four known bank parsers (HDFC ✓, ICICI ✓, SBI, IndusInd)
-2. Generalize infrastructure (bank-agnostic dispatch, adapter, CLI)
+1. ✓ Finish four known bank parsers (HDFC ✓, ICICI ✓, SBI ✓, IndusInd ✓)
+2. ✓ Generalize infrastructure (bank-agnostic dispatch, adapter, CLI) —
+   done in Session 30, against two real banks rather than speculatively
 3. Revisit this document and pick the next tier to build
 
 ## Open questions (to be answered when this is revisited)

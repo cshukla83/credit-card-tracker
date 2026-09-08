@@ -1,26 +1,18 @@
 # PRD: Credit Card Statement Tracker
 
 ## 0. Document Control
-Version 1.0 — 08 Sep 2026 — Owner: Chandra — Consolidated from
+Version 1.1 — 08 Sep 2026 — Owner: Chandra — Consolidated from
 STATE.md, PRODUCT_VISION.md, EXPENSE_ANALYTICS_VISION.md, CONVENTIONS.md.
 This document is regenerated whenever any of those source docs change
 materially — it is not maintained independently of them.
 
-**Source-currency note.** Two source documents are behind the DEVLOG at
-the time of writing: STATE.md's "What this is" and "Current state" are
-current only to Session 30 (two banks, 153 tests), and
-PRODUCT_VISION.md's Tier 1 coverage line and sequencing list still show
-SBI and IndusInd as planned. DEVLOG Sessions 31–35 record all four
-parsers complete and reconciling at 239 tests. Where this PRD states the
-built position it follows the DEVLOG; the divergence is flagged again in
-Section 11 and in this session's DEVLOG "Next steps".
-
 ## 1. Executive Summary
 A personal credit card statement tracker, built session by session as a
 deliberate, hands-on vehicle for learning Claude Code. It parses PDF
-credit card statements from multiple Indian banks, stores transactions
-locally, and is being extended with expense categorization and spend
-analytics.
+credit card statements from four Indian bank/card types — HDFC Diners
+(two layouts), ICICI Coral, SBI Titan and IndusInd Legend, all
+implemented and reconciling — stores transactions locally, and is being
+extended with expense categorization and spend analytics.
 
 ## 2. Background
 The project's original intent was not just to store statement data, but
@@ -77,6 +69,10 @@ P0 = the arc currently being built, in its locked build order. P1 = the
 parser-tier roadmap, on hold while P0 is in progress. P2 = named gaps
 with no scheduled arc.
 
+Tier 1 parser work is not listed above because it is complete: all four
+bank parsers are built and reconciling, per STATE.md "Current state" and
+PRODUCT_VISION.md's sequencing steps 1 and 2.
+
 ## 7. Detailed Functional Requirements
 
 ### 7.1 Statement Parsing (built)
@@ -110,10 +106,8 @@ Three command-line tools exist — `create_card`, `import_statement`, and
 `query_transactions` — all following the same shape, each documented with
 a usage docstring plus a README section.
 
-*Sourcing:* the first two paragraphs above adapt STATE.md's "What this
-is" and "Current state"; the four-bank and reconciliation statements
-follow DEVLOG Sessions 31–35, which supersede STATE.md's Session 30
-snapshot. See the Section 0 source-currency note.
+*Sourcing:* adapted from STATE.md's "What this is" and "Current state",
+both current as of Session 35.
 
 ### 7.2 Universal Parser Roadmap (P1)
 The goal: any user can upload any bank's credit card statement and get
@@ -125,9 +119,9 @@ All tiers produce the same output (a `ParsedStatement` conforming to
 check (parsed totals vs. the statement's own summary box).
 
 **Tier 1 — Pre-built parsers.** Hand-built, verified regex parsers for
-known banks. Instant, free, offline, highest accuracy. PRODUCT_VISION.md
-records coverage as "Current coverage: HDFC Diners, ICICI Coral. Planned:
-SBI, IndusInd." — per DEVLOG Sessions 32–35 all four are now complete.
+known banks. Instant, free, offline, highest accuracy. All four planned
+parsers are built and reconciling as of Session 35: HDFC Diners (two
+layouts), ICICI Coral, SBI Titan, and IndusInd Legend.
 
 **Tier 2 — Community-shared configs.** Users who have configured their
 bank's format (via Tier 3 or Tier 4) can export and share their parser
@@ -297,12 +291,10 @@ scoped):
   second, deliberate asymmetry.
 - A `StarletteDeprecationWarning` (`httpx` with `starlette.testclient`)
   surfaced during Session 23's test run — unresolved, low-priority.
-- STATE.md and PRODUCT_VISION.md are both behind the DEVLOG on built
-  status, as described in the Section 0 source-currency note. This is
-  documentation debt, not code debt.
 
 ## 12. Revision History
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 08 Sep 2026 | Initial consolidated PRD |
+| 1.1 | 08 Sep 2026 | Sourced from reconciled STATE.md/PRODUCT_VISION.md; removed source-currency note and staleness entry |
