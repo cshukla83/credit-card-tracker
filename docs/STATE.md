@@ -20,12 +20,13 @@ one, auto-detected from the PDF's own text).
 
 ## Current state
 
-As of Session 30 (153 tests passing, working tree clean), the import
-pipeline works end-to-end against real sample statements for two banks —
-HDFC Diners (both layouts) and ICICI Coral — and is bank-agnostic from
-the CLI down: parsing, an adapter bridging parser output to storage
-(`from_parsed_statement`, shared by both banks), atomic deduped
-writes, a filtered read path, and `GET /transactions`, `GET /cards`,
+As of Session 35 (239 tests passing, working tree clean), the import
+pipeline works end-to-end against real sample statements for four banks —
+HDFC Diners (both layouts), ICICI Coral, SBI Titan, and IndusInd Legend —
+and is bank-agnostic from the CLI down: parsing, an adapter bridging
+parser output to storage (`from_parsed_statement`, shared by all four
+banks), atomic deduped writes, a filtered read path, and
+`GET /transactions`, `GET /cards`,
 `GET /statement-months`, and `GET /card-types` FastAPI endpoints. The
 `statements` table carries a `statement_month` column (e.g. `July-2026`),
 generated from `period_end` rather than typed in. A single-page HTML
@@ -35,6 +36,10 @@ card, bank/card type, statement month, and date range, with filter state
 synced to the URL. Three command-line tools exist — `create_card`,
 `import_statement`, and `query_transactions` — all following the same
 shape, each documented with a usage docstring plus a README section.
+
+All 18 real sample statements on disk — six HDFC, four ICICI, four SBI,
+four IndusInd — parse and reconcile against each statement's own summary
+totals, and every one of them is covered by a committed integration test.
 
 ## Locked architectural decisions
 
@@ -73,8 +78,13 @@ shape, each documented with a usage docstring plus a README section.
   `SELECT transactions.*`, never a bare `*`, to avoid a column-name
   collision on `id`. The same rule applies to `cards`/`statements` JOINs
   (`SELECT DISTINCT cards.*`), for the same reason.
-- Card-type auto-detection from PDF content is explicitly deferred —
-  `--card-id` is always required, never inferred.
+- Card-type auto-detection from PDF content is **not implemented** —
+  `--card-id` is always required, never inferred. This remains an
+  accurate description of current code behavior. The original decision to
+  defer it has since been reversed on paper: auto-detection is a locked
+  requirement of the expense categorization and analytics arc's
+  upload/auto-import module. That reversal is decided but not yet built,
+  and this line stands until it is.
 - Single-user is implicit throughout — no auth, no user table, one local
   SQLite file.
 - `GET /cards` (Session 25) returns only cards with at least one
@@ -152,18 +162,21 @@ shape, each documented with a usage docstring plus a README section.
 
 ## Next arc
 
-The current arc, set on 2026-08-20, is "HDFC UI end-to-end": Session 23
-added the `/transactions` API endpoint, Session 24 added a minimal HTML
-page consuming it (client-side `fetch()`, no server-rendered templating),
-Session 25 added a card picker and date-range filters backed by a new
-`/cards` endpoint, and Session 26 (done) added a `statement_month` field
-plus statement-month and bank/card-type filters, backed by two more
-endpoints (`/statement-months`, `/card-types`). Session 27 onward is
-deliberately left open, to be decided from what these sessions actually
-reveal is needed, not speculated now. Once the HDFC UI ships, the arc
-moves to a second real bank (ICICI) — which is also when the deferred
-password-key and dispatch-routing generalizations above finally happen,
-against two real cases rather than speculatively.
+The Tier 1 parser arc (Sessions 27–35) is complete: all four known bank
+parsers are built, generalized behind one bank-agnostic registry, and
+verified against every real sample statement on disk.
+
+The project is now in the Expense Categorization & Analytics arc —
+labelling transactions and surfacing spend insight on top of the existing
+parse-and-store pipeline. Its scope, module breakdown, build order and
+open questions are held in the expense categorization and analytics
+vision document rather than restated here; that document is the source of
+truth for this arc.
+
+The preceding "HDFC UI end-to-end" arc (Sessions 23–26) and the
+second-bank/generalization work that followed it are both done, and the
+parser-tier roadmap in docs/PRODUCT_VISION.md is deliberately on hold
+while the current arc runs.
 
 ## How this project works
 

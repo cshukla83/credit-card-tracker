@@ -4606,3 +4606,118 @@ cardholder attribution deserves a column in `storage/`, whether the merchant
 category IndusInd provides is worth capturing as a real field rather than folded
 into the description, and whether SBI's grey-row detection is worth building
 before a statement actually fails to reconcile.
+
+---
+
+## Session 36 — 2026-09-08
+
+### Goal
+Reconcile `docs/STATE.md` and `docs/PRODUCT_VISION.md`, which had drifted from
+actual project state after Sessions 31–35 shipped without a docs update.
+Documentation only — a factual correction to already-shipped state, not a build
+step.
+
+### What happened
+
+**What was stale, and what it was corrected to** — every replacement sourced
+from this log's own Session 31–35 entries:
+
+- **`STATE.md` "Current state"** claimed "As of Session 30 (153 tests passing)"
+  with the pipeline working "for two banks — HDFC Diners (both layouts) and
+  ICICI Coral". Sessions 32 and 35 added SBI Titan and IndusInd Legend, and
+  Sessions 33 and 35 put every sample of both under committed reconciliation
+  tests. Corrected to Session 35, 239 tests, four banks, with the adapter noted
+  as shared by all four rather than both. A sentence was appended recording that
+  all 18 real sample statements on disk — six HDFC, four ICICI, four SBI, four
+  IndusInd — parse, reconcile against each statement's own summary totals, and
+  are covered by committed integration tests. The 18 figure was counted from the
+  sample directory and cross-checked against the four integration suites' own
+  sample lists rather than tallied from memory.
+
+- **`STATE.md` "Next arc"** still described the Sessions 23–26 "HDFC UI
+  end-to-end" arc as current, and anticipated a move to "a second real bank
+  (ICICI)" that has since happened twice over. Replaced with the actual
+  position: the Tier 1 parser arc (Sessions 27–35) is complete, and the project
+  is in the Expense Categorization & Analytics arc. That arc's scope and module
+  breakdown are deliberately *not* restated here — the vision document owns
+  them, and duplicating them is how this drift started.
+
+- **`PRODUCT_VISION.md` Tier 1** read "Current coverage: HDFC Diners, ICICI
+  Coral. Planned: SBI, IndusInd." Replaced with all four built and reconciling
+  as of Session 35. **Sequencing** steps 1 and 2 are now marked complete, step 2
+  noting the Session 30 generalization was done against two real banks rather
+  than speculatively. Step 3 and the "Open questions" section were left
+  untouched: the tier decision genuinely is still open, and staleness in the
+  status lines says nothing about the questions.
+
+- **The card-type auto-detection line** was reworded rather than removed,
+  because the code behavior it describes is still exactly true: `--card-id` is
+  always required and nothing is inferred from the PDF. What changed is that the
+  original deferral has been reversed on paper — auto-detection is a locked
+  requirement of the current arc's upload module — so the line now states that
+  the reversal is decided but not yet built, and stands until it is.
+
+**Two corrections to the session's own framing, both verified before acting.**
+The auto-detection line was described as living in "Open flags"; it does not —
+it sits under "Locked architectural decisions", and there is no auto-detection
+line in "Open flags" at all. It was edited in place, since that is the only
+place it exists, and the edit is the reword that was asked for rather than a
+reinterpretation of any other locked decision. Separately,
+`PRODUCT_VISION.md`'s status banner was to be left as-is; that banner does not
+exist on this branch, so there was nothing to leave.
+
+**Scope held to `main`'s contents.** The PRD and the expense-analytics vision
+document live on an unmerged feature branch, so the PRD/`.docx` propagation and
+the pointer-by-path into the vision doc were both deferred to that branch. The
+"Next arc" and auto-detection rewrites therefore describe the current arc and
+the auto-detect reversal in prose, without citing a filename this branch does
+not carry — a dangling path would have been a second inaccuracy introduced by a
+session whose whole purpose is removing one.
+
+*Numbering note:* the unmerged feature branch also carries a Session 36 (and a
+37). Both were numbered against their own branch's history; whoever merges the
+two lines will need to renumber one side.
+
+### Outcome
+`docs/STATE.md` and `docs/PRODUCT_VISION.md` now agree with each other and with
+the actual codebase on built status: four banks, 239 tests, 18 reconciling
+sample statements, Tier 1 complete, current arc named correctly, and the
+auto-detection entry accurate about both the code and the decision.
+
+Test suite re-run as a sanity check, not as build verification: **239 passing**,
+unchanged, with no code touched — the diff is three documentation files.
+
+Two things are deliberately *not* fixed here and remain inaccurate.
+`STATE.md`'s "What this is" section still says "only HDFC (Diners card type) is
+actually implemented" and lists SBI, ICICI and IndusInd as future targets; it
+was explicitly out of scope for this session. And the PRD on the feature branch
+still carries the source-currency note describing the staleness this session
+just removed, which will be wrong once that branch merges.
+
+### In plain English
+This project's own status documents had fallen behind what the project actually
+does. Over several recent sessions two more banks were added, bringing the total
+to four, and the number of automated checks grew by more than half — but the
+pages describing the current state were never updated to match. Anyone reading
+them would have been told the work stopped two banks ago.
+
+This session brought them back in line. The status pages now say what is
+genuinely true: four banks supported, every sample statement on file adding up
+correctly against the bank's own printed totals, and the parser work finished
+rather than in progress. The description of what comes next was replaced too —
+it had been describing a stretch of work that finished some time ago.
+
+One line was reworded rather than deleted, which is the interesting case. It
+records that the system cannot yet work out which card a statement belongs to,
+so you have to tell it. That is still exactly how the code behaves, so removing
+the line would have made the documentation wrong in the other direction. But a
+decision has since been taken to change it. The line now says both things: this
+is how it works today, and a decision to change it exists but has not been
+built.
+
+No code was changed and nothing new was built. This was housekeeping — the kind
+that is easy to skip and quietly expensive, because a status document that is
+believed and wrong is worse than one nobody reads.
+
+### Next steps
+None new — this was a correction, not a build step.
