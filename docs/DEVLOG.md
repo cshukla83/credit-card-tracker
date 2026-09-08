@@ -4606,3 +4606,108 @@ cardholder attribution deserves a column in `storage/`, whether the merchant
 category IndusInd provides is worth capturing as a real field rather than folded
 into the description, and whether SBI's grey-row detection is worth building
 before a statement actually fails to reconcile.
+
+---
+
+## Session 36 — 2026-09-08
+
+### Goal
+Decide and document the next arc — expense categorization and analytics — as a
+parallel vision document, scoped in a chat-based planning conversation, ahead of
+the parser-tier (Tier 2/3/4) decision that `docs/PRODUCT_VISION.md` had queued
+up next. Documentation only; no code.
+
+### What happened
+
+**Created `docs/EXPENSE_ANALYTICS_VISION.md`.** It records the arc as three
+modules — upload with auto-import, categorization, and an analytics dashboard —
+along with the reasoning behind each scoping decision, an explicit build
+sequence, and the questions deliberately left unanswered.
+
+Four decisions in it are worth restating because each one is a choice against an
+obvious alternative:
+
+- **Categories are free text, with no predefined starter list.** The suggestion
+  engine learns from the user's own past categorizations by simple pattern
+  matching, with no AI/LLM call — leaving room to add an AI layer later if
+  accuracy proves insufficient, rather than reaching for one first.
+- **Bulk categorization is in scope from the start**, not deferred as a
+  convenience feature. The reasoning recorded is that without it the
+  "learns over time" benefit doesn't get exercised fast enough to matter, so it
+  is load-bearing for the suggestion engine rather than a nicety on top of it.
+- **Dashboard commentary is LLM-generated, and this is named as a deliberate
+  exception** to the project's usual practice of never letting real financial
+  data leave the machine. The exception is scoped narrowly and in writing: only
+  aggregated category totals (category, amount, period) are sent — never
+  individual transactions, merchant names, or reference numbers.
+- **Module 1 reverses a standing decision.** `docs/STATE.md` records that
+  card-type auto-detection from PDF content is explicitly deferred; the upload
+  module depends on it, so the vision document states the reversal outright and
+  marks it as locked, rather than letting a deferred decision be quietly
+  contradicted by a later module.
+
+**Zero-match and multi-match card resolution at upload time were left open on
+purpose**, and recorded as open rather than guessed at. Module 1 is last in the
+build sequence, so under the project's anti-speculation rule there is nothing to
+be gained by settling its edge cases now. Two further open questions are named
+the same way: where the LLM API key lives (following the existing `.env` secret
+convention) and what should happen when the free-tier rate limit is hit.
+
+**Added a status banner to `docs/PRODUCT_VISION.md`**, immediately below its
+title, marking the Tier 2/3/4 decision as on hold and pointing at the new
+document. The parser-tier arc is paused, not abandoned, and the banner says so
+where anyone opening that document will see it first — rather than leaving two
+vision documents with no indication of which one is live.
+
+**Worked on a feature branch** (`feature/expense-analytics-vision`) rather than
+committing to `main`, per the new git workflow. Every prior session in this log
+committed directly to `main`; this is the first that does not.
+
+### Outcome
+No code changes — no parser, storage, API, test, or frontend file was touched,
+and the test suite is unaffected at **239 passing**. What exists now that did not
+before is a written, locked scope for the next arc: three modules, a four-step
+build sequence putting the categorization data model first and the upload UI
+last, and three named open questions attached to the modules that will answer
+them.
+
+The parser arc is explicitly parked rather than dropped, and both vision
+documents now point at each other, so neither can be read as the current plan
+without seeing the other.
+
+### In plain English
+Up to now this project has been about reading credit card statements: four banks
+can be read and every sample adds up exactly against the bank's own printed
+totals. That's the plumbing. It doesn't yet tell anyone anything about their
+spending.
+
+This session decided what comes next, and wrote it down before building any of
+it. The idea is to label every transaction — groceries, travel, whatever
+categories the person actually wants rather than a fixed list handed to them —
+and then show where the money is going, over whatever period they care about: a
+month, a quarter, a year, or a custom range. The point is not just to see the
+past but to spot where spending could reasonably be cut.
+
+Two choices are worth calling out. The labelling is meant to learn: once
+someone has said what a particular shop counts as, the system should suggest the
+same thing next time, and it should be possible to label everything from one
+shop in a single action rather than one row at a time. That bulk action was
+treated as essential rather than a nice-to-have, because without it the learning
+never gets enough examples to be useful.
+
+The other is a genuine trade-off rather than a free win. The written commentary
+on the dashboard will come from an outside AI service, which breaks this
+project's usual rule that financial data never leaves the machine. That rule is
+being bent knowingly and narrowly: only category totals go out — the fact that
+some amount was spent on groceries in March — never individual purchases, shop
+names, or reference numbers. Writing the limit down now, before anything is
+built, is what makes it a boundary rather than a slope.
+
+A few things were deliberately left undecided, mainly around what happens when
+an uploaded statement doesn't match any card on file, or matches more than one.
+That part of the work comes last, and this project's habit is to not answer
+questions until the answers are actually needed.
+
+### Next steps
+Module 1 of the new arc: the categorization data model plus the suggestion
+engine, which is step one of the recorded build sequence.

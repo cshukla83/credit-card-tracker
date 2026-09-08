@@ -1,5 +1,10 @@
 # Product Vision — Universal Statement Parser
 
+> **Status:** the Tier 2/3/4 decision below is on hold. Session 36
+> started a parallel arc — expense categorization and analytics — see
+> `docs/EXPENSE_ANALYTICS_VISION.md`. This document resumes once that
+> arc is done.
+
 Strategic direction for the credit card statement tracker, captured during
 Session 29–30 planning. To be revisited once the four known bank parsers
 and the infrastructure generalization arc are complete.
