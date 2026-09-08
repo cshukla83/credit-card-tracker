@@ -4711,3 +4711,126 @@ questions until the answers are actually needed.
 ### Next steps
 Module 1 of the new arc: the categorization data model plus the suggestion
 engine, which is step one of the recorded build sequence.
+
+---
+
+## Session 37 — 2026-09-08
+
+### Goal
+Consolidate all current product vision and requirements documents into a single
+prioritized PRD, in both markdown and Word format.
+
+### What happened
+
+**Branching.** Kept working on `feature/expense-analytics-vision` rather than
+cutting a separate `docs/prd-consolidation` branch. The PRD consolidates
+`docs/EXPENSE_ANALYTICS_VISION.md`, which exists only on this branch — a
+separate branch off it would have carried the same commits anyway, while adding
+a second merge to sequence for no isolation benefit. Still not merged to `main`.
+
+**Created `docs/PRD.md`**, consolidating `docs/STATE.md`,
+`docs/PRODUCT_VISION.md`, `docs/EXPENSE_ANALYTICS_VISION.md` and
+`docs/CONVENTIONS.md` into twelve numbered sections: executive summary,
+background, goals, target user, scope, a prioritized requirements index,
+detailed functional requirements per arc, non-functional constraints, data and
+privacy requirements, open questions, known issues, and revision history.
+
+**Two source documents turned out to be stale, and that was surfaced rather than
+smoothed over.** `docs/STATE.md`'s "What this is" and "Current state" are
+current only to Session 30 — they describe one implemented bank ("only HDFC
+(Diners card type) is actually implemented"), two banks working end to end, and
+153 tests. `docs/PRODUCT_VISION.md` still lists Tier 1 coverage as "Current
+coverage: HDFC Diners, ICICI Coral. Planned: SBI, IndusInd." Sessions 31–35
+record all four parsers complete and reconciling at 239 tests.
+
+The instruction for Section 7.1 was to pull verbatim from STATE.md *and* to
+describe four banks — which those two sources cannot both satisfy. Rather than
+quietly picking one, the PRD states the built position from the DEVLOG (the
+authoritative record of what was actually built and verified), carries an
+explicit source-currency note in Section 0, repeats the divergence in
+Section 11 as documentation debt, and marks the sourcing inline at the end of
+Section 7.1. Section 7.2 quotes PRODUCT_VISION.md's stale coverage line
+verbatim as written *and* notes what the DEVLOG records — so the source text is
+preserved rather than silently edited.
+
+No requirement, priority or status was invented to fill a gap. Every row in the
+Section 6 index, every open question in Section 10, and every constraint in
+Section 8 traces to one of the four source documents.
+
+**Added `python-docx` as a dependency** in `requirements.txt`, with a note in
+the README's Setup section stating it is needed only for PRD export and not by
+the app itself, so anyone setting up just to run the tracker can skip it.
+
+**Wrote `scripts/generate_prd_docx.py`**, which renders `docs/PRD.docx` from
+`docs/PRD.md` rather than carrying its own copy of the text. This is the
+significant design decision in the script: the session could have been read as
+"put the same content in two files," but two hand-maintained copies of one
+document drift apart silently, and a Word binary offers no diff in which to
+notice. Parsing the markdown makes the `.md` the single source of truth and the
+`.docx` a build artifact of it.
+
+The script supports only the markdown subset the PRD actually uses — headings,
+paragraphs, bullet and numbered lists, pipe tables, inline bold and code — and
+emits anything else as plain text rather than dropping it. `##` maps to Word's
+Heading 1 and `###` to Heading 2; both pipe tables become real Word tables with
+a bolded header row, not preformatted text. It follows the project's CLI
+convention (`python3 -m scripts.generate_prd_docx`) and exits with an
+install hint if `python-docx` is missing.
+
+**Verified the output structurally rather than assuming it.** Reading
+`docs/PRD.docx` back with `python-docx` confirms one Title, 13 Heading 1s, 3
+Heading 2s, 39 bullet and 4 numbered list items, and two real tables — the
+14-row × 5-column requirements index and the 2-row × 3-column revision history —
+both in the `Table Grid` style with header text bolded.
+
+### Outcome
+A single prioritized requirements document now exists, covering both the active
+build (P0) and the deferred roadmap (P1/P2), available as both a git-diffable
+markdown file and a shareable Word document.
+
+Thirteen requirements are indexed with priority, status and source: four P0
+items in the locked build order of the current arc, four P1 items for the
+parser-tier roadmap, and five P2 items that are named gaps with no scheduled
+arc. Ten open questions are carried across from the two vision documents, each
+marked TBD with no answer proposed.
+
+No application code changed — the only new code is the export script. The suite
+is unaffected at **239 passing**.
+
+### In plain English
+Until now, what this project is planning to build was spread across four
+separate documents: a snapshot of how things currently stand, two forward-looking
+vision papers, and a set of working rules. Anyone wanting the full picture had to
+read all four and hold them in their head at once.
+
+This session pulled them into one document that lists everything planned, in
+priority order, with a status against each item and a note of which source it
+came from. Four items are the work currently underway, four are a longer-term
+plan that is deliberately paused, and five are known gaps that nobody has
+scheduled. Ten questions that genuinely have no answer yet are listed as
+questions rather than guessed at.
+
+That document is produced in two forms: a plain-text version that lives with the
+code and shows up in change history, and a Word version that can be sent to
+someone who has no reason to open the codebase. The Word file is generated from
+the text one rather than written separately, so the two cannot quietly disagree
+with each other — a mistake that would otherwise be very easy to make and very
+hard to spot.
+
+One thing worth flagging came up while writing it. Two of the four source
+documents describe an older state of the project — they were written when half
+the current bank support did not exist yet and were never brought forward. The
+new document goes with the verified build history where they disagree, and says
+plainly in two places that the older documents are behind. Papering over that
+would have made the summary read more smoothly while making it less true.
+
+### Next steps
+Regenerate this PRD whenever `docs/PRODUCT_VISION.md` or
+`docs/EXPENSE_ANALYTICS_VISION.md` changes materially.
+
+Separately, and surfaced by this session rather than planned by it: bring
+`docs/STATE.md` and `docs/PRODUCT_VISION.md` up to date with Sessions 31–35, so
+the PRD's source-currency note can be removed. STATE.md's "What this is",
+"Current state", "Open flags" (the SBI/ICICI/IndusInd targets) and "Next arc"
+sections, and PRODUCT_VISION.md's Tier 1 coverage line and sequencing list, are
+the specific parts that no longer match the built system.

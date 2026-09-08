@@ -1,0 +1,308 @@
+# PRD: Credit Card Statement Tracker
+
+## 0. Document Control
+Version 1.0 — 08 Sep 2026 — Owner: Chandra — Consolidated from
+STATE.md, PRODUCT_VISION.md, EXPENSE_ANALYTICS_VISION.md, CONVENTIONS.md.
+This document is regenerated whenever any of those source docs change
+materially — it is not maintained independently of them.
+
+**Source-currency note.** Two source documents are behind the DEVLOG at
+the time of writing: STATE.md's "What this is" and "Current state" are
+current only to Session 30 (two banks, 153 tests), and
+PRODUCT_VISION.md's Tier 1 coverage line and sequencing list still show
+SBI and IndusInd as planned. DEVLOG Sessions 31–35 record all four
+parsers complete and reconciling at 239 tests. Where this PRD states the
+built position it follows the DEVLOG; the divergence is flagged again in
+Section 11 and in this session's DEVLOG "Next steps".
+
+## 1. Executive Summary
+A personal credit card statement tracker, built session by session as a
+deliberate, hands-on vehicle for learning Claude Code. It parses PDF
+credit card statements from multiple Indian banks, stores transactions
+locally, and is being extended with expense categorization and spend
+analytics.
+
+## 2. Background
+The project's original intent was not just to store statement data, but
+to aggregate spend across cards and understand where money is going, so
+it can be actively managed. Statement parsing and storage were built
+first as the necessary foundation; categorization and analytics are the
+layer that delivers on the original intent.
+
+## 3. Goals
+- Reliable, reconciled parsing across known Indian bank statement
+  formats (HDFC Diners, ICICI Coral, SBI Titan, IndusInd Legend — all
+  four complete and reconciling as of Session 35).
+- A path to support new, previously-unseen bank formats without
+  rearchitecting (the four-tier parser roadmap).
+- Categorized transactions and commented spend insight, filterable by
+  date range, month, quarter, and year.
+- The project itself is a deliberate Claude Code learning vehicle —
+  session discipline (locked scope, DEVLOG entries, single commits) is
+  a project goal, not just process overhead.
+
+## 4. Target User
+Single user (Chandra), personal use. No multi-user support, no
+authentication — explicit design decision, not a gap.
+
+## 5. Scope
+**In scope:** parsing Indian bank credit card statements; expanding
+coverage to new banks via the parser-tier roadmap; expense
+categorization; spend analytics dashboard; drag-and-drop statement
+upload.
+
+**Out of scope (explicit):** multi-user support; budgets or alerts with
+notifications; any external data source (bank APIs, account
+aggregators).
+
+## 6. Prioritized Requirements Index
+
+| Priority | # | Requirement | Status | Source |
+|---|---|---|---|---|
+| P0 | 1 | Categorization data model + suggestion engine | Not started | EXPENSE_ANALYTICS_VISION.md, Module 2 |
+| P0 | 2 | Categorization review/assign screen, incl. bulk-apply | Not started | Module 2 |
+| P0 | 3 | Aggregation endpoint + dashboard (filters + LLM commentary) | Not started | Module 3 |
+| P0 | 4 | Upload UI with bank/card auto-detect | Not started | Module 1 |
+| P1 | 5 | Parser config schema (prerequisite for all remaining tiers) | Not started | PRODUCT_VISION.md |
+| P1 | 6 | Tier 4 — LLM auto-learn parser generation | Not started | PRODUCT_VISION.md |
+| P1 | 7 | Tier 3 — Guided manual config wizard | Not started | PRODUCT_VISION.md |
+| P1 | 8 | Tier 2 — Community-shared configs (depends on 6 or 7) | Not started | PRODUCT_VISION.md |
+| P2 | 9 | HTML page value formatting (dates, amounts) | Open, unscheduled | STATE.md |
+| P2 | 10 | Statements-list API (a card's statements/periods) | Open, unscheduled | STATE.md |
+| P2 | 11 | Frontend automated test coverage | Open, unscheduled | STATE.md |
+| P2 | 12 | Card-identity case-sensitivity cleanup | Open, documented not fixed | STATE.md |
+| P2 | 13 | Pagination for `/transactions` and listing endpoints | Open, no evidence yet needed | STATE.md |
+
+P0 = the arc currently being built, in its locked build order. P1 = the
+parser-tier roadmap, on hold while P0 is in progress. P2 = named gaps
+with no scheduled arc.
+
+## 7. Detailed Functional Requirements
+
+### 7.1 Statement Parsing (built)
+A personal credit card statement tracker, built session by session as a
+deliberate, hands-on vehicle for learning Claude Code. It parses monthly
+PDF credit card statements, persists parsed transactions to a local
+SQLite database, and exposes that data through a queryable API and a web
+dashboard.
+
+Four bank/card-type parsers are implemented and reconciling against real
+sample statements: HDFC Diners (across two known statement layouts, a
+current template and an older "legacy" one, auto-detected from the PDF's
+own text), ICICI Coral, SBI Titan, and IndusInd Legend. Every parser is
+validated by the same reconciliation check — parsed totals against the
+statement's own summary box.
+
+The import pipeline works end-to-end and is bank-agnostic from the CLI
+down: parsing, an adapter bridging parser output to storage
+(`from_parsed_statement`, shared by all banks), atomic deduped writes, a
+filtered read path, and `GET /transactions`, `GET /cards`,
+`GET /statement-months`, and `GET /card-types` FastAPI endpoints. The
+`statements` table carries a `statement_month` column (e.g. `July-2026`),
+generated from `period_end` rather than typed in.
+
+A single-page HTML frontend (`static/index.html`, served at `GET /`)
+consumes all four endpoints via `fetch()`, rendering a transactions table
+filterable by card, bank, card type, statement month, and date range
+(from and to), with filter state synced to the URL.
+
+Three command-line tools exist — `create_card`, `import_statement`, and
+`query_transactions` — all following the same shape, each documented with
+a usage docstring plus a README section.
+
+*Sourcing:* the first two paragraphs above adapt STATE.md's "What this
+is" and "Current state"; the four-bank and reconciliation statements
+follow DEVLOG Sessions 31–35, which supersede STATE.md's Session 30
+snapshot. See the Section 0 source-currency note.
+
+### 7.2 Universal Parser Roadmap (P1)
+The goal: any user can upload any bank's credit card statement and get
+parsed, reconciled transactions — regardless of whether the app has seen
+that bank's format before.
+
+All tiers produce the same output (a `ParsedStatement` conforming to
+`parsers/base.py`'s contract) and are validated by the same reconciliation
+check (parsed totals vs. the statement's own summary box).
+
+**Tier 1 — Pre-built parsers.** Hand-built, verified regex parsers for
+known banks. Instant, free, offline, highest accuracy. PRODUCT_VISION.md
+records coverage as "Current coverage: HDFC Diners, ICICI Coral. Planned:
+SBI, IndusInd." — per DEVLOG Sessions 32–35 all four are now complete.
+
+**Tier 2 — Community-shared configs.** Users who have configured their
+bank's format (via Tier 3 or Tier 4) can export and share their parser
+config. Other users download it and import instantly — no setup needed.
+Configs contain only regex patterns and field positions, never personal
+data.
+
+**Tier 3 — Guided manual config wizard.** A UI wizard that shows the user
+their statement's raw text and walks them through identifying the format:
+which part is the date, which is the amount, how are credits marked,
+where is the summary box. One-time setup per bank format; the app caches
+the config for all future imports. No LLM, no API key, no network
+dependency.
+
+**Tier 4 — LLM auto-learn.** For users with LLM API access. The app sends
+extracted PDF text to an LLM (e.g., Claude API), which returns a
+structured parser config — regex pattern, field positions, classification
+rule, date format, summary extraction hints. The reconciliation check
+validates the config automatically; if totals don't match, the app
+retries or flags for manual review. On success, the config is cached —
+first import is slow (LLM round-trip), every subsequent import is fast
+and free (cached config, no LLM call).
+
+**Why the current architecture supports this:**
+
+- **`ParsedStatement` contract** — the output shape is identical regardless
+  of which tier produced it. Storage, API, and frontend are parser-agnostic.
+- **Reconciliation as a quality gate** — works for hand-built parsers and
+  auto-generated configs equally. A parser that doesn't reconcile is
+  flagged as wrong, regardless of how it was created.
+- **Bank-agnostic infrastructure** — dispatch, adapter, CLI, and API are
+  being generalized (Session 30+) so adding a new bank is "drop in a
+  parser module," not "touch six files."
+- **Hand-built parsers as training data** — the four Tier 1 parsers become
+  few-shot examples for the Tier 4 LLM prompt, and reference
+  implementations for Tier 3's wizard to emulate.
+
+### 7.3 Expense Categorization & Analytics (P0)
+Additive only. Reuses the existing parser pipeline, storage layer, and
+`/transactions` API as-is. Adds a `categories` concept to the data model,
+new endpoints for categorization and aggregation, and new frontend
+screens alongside the existing transaction-list page.
+
+**Module 1 — Upload & Auto-Import.** Drag-and-drop upload that
+auto-detects the bank/card from the PDF and loads it — no manual card
+selection. This reverses the STATE.md decision that card-type
+auto-detection is deferred; that reversal is the locked decision as of
+that document. Zero-match (new card) and multi-match (ambiguous existing
+card) handling are deliberately left open — to be resolved when this
+module is actually scoped, per the project's anti-speculation rule, since
+it's last in the build sequence.
+
+**Module 2 — Categorization.**
+
+- Free-text categories only — no predefined starter list.
+- Suggestion engine: simple pattern-matching learned from the user's own
+  past categorizations. No AI/LLM call for suggestions. Room to add an
+  AI-based layer later if accuracy proves insufficient.
+- Bulk categorization is in scope: applying a category to every
+  transaction from a given merchant in one action, not row by row —
+  without this, the "learns over time" benefit doesn't get exercised
+  fast enough to matter.
+
+**Module 3 — Analytics Dashboard.**
+
+- Spend by category, filterable by custom range, month, quarter, year.
+- Commentary is LLM-generated (e.g. a free-tier cloud API such as
+  Gemini), not rule-based — a deliberate exception to the project's
+  usual practice of never letting real financial data leave the machine.
+  Scoped narrowly: only aggregated category totals (category, amount,
+  period) are sent to the API — never individual transactions, merchant
+  names, or reference numbers.
+
+**Build sequence:**
+
+1. Categorization data model + suggestion engine (backend)
+2. Categorization review/assign screen, including bulk-apply (frontend)
+3. Aggregation endpoint + dashboard with filters and LLM commentary
+4. Upload UI with auto-detect (Module 1)
+
+## 8. Non-Functional / Technical Constraints
+- Single-user, local-file storage. Single-user is implicit throughout —
+  no auth, no user table, one local SQLite file.
+- Multi-row writes (a statement plus all its transactions) go through a
+  single SQL transaction — no partial writes survive a failure.
+- Reconciliation is a mandatory quality gate for every parser tier,
+  including future ones: a parser that doesn't reconcile is flagged as
+  wrong, regardless of how it was created.
+- One parser module per bank + card type, with a dispatch layer routing
+  by card type. Statement-layout detection is a separate, lower-level
+  concern inside the bank module, not part of dispatch — the two axes
+  are kept independent on purpose.
+- Card identity: `nickname` must identify the physical card (e.g.
+  `Primary`), never a statement period — the generated
+  `statement_month` field is the correct place for that. Future imports
+  should attach to the existing card, not create a new one per month.
+- Multiple unnamed cards of the same bank/type are allowed on purpose;
+  SQLite's NULL-distinct behavior for the `(bank, card_type, nickname)`
+  UNIQUE constraint is preserved by design, not fixed.
+- No index on `statements.statement_month` — an explicit decision, not an
+  omission, given a single-user local-file database with a small
+  statement count. Revisit only if that assumption stops holding.
+- The frontend is a thin `fetch()`-based consumer of the API — it never
+  reaches into the database directly, and never exposes anything the
+  endpoints don't already return.
+- Scripts under `scripts/` are run as `python3 -m scripts.<name>` from
+  the project root with the virtual environment active, never invoked
+  directly as a file path.
+
+## 9. Data & Privacy Requirements
+- When working with real financial data — imported bank statements,
+  actual transactions in the database — only counts, reconciliation
+  numbers, and statement period ranges may appear in any documentation
+  surface. This includes DEVLOG entries, learning summaries, Claude Code
+  prompts, README examples, screenshots, and chat transcripts shared for
+  review. Never merchant names, never amounts, never individual
+  transaction dates, never reference numbers, never reward point values.
+- The rationale is that the DEVLOG and learning history are checked into
+  git and may be shared publicly; real credit card statement content
+  should never end up in a public git history — not the statement file
+  itself (already git-ignored), and not fragments of it quoted into
+  documentation either.
+- Exploration output files (`data/exploration_output*.txt`) contain raw
+  extracted text from real bank statements. They are git-ignored and must
+  never be committed, pushed, or shared.
+- **The one named exception:** dashboard commentary (Section 7.3) sends
+  aggregated category-level totals only — category, amount, period — to
+  an external LLM API. Never individual transactions, merchant names, or
+  reference numbers.
+
+## 10. Assumptions & Open Questions
+From PRODUCT_VISION.md (to be answered when that document is revisited):
+
+- Config format: what schema describes a parser config portably (regex
+  patterns, field positions, classification rules, date format)? — TBD
+- Community registry: hosted service, GitHub repo of configs, or
+  in-app sharing? — TBD
+- Tier 3 wizard: what's the minimum viable UX that a non-technical user
+  can complete? — TBD
+- Tier 4 prompt engineering: how many few-shot examples are needed for
+  reliable config generation? — TBD
+- Reconciliation failure handling: retry logic, confidence scoring, or
+  manual review queue? — TBD
+
+From EXPENSE_ANALYTICS_VISION.md (to be answered when each module is
+scoped):
+
+- Module 1: zero-match / multi-match card resolution at upload time —
+  TBD
+- Module 3: Gemini API key storage — follows the existing `.env` secret
+  convention (never in a Claude Code prompt) — TBD
+- Module 3: behavior when the free-tier rate limit is hit — silent skip,
+  cached last commentary, or a visible error state — TBD
+
+## 11. Known Issues / Technical Debt
+- Card identity has two known, unfixed asymmetries: `create_card`'s
+  bank/card_type matching is case-sensitive, but bank dispatch is
+  case-insensitive; and cards with a `NULL` nickname can silently
+  accumulate duplicates, since SQLite treats each `NULL` as distinct.
+- `list_cards()` orders by `created_at`; `list_cards_with_statements()`
+  orders by `id` ASC instead. In practice these agree, since SQLite's
+  `AUTOINCREMENT` id is assigned in insertion order, but it's a real (if
+  inert) divergence between the two functions, not an accident.
+- `list_card_types()` applies the same "only cards with a statement"
+  filter as `list_cards_with_statements()` but lives in a different
+  module and returns bank/card-type pairs rather than full card rows — a
+  second, deliberate asymmetry.
+- A `StarletteDeprecationWarning` (`httpx` with `starlette.testclient`)
+  surfaced during Session 23's test run — unresolved, low-priority.
+- STATE.md and PRODUCT_VISION.md are both behind the DEVLOG on built
+  status, as described in the Section 0 source-currency note. This is
+  documentation debt, not code debt.
+
+## 12. Revision History
+
+| Version | Date | Change |
+|---|---|---|
+| 1.0 | 08 Sep 2026 | Initial consolidated PRD |

@@ -4,3 +4,4 @@ pdfplumber
 python-dotenv
 pytest
 httpx
+python-docx

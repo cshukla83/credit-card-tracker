@@ -35,6 +35,11 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+`python-docx` is included in `requirements.txt` but is not used by the
+app at runtime. It is needed only by `scripts/generate_prd_docx.py`,
+which renders `docs/PRD.docx` from the PRD content. Skip it if you only
+intend to run the tracker.
+
 ## Running the app
 
 ```bash
