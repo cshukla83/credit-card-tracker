@@ -87,6 +87,7 @@ def test_no_filters_returns_all_transactions(client, two_cards):
         "amount",
         "txn_type",
         "reward_points",
+        "category",
     }
 
 
@@ -324,3 +325,90 @@ def test_transactions_new_filters_compose_as_and(client, two_cards):
     assert response.status_code == 200
     descriptions = {t["description"] for t in response.json()}
     assert descriptions == {"CARD A TXN 2", "CARD A TXN 3"}
+
+
+# --- categorization endpoints ---------------------------------------------
+
+
+def _ids(client):
+    return sorted(t["id"] for t in client.get("/transactions").json())
+
+
+def test_suggestion_cold_start_is_200_with_none(client, two_cards):
+    target = _ids(client)[0]
+    response = client.get(f"/transactions/{target}/suggestion")
+    assert response.status_code == 200
+    assert response.json() == {"category": None, "confidence": 0.0, "match_type": "none"}
+
+
+def test_suggestion_unknown_transaction_is_404(client, two_cards):
+    assert client.get("/transactions/9999/suggestion").status_code == 404
+
+
+def test_assign_then_suggest_round_trip(client, two_cards):
+    # The fixture's five descriptions are all distinct, so an exact match
+    # needs one seeded via the API; the rest exercise the fuzzy tier.
+    ids = _ids(client)
+    target, other = ids[0], ids[1]
+    response = client.post(
+        "/transactions/category", json={"transaction_ids": [other], "category": "Food"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"updated": 1, "category": "Food"}
+
+    body = client.get(f"/transactions/{target}/suggestion").json()
+    assert body["category"] == "Food"
+    assert body["match_type"] == "fuzzy"
+    assert 0.0 <= body["confidence"] <= 1.0
+
+    # And the write is visible on the listing endpoint.
+    listed = {t["id"]: t["category"] for t in client.get("/transactions").json()}
+    assert listed[other] == "Food"
+    assert listed[target] is None
+
+
+def test_assign_bulk_overwrites_including_already_categorized(client, two_cards):
+    ids = _ids(client)
+    client.post("/transactions/category", json={"transaction_ids": [ids[0]], "category": "Food"})
+    response = client.post(
+        "/transactions/category", json={"transaction_ids": ids[:3], "category": "Travel"}
+    )
+    assert response.status_code == 200
+    assert response.json()["updated"] == 3
+    listed = {t["id"]: t["category"] for t in client.get("/transactions").json()}
+    assert [listed[i] for i in ids] == ["Travel", "Travel", "Travel", None, None]
+
+
+def test_assign_with_missing_id_is_404_and_writes_nothing(client, two_cards):
+    ids = _ids(client)
+    response = client.post(
+        "/transactions/category",
+        json={"transaction_ids": [ids[0], 9999], "category": "Food"},
+    )
+    assert response.status_code == 404
+    assert "9999" in response.json()["detail"]
+    listed = {t["id"]: t["category"] for t in client.get("/transactions").json()}
+    assert listed[ids[0]] is None
+
+
+def test_assign_strips_category_whitespace(client, two_cards):
+    ids = _ids(client)
+    response = client.post(
+        "/transactions/category", json={"transaction_ids": [ids[0]], "category": "  Food  "}
+    )
+    assert response.status_code == 200
+    assert response.json()["category"] == "Food"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"transaction_ids": [], "category": "Food"},
+        {"transaction_ids": [1], "category": ""},
+        {"transaction_ids": [1], "category": "   "},
+        {"transaction_ids": [1]},
+        {"category": "Food"},
+    ],
+)
+def test_assign_rejects_malformed_payloads(client, two_cards, payload):
+    assert client.post("/transactions/category", json=payload).status_code == 422

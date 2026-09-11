@@ -38,12 +38,20 @@ it is not part of the application model and is never referenced by code.
 ### How the schema is applied
 
 `storage.db.init_db()` runs the three `CREATE TABLE IF NOT EXISTS`
-statements, then `_ensure_statement_month_column()`, which uses
-`PRAGMA table_xinfo(statements)` to check whether `statement_month`
-exists and runs `ALTER TABLE statements ADD COLUMN ...` if not. This is
-the only migration in the codebase. `PRAGMA table_xinfo` (not
-`table_info`) is required because `table_info` omits generated columns —
-see the comment in `storage/db.py` and DEVLOG Session 26.
+statements, then two column migrations of identical shape, each of which
+checks `PRAGMA table_xinfo(<table>)` for the column and runs
+`ALTER TABLE ... ADD COLUMN` only if it is absent:
+
+- `_ensure_statement_month_column()` → `statements.statement_month`
+  (Session 26). `PRAGMA table_xinfo` (not `table_info`) is required here
+  because `table_info` omits generated columns — see the comment in
+  `storage/db.py` and DEVLOG Session 26.
+- `_ensure_category_column()` → `transactions.category` (Session 41).
+  A plain column, so `table_info` would also work; `table_xinfo` is used
+  for consistency.
+
+Both `ALTER TABLE` statements live in `storage/schema.py` next to the
+`CREATE TABLE` they must stay identical to.
 
 Every connection from `storage.db.get_connection()` sets
 `PRAGMA foreign_keys = ON`. This matters: SQLite does not enforce foreign
@@ -169,6 +177,7 @@ One line item from a statement, as extracted by the bank-specific parser.
 | `amount`        | `REAL`        | `NOT NULL`                                                         |
 | `txn_type`      | `TEXT`        | `NOT NULL`                                                         |
 | `reward_points` | `REAL`        | nullable                                                           |
+| `category`      | `TEXT`        | nullable — `NULL` means uncategorized                              |
 
 **Table constraints**
 
@@ -222,6 +231,19 @@ One line item from a statement, as extracted by the bank-specific parser.
   line). Sign is meaningful: the HDFC parser emits negative values for
   points reversals.
 
+- **`category`** (Session 41) is the user-assigned, free-text spend
+  category. `NULL` is the only representation of "uncategorized" — the
+  code never writes an empty string (`storage.categories.assign_category()`
+  rejects one, and the API strips whitespace and rejects the result if
+  empty). There is no `CHECK` constraint and no categories table: the set
+  of categories is simply the distinct non-null values in this column.
+  Import never sets it; only the assign endpoint does. The suggestion
+  engine (`storage.categories.suggest_category()`) reads it globally
+  across all cards, excluding the transaction being suggested for.
+  **No assignment timestamp is recorded**, so "most recently assigned"
+  is not knowable; the engine's tie-break uses highest `id` (most
+  recently *imported*) as a documented proxy.
+
 ---
 
 ## Foreign key relationships
@@ -262,7 +284,7 @@ separate index. (`AUTOINCREMENT` only affects id reuse; it does not add an
 index.)
 
 **`transactions` has no index of any kind** — not on `statement_id`, not
-on `txn_date`, not on `description`.
+on `txn_date`, not on `description`, not on `category`.
 
 **Omissions:**
 
@@ -321,6 +343,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     amount REAL NOT NULL,
     txn_type TEXT NOT NULL,
     reward_points REAL,
+    category TEXT,
     FOREIGN KEY(statement_id) REFERENCES statements(id) ON DELETE CASCADE
 );
 ```

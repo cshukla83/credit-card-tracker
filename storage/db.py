@@ -5,6 +5,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from storage.schema import (
+    ADD_CATEGORY_COLUMN,
     ADD_STATEMENT_MONTH_COLUMN,
     CREATE_CARDS_TABLE,
     CREATE_STATEMENTS_TABLE,
@@ -48,6 +49,7 @@ def init_db() -> None:
         conn.execute(CREATE_STATEMENTS_TABLE)
         conn.execute(CREATE_TRANSACTIONS_TABLE)
         _ensure_statement_month_column(conn)
+        _ensure_category_column(conn)
         conn.commit()
     finally:
         conn.close()
@@ -68,3 +70,15 @@ def _ensure_statement_month_column(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_xinfo(statements)")}
     if "statement_month" not in columns:
         conn.execute(ADD_STATEMENT_MONTH_COLUMN)
+
+
+def _ensure_category_column(conn: sqlite3.Connection) -> None:
+    # Same idiom as _ensure_statement_month_column: CREATE TABLE IF NOT EXISTS
+    # never touches a pre-existing table, so a DB from before this column
+    # needs an explicit ALTER. table_xinfo is used for consistency with the
+    # check above (table_info would also work here -- category is a plain
+    # column, not a generated one -- but one idiom for both keeps them
+    # comparable).
+    columns = {row["name"] for row in conn.execute("PRAGMA table_xinfo(transactions)")}
+    if "category" not in columns:
+        conn.execute(ADD_CATEGORY_COLUMN)

@@ -5204,3 +5204,143 @@ engine — now has an accurate, verified picture of the tables it will extend.
 The unindexed `transactions.statement_id` and `txn_date` columns are a
 recorded-but-undecided item; whether they need an index is a question for
 whenever data volume makes it one, not before.
+
+## Session 41 — 2026-09-11
+
+### Goal
+Build the categorization data model and suggestion engine — Module 2's
+backend, step 1 of the PRD build sequence: the `category` column and its
+migration, a two-tier suggestion engine, and the two API endpoints. No
+frontend.
+
+### What happened
+
+**Schema.** `transactions.category TEXT`, nullable, added to
+`CREATE_TRANSACTIONS_TABLE` and as a new `ADD_CATEGORY_COLUMN` `ALTER TABLE` in
+`storage/schema.py`. `storage/db.py` gains `_ensure_category_column()`, a copy
+of the `statement_month` idiom: `PRAGMA table_xinfo(transactions)`, `ALTER` only
+if absent, so `init_db()` stays idempotent on fresh and pre-existing databases
+alike. `NULL` is the only representation of "uncategorized"; nothing in the
+codebase writes an empty string. `docs/DATA_MODEL.md` was updated in the same
+commit — the migration section, the `transactions` table, the index note, and
+the SQL reference — as that document says it must be.
+
+**A consequence of `SELECT transactions.*`.** `get_transactions()` selects
+every column, so the new one appears in `GET /transactions` responses with no
+code change. One existing test (`test_no_filters_returns_all_transactions`)
+asserts the exact key set of a row and had to gain `"category"`. That is the
+response shape genuinely changing, not a test being bent to pass.
+
+**The engine** lives in `storage/categories.py`.
+
+- One query fetches every categorized transaction *except the target*
+  (`category IS NOT NULL AND id != ?`, ordered `id DESC`), and both tiers run
+  over that list in Python. Comparing in Python rather than SQL was a
+  deliberate choice: SQLite's `LOWER()` and `NOCASE` are ASCII-only while
+  `str.casefold()` is Unicode-aware, and Tier 2 has to be Python anyway — so
+  there is one definition of "case-insensitive" rather than two that could
+  disagree.
+- **Tier 1 (exact):** `casefold()` equality on `description`, nothing else
+  normalised — trailing whitespace and digit differences are *not* collapsed,
+  by decision, and a test pins that. Most frequent category among the matches
+  wins. **Confidence is that category's share of the exact matches**, not a
+  flat 1.0: unanimous agreement reports 1.0, a 2-vs-1 split reports 0.67, a
+  1-vs-1 split reports 0.5. The prompt left this open; a share is chosen
+  because it makes a contested exact match visibly weaker than an
+  uncontested one, which a flat 1.0 would hide.
+- **Tier 2 (fuzzy):** `difflib.SequenceMatcher(None, a, b).ratio()` of the
+  casefolded target against every casefolded candidate; single best wins;
+  ratio is the confidence; **no floor**, so a 0.0-ratio match is still
+  returned as a fuzzy suggestion with confidence 0.0 — pinned by a test.
+  Casefolding both sides in this tier was a judgment call the prompt did not
+  specify: since Tier 1 already treats case as irrelevant, letting a case
+  difference depress a fuzzy score would be inconsistent.
+- **Cold start:** `{"category": null, "confidence": 0.0, "match_type": "none"}`.
+- **Tie-break — a deviation from the prompt, flagged before building.** The
+  prompt asked for ties (Tier 1 equal counts, Tier 2 equal ratios) to break
+  by "most recently assigned". The schema records no assignment time — the
+  only column added is `category` — so that is not computable. Rather than
+  silently widen the schema, the engine uses **highest transaction id** (most
+  recently *imported*) as a proxy. It falls out of the query ordering:
+  candidates arrive `id DESC`, `Counter.most_common()` preserves first-seen
+  order among equal counts, and `max()` returns the first maximal element.
+  The proxy is named as such in the code, in `DATA_MODEL.md`, and in a test
+  that flips the assignments to prove the tie follows the id, not the
+  category name. If real recency is wanted, a `category_assigned_at` column
+  is the fix, and it belongs to its own decision.
+
+**`assign_category()`** is one `UPDATE ... WHERE id IN (...)` inside a
+`with conn:` block, preceded — inside the same block — by an existence check
+on every id. If any id is missing, `TransactionNotFoundError` carries the
+missing ids and nothing is written: the Session 17 invariant, applied to
+updates. Duplicate ids in the input are collapsed and count once. It never
+consults the suggestion engine.
+
+**Endpoints** in `main.py`:
+
+- `GET /transactions/{id}/suggestion` → the engine's dict; 404 for an unknown
+  id. Unlike the `/transactions` filters (where an unknown value is a 200 +
+  empty list), an unknown id here is a real 404 — the "exists but nothing to
+  suggest" case is distinguishable and is a 200 with `match_type: "none"`.
+- `POST /transactions/category` with `{"transaction_ids": [...], "category":
+  "..."}` → `{"updated": n, "category": "..."}`. One endpoint for one or many;
+  a single id is a list of length 1. Pydantic enforces `min_length=1` on the
+  list; a validator strips `category` and rejects empty/whitespace-only with
+  422, so `" Food"` and `"Food"` cannot become distinct categories and an
+  empty string can never reach the column. Any missing id → 404 naming the
+  missing ids, nothing written.
+
+**Tests.** 28 new, in `tests/test_categories.py` (migration on fresh and
+hand-built legacy DBs including double `init_db()`; assign single/bulk/
+overwrite/duplicate/missing/empty; engine cold start, unknown id,
+case-insensitivity, no-other-normalisation, self-exclusion, majority with
+share confidence, tie-break by id in both directions, fuzzy best-match,
+no-floor, cross-card globality) and `tests/test_api.py` (cold start, 404,
+assign-then-suggest round trip, bulk overwrite, atomic 404, whitespace strip,
+five malformed payloads → 422). Full suite: **267 passing** (239 + 28), one
+pre-existing warning.
+
+**A numbering note.** Sessions 39 and 40's "Next steps" called this work
+"Module 1 of the current arc". The PRD is unambiguous that categorization is
+**Module 2** (Module 1 is upload/auto-import); "step 1" refers to the build
+sequence, not the module. Entry bodies are not edited retroactively; this
+line is the correction.
+
+No database file was opened, no server started, no live requests made.
+
+### Outcome
+A transaction can now carry a category, and the API can suggest one from the
+user's own prior assignments and write one to any number of transactions
+atomically. `init_db()` migrates a pre-Session-41 database in place and is safe
+to call repeatedly. `docs/DATA_MODEL.md` describes the schema as it now is.
+
+Verified by the test suite only, per the session's constraints: 267 passing,
+every pre-existing test unchanged except the one key-set assertion that the
+new column legitimately extends.
+
+### In plain English
+Each transaction can now be labelled with a spending category, and the system
+can suggest a label for an unlabelled transaction by looking at what the user
+has labelled before. It looks for an identical merchant description first
+(ignoring capitalisation); if it finds several past labels for that merchant
+it picks the commonest and says how strongly they agreed. If nothing is
+identical, it finds the most similar description it has ever seen labelled and
+offers that, along with a similarity score — even a weak one, so the user
+always gets a starting point once they've labelled anything at all.
+
+Labels can be applied to one transaction or many in a single request, and a
+request either applies to all of them or to none — it can't half-succeed. One
+thing the original specification asked for couldn't be delivered exactly:
+breaking ties by which label was applied most recently, because the database
+doesn't record when a label was applied. The closest available stand-in — the
+most recently imported transaction — is used instead, and that substitution is
+written down everywhere it matters so nobody mistakes it for the real thing.
+
+### Next steps
+Step 2 of the build sequence: the categorization review/assign screen, which
+is the first real consumer of both endpoints. A batch/multi-transaction
+suggestion endpoint may be worth adding once that screen reveals whether
+fetching suggestions one at a time is actually a performance problem — not
+built now; there is no evidence yet that it is needed. Separately, if
+tie-breaking by true assignment recency ever matters, that is a
+`category_assigned_at` column and its own decision.

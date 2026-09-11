@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS transactions (
     amount REAL NOT NULL,
     txn_type TEXT NOT NULL,
     reward_points REAL,
+    category TEXT,
     FOREIGN KEY(statement_id) REFERENCES statements(id) ON DELETE CASCADE
 )
+"""
+
+# NULL means "uncategorized" -- never an empty string. Kept identical to the
+# CREATE TABLE definition above for the same reason as statement_month: a
+# fresh DB and a migrated one must never diverge.
+ADD_CATEGORY_COLUMN = """
+ALTER TABLE transactions
+ADD COLUMN category TEXT
 """

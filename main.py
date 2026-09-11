@@ -2,8 +2,10 @@ from datetime import date
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, field_validator
 
 from storage.cards import list_cards_with_statements
+from storage.categories import TransactionNotFoundError, assign_category, suggest_category
 from storage.db import get_connection, init_db
 from storage.reads import get_transactions, list_card_types, list_statement_months
 
@@ -87,3 +89,43 @@ def read_statement_months(conn=Depends(get_db)):
 @app.get("/card-types")
 def read_card_types(conn=Depends(get_db)):
     return list_card_types(conn)
+
+
+@app.get("/transactions/{transaction_id}/suggestion")
+def read_category_suggestion(transaction_id: int, conn=Depends(get_db)):
+    # Unlike the /transactions filters, an unknown id here is a real 404:
+    # there is no "exists but has nothing to suggest" ambiguity -- that case
+    # is a 200 with match_type "none".
+    try:
+        return suggest_category(conn, transaction_id)
+    except TransactionNotFoundError:
+        raise HTTPException(status_code=404, detail=f"No such transaction: {transaction_id}")
+
+
+class CategoryAssignment(BaseModel):
+    transaction_ids: list[int] = Field(min_length=1)
+    category: str
+
+    @field_validator("category")
+    @classmethod
+    def _strip_and_require_nonempty(cls, value: str) -> str:
+        # NULL is the only representation of "uncategorized", so an empty or
+        # whitespace-only category is rejected rather than stored. Stripping
+        # also keeps " Food" and "Food" from becoming two distinct categories.
+        value = value.strip()
+        if not value:
+            raise ValueError("category must not be empty")
+        return value
+
+
+@app.post("/transactions/category")
+def write_category(body: CategoryAssignment, conn=Depends(get_db)):
+    # One endpoint for one-or-many: a single id is just a list of length 1.
+    # This is a direct write -- it never consults the suggestion engine.
+    try:
+        updated = assign_category(conn, body.transaction_ids, body.category)
+    except TransactionNotFoundError as e:
+        # All-or-nothing: if any id is unknown nothing was written, so the
+        # whole request is a 404 naming the ids that were missing.
+        raise HTTPException(status_code=404, detail=f"No such transaction(s): {e.missing_ids}")
+    return {"updated": updated, "category": body.category}
