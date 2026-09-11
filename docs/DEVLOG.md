@@ -5081,3 +5081,126 @@ the two quietly disagreeing.
 ### Next steps
 Module 1 of the current arc: the categorization data model plus the suggestion
 engine — the actual build work, now unblocked.
+
+## Session 40 — 2026-09-11
+
+### Goal
+Document the database data model as it actually exists in code, in a new
+`docs/DATA_MODEL.md`. Read-only: no table, model, or migration changes, nothing
+related to the upcoming categorization column, and no connection to
+`data/tracker.db`.
+
+### What happened
+
+**Ground truth located.** The schema lives entirely in `storage/schema.py`
+(three `CREATE TABLE IF NOT EXISTS` statements, the shared
+`STATEMENT_MONTH_EXPRESSION`, and the single `ALTER TABLE` migration) and is
+applied by `storage/db.py`. A grep across the codebase for `CREATE TABLE`,
+`CREATE INDEX`, `ALTER TABLE` and `PRAGMA` found no other definitions — the
+only other `CREATE TABLE` text is the pre-Session-26 legacy fixture inside
+`tests/test_storage.py`, which exists to test the migration and is not a
+schema source. The prompt was explicit that STATE.md and PRD.md were not to be
+used as sources because they had drifted before (Session 36), so neither was
+consulted for column facts; they were consulted only to find the pointers the
+document was asked to cite.
+
+**Verified empirically, not just read.** Rather than transcribing the SQL, a
+throwaway in-memory SQLite database was built from `storage/schema.py`'s own
+constants and introspected with `PRAGMA table_xinfo`, `index_list`,
+`index_info`, and `foreign_key_list`. No real database was opened. This
+caught two things the prompt's wording ("document every index that exists")
+would have got wrong if answered from the code alone:
+
+1. **There are indexes.** The codebase has no `CREATE INDEX` anywhere, but
+   SQLite auto-creates one per `UNIQUE` table constraint:
+   `sqlite_autoindex_cards_1` on `(bank, card_type, nickname)` and
+   `sqlite_autoindex_statements_1` on `(card_id, period_start, period_end)`.
+   "No explicit index" and "no index" are different claims; the document
+   makes both, correctly.
+2. **`transactions` has no index at all**, including on its FK column
+   `statement_id` — the column every `ON DELETE CASCADE` from `statements`
+   and every JOIN in `storage/reads.py` walks — and on `txn_date`, the sort
+   and range-filter key of every `get_transactions()` query. STATE.md and
+   the DEVLOG record only the `statement_month` omission (Session 26) as a
+   deliberate decision. The FK and date omissions have no recorded decision,
+   so the document labels them *observed, not decided* rather than inventing
+   a rationale. Also confirmed: `statements.card_id` is the leading column of
+   the statements auto-index, so it is effectively covered.
+
+A third check corrected a draft sentence: SQLite *does* permit `NOT NULL` on a
+generated column (verified with a one-line repro); the schema simply doesn't
+declare one on `statement_month`. The document now says that rather than
+claiming it's impossible.
+
+**The merchant-text question answered with a trace, not an assumption.** The
+document states that `transactions.description` is the merchant/payee column,
+there is no separate normalised column, and the value is the raw regex capture
+from the PDF text layer with only `.strip()` applied. That was established by
+following the field end to end: every one of the five parsers does
+`match.group("desc").strip()`; `parsers/base.Transaction.description` is the
+contract field; `storage/adapters._FIELD_MAP` maps `description` to
+`description` with no transform; `storage/writes.insert_statement()` binds it
+directly. Two parser-specific capture behaviours were noted because they
+change what "raw" means in practice: ICICI captures the reference number as its
+own regex group and discards it (never appended to the description), and
+IndusInd keeps only the fragment on the dated line when a description wraps.
+The HDFC parser upper-cases a *copy* to classify debit/credit but stores the
+original.
+
+**Design decisions cited, not re-explained.** Per the prompt, the NULL-nickname
+behaviour, the storage/dispatch case-sensitivity asymmetry, the
+nickname-identifies-the-card convention, the VIRTUAL-vs-STORED choice, the
+`table_xinfo` idempotency check, and the deliberate `statement_month` index
+omission each get one line and a pointer to STATE.md and/or the DEVLOG session
+that owns them.
+
+**Facts the schema does not enforce, made explicit.** `txn_type` is
+`"debit"`/`"credit"` by convention only — no `CHECK` constraint. `bank` and
+`card_type` accept any text; the set of parseable banks is the `_BANKS`
+registry in `scripts/import_statement.py`, not the schema (a draft had said
+`main.py`; grep corrected it). `reward_points` is declared `REAL` although
+every parser emits `int`. FK enforcement and cascades depend on
+`PRAGMA foreign_keys = ON`, which only `storage.db.get_connection()` sets.
+
+**Data-handling rule observed.** No merchant names, amounts, dates, or reward
+values appear in the document; the one example given for `statement_month` is
+the pattern `<MonthName>-<YYYY>`, not a value from any statement.
+
+### Outcome
+`docs/DATA_MODEL.md` exists and describes: all three application tables (plus
+the internal `sqlite_sequence` table's existence), every column with declared
+type and constraints, both foreign keys with cardinality and `ON DELETE` /
+`ON UPDATE` behaviour, both auto-generated indexes with their column order,
+every unindexed column that a query path touches (with a clear split between
+the one deliberate omission and the ones with no recorded decision), the
+answer to the merchant-text question, and a verbatim copy of the `CREATE
+TABLE` SQL for reference.
+
+Nothing under `storage/`, `parsers/`, `scripts/`, `main.py`, or `tests/` was
+modified. No database file was opened. The test suite was not run — no code
+changed, so there is nothing for it to verify.
+
+### In plain English
+The project's records about how the database is laid out had gone stale once
+before, so this session wrote a fresh description straight from the code that
+actually creates the tables, and then double-checked it by building a scratch
+copy of that database in memory and asking the database engine itself what it
+had made. That check mattered: it showed there are two indexes the code never
+asks for (the engine adds them to enforce uniqueness rules), and that the
+transactions table has none at all — something no earlier record had noticed
+or decided on, so the new document says so plainly rather than pretending it
+was intentional.
+
+The document also settles a question that matters for what comes next: which
+column holds the merchant name, and whether anything cleans it up. The answer
+is that one column holds it, and nothing cleans it — it is exactly what the
+statement PDF said, with only surrounding spaces trimmed. Any future work that
+wants to group spending by merchant will have to do that cleaning itself,
+knowing that the same shop can be spelled several ways across statements.
+
+### Next steps
+Module 1 of the current arc — the categorization data model and suggestion
+engine — now has an accurate, verified picture of the tables it will extend.
+The unindexed `transactions.statement_id` and `txn_date` columns are a
+recorded-but-undecided item; whether they need an index is a question for
+whenever data volume makes it one, not before.
