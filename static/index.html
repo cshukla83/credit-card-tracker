@@ -4,124 +4,327 @@
 <meta charset="UTF-8">
 <title>Transactions</title>
 <style>
-  body {
-    font-family: sans-serif;
-    margin: 2rem;
+  :root {
+    --page: #f6f6f4;
+    --surface: #ffffff;
+    --ink: #1f2328;
+    --muted: #636c76;
+    --rule: #e4e6ea;
+    --rule-strong: #d0d4da;
+    --accent: #0f6b6b;
+    --accent-ink: #0b5252;
+    --accent-wash: #e7f3f2;
+    --accent-wash-strong: #d2e8e6;
+    --edit-wash: #fff6dc;
+    --edit-line: #b8860b;
+    --hover: #f2f3f5;
+    --credit: #1a7f4b;
+    --danger: #b3261e;
+    --shadow: 0 1px 2px rgba(31, 35, 40, 0.06), 0 4px 14px rgba(31, 35, 40, 0.05);
+    --shadow-pop: 0 6px 22px rgba(31, 35, 40, 0.14), 0 1px 3px rgba(31, 35, 40, 0.1);
+    --radius: 10px;
+    --radius-sm: 6px;
+    --focus: 0 0 0 3px rgba(15, 107, 107, 0.28);
   }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+    color: var(--ink);
+    background: var(--page);
+    margin: 0;
+    padding: 2rem 2.5rem 4rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1 {
+    font-size: 1.45rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 0 0 1.25rem;
+  }
+
+  button, input, select {
+    font: inherit;
+    color: inherit;
+  }
+  button:focus-visible, input:focus-visible, select:focus-visible {
+    outline: none;
+    box-shadow: var(--focus);
+  }
+
+  /* --- tabs ----------------------------------------------------------- */
   #tabs {
     display: flex;
     gap: 0.25rem;
-    border-bottom: 1px solid #ccc;
+    border-bottom: 1px solid var(--rule-strong);
     margin-bottom: 1.5rem;
   }
   #tabs button {
     background: none;
-    border: 1px solid transparent;
-    border-bottom: none;
-    padding: 0.5rem 1rem;
-    font: inherit;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 0.6rem 0.9rem;
+    color: var(--muted);
     cursor: pointer;
-    color: #555;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    transition: color 120ms ease, background 120ms ease;
+  }
+  #tabs button:hover {
+    color: var(--ink);
+    background: rgba(31, 35, 40, 0.04);
   }
   #tabs button.active {
-    border-color: #ccc;
-    background: #fff;
-    color: #111;
-    font-weight: bold;
-    margin-bottom: -1px;
+    color: var(--accent-ink);
+    border-bottom-color: var(--accent);
+    font-weight: 600;
   }
+
+  /* --- filters -------------------------------------------------------- */
   #filters {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1.1rem 1.25rem 0.35rem;
     margin-bottom: 1.5rem;
   }
   .filter-row {
     display: flex;
-    gap: 1.5rem;
+    flex-wrap: wrap;
+    gap: 1.25rem 1.75rem;
     align-items: flex-end;
-    margin-bottom: 1rem;
+    margin-bottom: 0.9rem;
   }
   .filter-row label {
     display: flex;
     flex-direction: column;
-    font-size: 0.85rem;
-    gap: 0.25rem;
+    gap: 0.35rem;
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+  .filter-row select,
+  .filter-row input[type="date"] {
+    min-width: 12rem;
+    padding: 0.42rem 0.6rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 0.92rem;
+  }
+  .filter-row select:hover,
+  .filter-row input[type="date"]:hover {
+    border-color: #b6bcc4;
   }
   .filter-row label.inline {
     flex-direction: row;
     align-items: center;
-    gap: 0.4rem;
-    padding-bottom: 0.3rem;
-  }
-  table {
-    border-collapse: collapse;
-    width: 100%;
-  }
-  th, td {
-    text-align: left;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid #ccc;
-    vertical-align: top;
-  }
-  th {
-    background-color: #eee;
-    font-weight: bold;
-  }
-  #status, #review-status {
-    margin-bottom: 1rem;
-  }
-  .error {
-    color: #a00;
-    margin-bottom: 1rem;
-  }
-  button.small, .selection-bar button {
-    font: inherit;
-    font-size: 0.85rem;
-    padding: 0.15rem 0.5rem;
+    gap: 0.5rem;
+    color: var(--ink);
+    font-size: 0.9rem;
+    padding-bottom: 0.45rem;
     cursor: pointer;
   }
-  button.link {
+  input[type="checkbox"] {
+    width: 1rem;
+    height: 1rem;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  /* --- status / messages --------------------------------------------- */
+  #status, #review-status {
+    color: var(--muted);
+    font-size: 0.92rem;
+    margin-bottom: 0.9rem;
+  }
+  .error {
+    color: var(--danger);
+    background: #fdf0ef;
+    border: 1px solid #f3c9c5;
+    border-radius: var(--radius-sm);
+    padding: 0.6rem 0.9rem;
+    font-size: 0.92rem;
+    margin-bottom: 1rem;
+  }
+  .nothing-left {
+    background: var(--surface);
+    border: 1px dashed var(--rule-strong);
+    border-radius: var(--radius);
+    padding: 1.25rem 1.5rem;
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+
+  /* --- tables --------------------------------------------------------- */
+  table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    /* No overflow:hidden here -- it would clip the "change" dropdown, which
+       is positioned inside a cell. The corners are rounded per-cell below. */
+  }
+  thead th:first-child { border-top-left-radius: var(--radius); }
+  thead th:last-child { border-top-right-radius: var(--radius); }
+  tbody tr:last-child td:first-child { border-bottom-left-radius: var(--radius); }
+  tbody tr:last-child td:last-child { border-bottom-right-radius: var(--radius); }
+  th, td {
+    text-align: left;
+    padding: 0.7rem 0.9rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: middle;
+  }
+  th {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--muted);
+    background: #fafafb;
+    letter-spacing: 0.01em;
+  }
+  tbody tr:last-child td {
+    border-bottom: none;
+  }
+  /* Full-row hover: paint every cell, and keep the row's own state colours
+     (selected / editing) on top of it. */
+  tbody tr:hover td {
+    background: var(--hover);
+  }
+  tbody tr.group:hover td {
+    background: #eef0f2;
+  }
+  tr.selected td,
+  tbody tr.selected:hover td {
+    background: var(--accent-wash);
+  }
+  tr.editing td,
+  tbody tr.editing:hover td {
+    background: var(--edit-wash);
+  }
+
+  th.num, td.num {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  th.amount, td.amount {
+    text-align: right;
+  }
+  td.amount.credit {
+    color: var(--credit);
+  }
+  th.type, td.type {
+    width: 6rem;
+  }
+  .pill {
+    display: inline-block;
+    font-size: 0.74rem;
+    font-weight: 600;
+    line-height: 1;
+    padding: 0.28rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  .pill.debit {
+    color: var(--muted);
+    background: #f0f1f3;
+    border-color: #e2e4e8;
+  }
+  .pill.credit {
+    color: var(--credit);
+    background: #e8f5ee;
+    border-color: #cfe9d9;
+  }
+  #review-table th.select, td.select {
+    width: 2.5rem;
+    padding-right: 0;
+  }
+
+  /* --- buttons -------------------------------------------------------- */
+  button.small, .selection-bar button {
+    font-size: 0.82rem;
+    font-weight: 500;
+    padding: 0.3rem 0.7rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  button.small:hover:not(:disabled), .selection-bar button:hover:not(:disabled) {
+    background: var(--accent-wash);
+    border-color: var(--accent);
+    color: var(--accent-ink);
+  }
+  button.small:disabled, .selection-bar button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  button.link, .selection-bar button.link {
     background: none;
     border: none;
     padding: 0;
-    color: #1a56b8;
+    color: var(--accent);
     text-decoration: underline;
+    text-underline-offset: 2px;
     cursor: pointer;
-    font: inherit;
     font-size: 0.85rem;
   }
+  button.link:hover, .selection-bar button.link:hover {
+    color: var(--accent-ink);
+    background: none;
+  }
 
-  /* Review & assign */
+  /* --- Review & assign: selection bar ---------------------------------- */
   .selection-bar {
     display: flex;
     flex-wrap: wrap;
-    gap: 1rem;
+    gap: 0.9rem 1.1rem;
     align-items: center;
-    background: #eef4ff;
-    border: 1px solid #b8cbee;
-    padding: 0.6rem 0.9rem;
+    background: var(--accent-wash);
+    border: 1px solid var(--accent-wash-strong);
+    border-radius: var(--radius);
+    padding: 0.7rem 1rem;
     margin-bottom: 1rem;
+    color: var(--accent-ink);
   }
   .selection-bar .label {
-    font-weight: bold;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
   .typeahead {
     position: relative;
   }
   .typeahead input {
-    font: inherit;
-    padding: 0.2rem 0.4rem;
-    min-width: 16rem;
+    min-width: 17rem;
+    padding: 0.38rem 0.65rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font-size: 0.92rem;
   }
   .menu {
     position: absolute;
-    top: 100%;
+    top: calc(100% + 4px);
     left: 0;
     z-index: 10;
-    background: #fff;
-    border: 1px solid #999;
     min-width: 100%;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
     max-height: 16rem;
     overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-pop);
+    padding: 0.25rem 0;
+    color: var(--ink);
   }
   .menu button {
     display: block;
@@ -129,98 +332,142 @@
     text-align: left;
     background: none;
     border: none;
-    padding: 0.35rem 0.6rem;
-    font: inherit;
+    border-radius: 0;
+    padding: 0.42rem 0.8rem;
+    font-size: 0.92rem;
+    font-weight: 400;
     cursor: pointer;
     white-space: nowrap;
   }
   .menu button:hover, .menu button:focus {
-    background: #eef4ff;
+    background: var(--accent-wash);
+    color: var(--accent-ink);
     outline: none;
+    box-shadow: none;
   }
   .menu button.create {
-    color: #1a56b8;
+    color: var(--accent);
+    font-weight: 500;
   }
   .menu .empty {
-    padding: 0.35rem 0.6rem;
-    color: #777;
+    padding: 0.42rem 0.8rem;
+    color: var(--muted);
     font-size: 0.85rem;
   }
+
+  /* --- Review & assign: group header ----------------------------------- */
   tr.group td {
-    background: #f6f6f6;
-    border-top: 2px solid #ccc;
-    padding-top: 0.6rem;
-    padding-bottom: 0.6rem;
+    background: #f4f5f7;
+    border-top: 1px solid var(--rule-strong);
+    border-bottom: 1px solid var(--rule);
+    padding: 0.55rem 0.9rem;
+  }
+  tbody tr:first-child.group td {
+    border-top: none;
   }
   .group-head {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.7rem;
     flex-wrap: wrap;
   }
+  .group-head .toggle {
+    width: 1.6rem;
+    height: 1.6rem;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    cursor: pointer;
+    position: relative;
+    flex: none;
+  }
+  .group-head .toggle::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0.45rem;
+    height: 0.45rem;
+    border-right: 2px solid var(--muted);
+    border-bottom: 2px solid var(--muted);
+    transform: translate(-50%, -65%) rotate(45deg);
+    transition: transform 140ms ease;
+  }
+  tr.group.collapsed .toggle::before {
+    transform: translate(-65%, -50%) rotate(-45deg);
+  }
+  .group-head .toggle:hover {
+    background: rgba(31, 35, 40, 0.06);
+  }
   .group-head .title {
-    font-weight: bold;
+    font-weight: 600;
   }
   .group-head .meta {
-    color: #555;
+    color: var(--muted);
     font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
   }
   .group-head .spacer {
     flex: 1;
   }
-  tr.selected td {
-    background: #eef4ff;
-  }
-  tr.editing td {
-    background: #fff8dc;
-  }
+
+  /* --- Review & assign: category cell ---------------------------------- */
   td.category-cell {
     position: relative;
     white-space: nowrap;
-    min-width: 18rem;
+    min-width: 20rem;
   }
   td.category-cell .sug {
-    font-weight: bold;
+    font-weight: 600;
   }
   td.category-cell .conf {
-    font-size: 0.85rem;
-    margin-left: 0.4rem;
+    font-size: 0.8rem;
+    margin-left: 0.45rem;
+    font-variant-numeric: tabular-nums;
   }
-  td.category-cell .conf.high { color: #1f7a3d; }
-  td.category-cell .conf.mid  { color: #8a5a00; }
-  td.category-cell .conf.low  { color: #777; }
+  td.category-cell .conf.high { color: var(--credit); }
+  td.category-cell .conf.mid  { color: #9a6700; }
+  td.category-cell .conf.low  { color: var(--muted); }
   td.category-cell .needs {
-    color: #8a5a00;
+    color: #9a6700;
     font-size: 0.85rem;
   }
   td.category-cell .actions {
     display: inline-flex;
-    gap: 0.35rem;
-    margin-left: 0.6rem;
+    gap: 0.4rem;
+    margin-left: 0.7rem;
+    vertical-align: middle;
   }
+
+  /* --- Review & assign: "change" dropdown ------------------------------ */
   .editor {
     position: absolute;
-    top: 100%;
-    right: 0.75rem;
+    top: calc(100% - 4px);
+    right: 0.9rem;
     z-index: 10;
-    background: #fff;
-    border: 1px solid #8a5a00;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
-    min-width: 16rem;
-    font-size: 0.9rem;
+    min-width: 17rem;
+    background: var(--surface);
+    border: 1px solid var(--edit-line);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-pop);
+    font-size: 0.92rem;
     white-space: normal;
+    overflow: hidden;
   }
   .editor .spread {
     display: flex;
-    gap: 0.4rem;
+    gap: 0.5rem;
     align-items: center;
-    padding: 0.4rem 0.6rem;
-    border-bottom: 1px solid #ddd;
+    padding: 0.55rem 0.8rem;
+    border-bottom: 1px solid var(--rule);
+    background: var(--edit-wash);
     font-size: 0.85rem;
+    cursor: pointer;
   }
   .editor .list {
     max-height: 14rem;
     overflow-y: auto;
+    padding: 0.25rem 0;
   }
   .editor .list button, .editor .add-new {
     display: block;
@@ -228,38 +475,45 @@
     text-align: left;
     background: none;
     border: none;
-    padding: 0.35rem 0.6rem;
-    font: inherit;
+    padding: 0.42rem 0.8rem;
     cursor: pointer;
   }
-  .editor .list button:hover, .editor .list button:focus, .editor .add-new:hover {
-    background: #fff8dc;
+  .editor .list button:hover, .editor .list button:focus {
+    background: var(--edit-wash);
     outline: none;
+    box-shadow: none;
   }
   .editor .add-new {
-    border-top: 1px solid #ddd;
-    color: #1a56b8;
+    border-top: 1px solid var(--rule);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .editor .add-new:hover {
+    background: var(--accent-wash);
   }
   .editor .new-input {
-    padding: 0.4rem 0.6rem;
+    padding: 0.6rem 0.8rem 0.3rem;
   }
   .editor .new-input input {
-    font: inherit;
     width: 100%;
-    box-sizing: border-box;
-    padding: 0.2rem 0.4rem;
+    padding: 0.38rem 0.6rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-sm);
   }
   .editor .hint {
-    padding: 0.3rem 0.6rem 0.5rem;
-    color: #777;
-    font-size: 0.8rem;
+    padding: 0.3rem 0.8rem 0.6rem;
+    color: var(--muted);
+    font-size: 0.78rem;
   }
-  .nothing-left {
-    padding: 1rem 0;
-    color: #555;
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
   }
-  #review-table th.select, td.select {
-    width: 1.5rem;
+  @media (max-width: 720px) {
+    body { padding: 1.25rem 1rem 3rem; }
+    .filter-row select, .filter-row input[type="date"] { min-width: 100%; }
+    .filter-row label { flex: 1 1 100%; }
+    td.category-cell { min-width: 0; white-space: normal; }
   }
 </style>
 </head>
@@ -314,10 +568,10 @@
     <table id="transactions-table" style="display: none;">
       <thead>
         <tr>
-          <th>date</th>
-          <th>amount</th>
-          <th>type</th>
+          <th class="num">date</th>
           <th>description</th>
+          <th class="type">type</th>
+          <th class="num amount">amount</th>
         </tr>
       </thead>
       <tbody id="transactions-body"></tbody>
@@ -334,9 +588,10 @@
       <thead>
         <tr>
           <th class="select"></th>
-          <th>date</th>
+          <th class="num">date</th>
           <th>description</th>
-          <th>amount</th>
+          <th class="type">type</th>
+          <th class="num amount">amount</th>
           <th>category</th>
         </tr>
       </thead>
@@ -460,8 +715,25 @@
       return "/transactions" + (query ? "?" + query : "");
     }
 
+    // The stored txn_type is lowercase ("debit"/"credit"); it's shown
+    // capitalised, as a small pill, in both tables.
+    function displayType(txnType) {
+      const t = String(txnType || "");
+      return t.charAt(0).toUpperCase() + t.slice(1);
+    }
+
+    function typeCell(txn) {
+      const cell = document.createElement("td");
+      cell.className = "type";
+      const pill = document.createElement("span");
+      pill.className = "pill " + txn.txn_type;
+      pill.textContent = displayType(txn.txn_type);
+      cell.appendChild(pill);
+      return cell;
+    }
+
     // ------------------------------------------------------------------
-    // Tab: All transactions (unchanged behaviour)
+    // Tab: All transactions
     // ------------------------------------------------------------------
     function renderTransactions(transactions) {
       bodyEl.textContent = "";
@@ -476,20 +748,20 @@
         const row = document.createElement("tr");
 
         const dateCell = document.createElement("td");
+        dateCell.className = "num";
         dateCell.textContent = txn.txn_date;
         row.appendChild(dateCell);
-
-        const amountCell = document.createElement("td");
-        amountCell.textContent = txn.amount;
-        row.appendChild(amountCell);
-
-        const typeCell = document.createElement("td");
-        typeCell.textContent = txn.txn_type;
-        row.appendChild(typeCell);
 
         const descriptionCell = document.createElement("td");
         descriptionCell.textContent = txn.description;
         row.appendChild(descriptionCell);
+
+        row.appendChild(typeCell(txn));
+
+        const amountCell = document.createElement("td");
+        amountCell.className = "num amount " + txn.txn_type;
+        amountCell.textContent = txn.amount;
+        row.appendChild(amountCell);
 
         bodyEl.appendChild(row);
       }
@@ -529,6 +801,7 @@
       query: "",              // selection-bar typeahead text
       editing: null,          // {id, groupIds, spread, adding} while a row's "change" is open
       busy: false,            // an assign call is in flight
+      collapsed: new Set(),   // group titles collapsed this page session (in-memory only)
     };
 
     function isOpen(txn) {
@@ -743,6 +1016,10 @@
 
       for (const group of groups) {
         reviewBodyEl.appendChild(renderGroupHeader(group));
+        // Collapsed groups keep their header (and its checkbox/accept-all);
+        // only the rows are withheld. Keyed by title, which is the group's
+        // identity across re-renders.
+        if (review.collapsed.has(group.title)) continue;
         for (const txn of group.txns) {
           reviewBodyEl.appendChild(renderRow(txn, group));
         }
@@ -869,11 +1146,24 @@
     // --- group header --------------------------------------------------
     function renderGroupHeader(group) {
       const tr = document.createElement("tr");
-      tr.className = "group";
+      const isCollapsed = review.collapsed.has(group.title);
+      tr.className = "group" + (isCollapsed ? " collapsed" : "");
       const td = document.createElement("td");
-      td.colSpan = 5;
+      td.colSpan = 6;
       const head = document.createElement("div");
       head.className = "group-head";
+
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "toggle";
+      toggle.setAttribute("aria-expanded", String(!isCollapsed));
+      toggle.setAttribute("aria-label", (isCollapsed ? "Expand " : "Collapse ") + group.title);
+      toggle.addEventListener("click", () => {
+        if (isCollapsed) review.collapsed.delete(group.title);
+        else review.collapsed.add(group.title);
+        renderReview();
+      });
+      head.appendChild(toggle);
 
       const allIn = group.ids.every((id) => review.selected.has(id));
       const someIn = !allIn && group.ids.some((id) => review.selected.has(id));
@@ -942,6 +1232,7 @@
       tr.appendChild(selectCell);
 
       const dateCell = document.createElement("td");
+      dateCell.className = "num";
       dateCell.textContent = txn.txn_date;
       tr.appendChild(dateCell);
 
@@ -949,7 +1240,10 @@
       descCell.textContent = txn.description;
       tr.appendChild(descCell);
 
+      tr.appendChild(typeCell(txn));
+
       const amountCell = document.createElement("td");
+      amountCell.className = "num amount " + txn.txn_type;
       amountCell.textContent = fmtAmount(txn.amount);
       tr.appendChild(amountCell);
 

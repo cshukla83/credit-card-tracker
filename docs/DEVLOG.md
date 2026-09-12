@@ -5631,3 +5631,113 @@ the Review & assign screen can be walked by hand. Counts only:
   first import — it predated Session 41.
 
 No code changed.
+
+## Session 44 — 2026-09-12
+
+### Goal
+Visual and interaction polish on the static frontend only: show debit/credit
+on every row, make Review & assign groups collapsible, highlight whole rows
+on hover, and refresh the look — system font stack, comfortable spacing,
+subtle borders and shadows — without changing any schema, endpoint, or
+backend logic, and without adding a framework or CDN dependency.
+
+### What happened
+
+**Debit/credit.** `txn_type` is stored lowercase; both tables now show it
+capitalised ("Debit"/"Credit") as a small pill via one shared `typeCell()`
+helper, so the two tables cannot drift. The All-transactions columns were
+reordered to date / description / type / amount so both tables read the
+same way, and credit amounts are tinted green in the amount column as a
+second, quieter cue. The `category` and `select` columns are unchanged.
+
+**Collapsible groups.** Each group header gains a chevron toggle
+(`button.toggle`, with `aria-expanded` and a per-group `aria-label`). State
+is `review.collapsed`, a `Set` of group titles held in memory — a title is a
+group's identity across re-renders, and nothing goes to the URL or storage
+because the brief asked for page-session persistence only. A collapsed group
+keeps its header, checkbox, meta, and "accept all" — only the rows are
+withheld — so bulk actions still work on a folded group. Default is
+expanded, matching prior behaviour. The header row's `colSpan` moved from 5
+to 6 for the new type column.
+
+**Full-row hover.** `tbody tr:hover td` paints every cell of the hovered row;
+the row-state colours (selected wash, editing wash) are declared with the
+`:hover` variant alongside them so a selected or editing row keeps its own
+colour under the cursor rather than flipping to grey. Group header rows get
+a slightly darker hover of their own.
+
+**Visual refresh — the plan and its checks.** The brief pinned the font
+(system stack) and the register (subtle, less dense), so the design choices
+were made on the free axes:
+
+- *Numbers are the hero.* This is a ledger; the one deliberate typographic
+  move is `font-variant-numeric: tabular-nums` on dates, amounts, group
+  meta, and the selection total, with amounts right-aligned, so columns of
+  figures line up and can be scanned. Everything else is set quietly.
+- *One accent.* A deep teal (`#0f6b6b`) replaces the mockup's default blue
+  for tabs, actions, selection, and the typeahead — chosen because it is
+  not the reflexive "link blue" and sits well beside the amber editing wash
+  the mockup established. Confidence colours and the credit green stay in
+  the same family.
+- *Surfaces, not flat blocks.* The filter bar and each table sit on white
+  surfaces with a 10px radius and a soft two-layer shadow; controls and
+  dropdowns use 6px, so radius encodes hierarchy rather than being one value
+  everywhere. Rules are a light grey rather than the previous `#ccc`.
+- *Density.* Body 15px, cell padding 0.7rem/0.9rem, filters 1.25rem apart.
+- *Defaults deliberately avoided:* no all-caps eyebrows, no monospace data
+  labels, no gradients, no cream/terracotta palette. The `·`-joined status
+  and meta strings are kept — they are copy specified from the mockup in
+  Session 43, and this session was scoped to styling.
+
+CSS variables carry the palette, radii, shadows, and focus ring. Focus is
+visible on every control (`:focus-visible`), `prefers-reduced-motion`
+disables the two small transitions (tab hover, chevron rotate), and a
+narrow-viewport rule stacks the filters and lets the category cell wrap.
+
+**A clipping bug caught before commit.** The first draft rounded table
+corners with `overflow: hidden` on the table. The "change" dropdown is
+absolutely positioned inside a cell, so on the last rows it would have been
+clipped at the table's bottom edge. Corners are now rounded on the corner
+cells themselves and the table has no overflow rule; the comment in the CSS
+says why, so it doesn't get "tidied" back.
+
+**Verification.** Every class the JS assigns was cross-checked against the
+stylesheet by script (no misses). The script block was parsed with the
+system JavaScriptCore as in Session 43. A scratchpad copy of the page with
+`fetch` stubbed to *fabricated* rows was prepared for a screenshot pass, but
+the browser extension was not connected in this session, so **no visual
+check was made** — the look described above is what the CSS specifies, not
+what has been seen rendered. No server started, no live request made, no
+frontend test suite invented. The backend suite is untouched by this change.
+
+### Outcome
+Both tables show Debit/Credit per row; review groups fold and unfold in
+place with their bulk controls still reachable; rows highlight edge to edge
+on hover; and the page has a coherent, lighter visual system built on CSS
+variables. All ids and JS-bound classes are unchanged, and the one structural
+change (a sixth column) is reflected in the header `colSpan`. Rendering is
+unverified by eye this session.
+
+### In plain English
+Every transaction now shows whether it was a payment out or money in, in
+both views, so the two are never confused at a glance. On the review screen,
+each suggestion group can be folded away once it's dealt with — the heading,
+its checkbox, and its accept-all button stay put, so a folded group can still
+be acted on in bulk. Moving the mouse over any row lights up the whole row,
+not just the cell under the pointer.
+
+The look was refreshed as well: a cleaner typeface, more breathing room,
+soft edges and shadows instead of hard grey lines, and one consistent
+accent colour for anything clickable. The one considered typographic
+decision was to make numbers line up in tidy columns, since scanning
+amounts is most of what the screen is for. A mistake was caught before it
+shipped: the first version of the rounded table corners would have cut off
+the category dropdown on the bottom rows. What was not possible this time
+was actually looking at the result in a browser, so the next thing to do is
+open it and check.
+
+### Next steps
+Open the app and check the refresh by eye at desktop and narrow widths:
+pills, hover, collapse chevrons, the dropdown clearing the table edge, and
+focus rings. Then continue the manual walk of the Review & assign flow
+against the seeded data from the data note above.
