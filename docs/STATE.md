@@ -294,6 +294,30 @@ system font stack.
   by tests. Nothing outside this repository consumes them, so no
   versioning was added; if a second consumer ever appears, that is the
   moment to stop reshaping in place.
+- **Review & assign inline editing.** The category, subcategory, and
+  merchant editors on the Review & assign screen rely on several buttons
+  per row — accept, a change dropdown, spread-to-group inside it, add-new
+  — plus the sticky multi-select bar's bulk actions, and the result has
+  been flagged as too cluttered. A future session should scope an
+  inline-edit interaction (for example, click-to-edit on the cell) to
+  replace or reduce that button surface. Not yet scoped, and not to be
+  guessed at here: how inline editing would coexist with the suggestion
+  badges, with the multi-select bar, and with the card-payment cascade
+  (Session 62), all of which currently depend on the button-based
+  interaction. Recorded so it isn't lost; nothing decided.
+- **Table header not sticky.** The column header row (date, description,
+  type, and so on) on both the Review & assign and All transactions
+  tables scrolls out of view, whereas the multi-select bar (made sticky
+  in Session 58) stays put. A future session should make the header
+  sticky using the same pattern, with attention to z-index layering
+  against the multi-select bar — and against the group headers that
+  already park beneath it — when all are visible at once. Recorded, not
+  designed.
+- **No "collapse all" for groups.** Groups on Review & assign are
+  individually collapsible in both grouping modes (collapsing added in
+  Session 44; per-group defaults in Session 52) but there is no bulk
+  toggle. A future session should add a "collapse all" / "expand all"
+  control. Recorded, not designed.
 
 ## Next arc
 

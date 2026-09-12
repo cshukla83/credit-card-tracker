@@ -7464,3 +7464,57 @@ seeing it run.
 ### Next steps
 The Module 3 aggregation endpoint, excluding `is_payment` rows from spend
 totals.
+
+## Session 64 — 2026-09-12
+
+### Goal
+Documentation only: record three deferred UI/UX backlog items in
+STATE.md's Open flags so they are not lost before each gets its own
+scoping conversation. Nothing designed, estimated, or built.
+
+### What happened
+
+Branch confirmed first (`git branch --show-current` →
+`feature/analytics-dashboard`), per the Session 60 commitment; the docs
+commit lands there.
+
+Three bullets were added to the end of STATE.md's Open flags, in that
+section's existing style — bold lead-in, the observed problem in plain
+words, and an explicit "recorded, not decided":
+
+1. *Review & assign inline editing* — the per-row button surface (accept,
+   change dropdown, spread-to-group, add-new) plus the bar's bulk actions
+   flagged as cluttered; a click-to-edit interaction to be scoped later;
+   the open questions (coexistence with suggestion badges, the multi-select
+   bar, and the card-payment cascade) named but not answered.
+2. *Table header not sticky* — on both tables, in contrast to the sticky
+   multi-select bar; to be done with the same pattern, minding z-index
+   against the bar and the group headers that park beneath it.
+3. *No "collapse all" for groups* — groups fold individually in both
+   modes; a bulk toggle to be added later.
+
+**One attribution corrected against the record.** The brief credited the
+sticky multi-select bar to Session 44. Session 44 made groups collapsible
+(and did the visual refresh); the bar became sticky in Session 58. The
+STATE.md bullets cite 58 for the sticky bar and 44 (plus 52 for per-group
+defaults) for collapsing, so a future scoping conversation lands on the
+right entries.
+
+No code changed; no test run — nothing moved that a test could verify.
+
+### Outcome
+STATE.md's Open flags section now lists three backlog items; nothing else
+changed; no test run necessary since no code moved.
+
+### In plain English
+Three things noticed while using the review screen were written into the
+project's list of known open items so they aren't forgotten: the row
+editors have too many buttons and want a simpler click-to-edit approach;
+the table's column headings scroll away while the action bar stays; and
+there's no single control to fold or unfold every group at once. Each is
+recorded just clearly enough to be picked up properly later — none has
+been designed or decided.
+
+### Next steps
+Unchanged from Session 63: the Module 3 aggregation endpoint. The three
+items above wait for their own scoping conversations.
