@@ -12,9 +12,11 @@ transaction, and surface where money is going and where it can be curbed
 ## Relationship to the existing system
 
 Additive only. Reuses the existing parser pipeline, storage layer, and
-`/transactions` API as-is. Adds a `categories` concept to the data model,
-new endpoints for categorization and aggregation, and new frontend
-screens alongside the existing transaction-list page.
+`/transactions` API as-is. Adds label columns to the data model (as
+built: `category`, `subcategory`, `merchant` on `transactions` — no
+separate categories table), new endpoints for categorization and
+aggregation, and new frontend screens alongside the existing
+transaction-list page.
 
 ## Modules
 
@@ -28,14 +30,45 @@ resolved when this module is actually scoped, per the project's
 anti-speculation rule, since it's last in the build sequence.
 
 ### Module 2 — Categorization
-- Free-text categories only — no predefined starter list.
+Built in Sessions 41–58 (build-sequence steps 1 and 2); the bullets below
+describe what was built, with the original intent noted where it changed.
+
+- Free-text categories only — no predefined starter list. The catalogs
+  the UI offers are simply the distinct values already in use.
 - Suggestion engine: simple pattern-matching learned from the user's own
-  past categorizations. No AI/LLM call for suggestions. Room to add an
-  AI-based layer later if accuracy proves insufficient.
-- Bulk categorization is in scope: applying a category to every
-  transaction from a given merchant in one action, not row by row —
-  without this, the "learns over time" benefit doesn't get exercised
-  fast enough to matter.
+  past categorizations — an exact description match first, then the most
+  similar description — global across all cards. No AI/LLM call for
+  suggestions. Room to add an AI-based layer later if accuracy proves
+  insufficient.
+- Bulk categorization is in scope, and was built as **manual multi-select
+  of arbitrary transactions** (any category state, across group
+  boundaries) with two kinds of bulk action: *typed bulk-assign* (one
+  value to every selected row) and *per-field bulk-accept* — "accept
+  category suggestions" and "accept merchant suggestions" as separate
+  actions, each applying every selected row's own displayed suggestion
+  for that one field. Group-level "accept all" covers the common
+  same-suggestion case. The original idea — "apply a category to every
+  transaction from a given merchant in one action" — was dropped as the
+  mechanism, because the raw, unnormalized description text is the only
+  merchant identity the statements provide, and it is not a reliable
+  grouping key on its own (case, suffixes, reference numbers vary within
+  one merchant). Grouping by *suggested* category and by *description
+  similarity* (below) fills that role instead.
+- **Grew beyond original scope: three labels, not one.** `subcategory`
+  and `merchant` are distinct fields alongside `category`, each nullable,
+  each with its own suggestion logic shaped to its meaning — subcategory
+  suggests only from rows with the same category and an identical
+  description, falling back to the category name; merchant reuses
+  category's exact-then-similar matching and falls back to the raw
+  description when nothing has been learned. Fallbacks are labelled in
+  words, never as a confidence percentage.
+- **Grew beyond original scope: two grouping modes on the review
+  screen.** *Group by suggested category* (the default) clusters rows by
+  what the engine proposes; *group by similarity* clusters rows whose
+  descriptions resemble each other above a user-set percentage,
+  regardless of category state, so look-alike transactions can be handled
+  together even before any suggestion exists. Rows below the threshold
+  are not shown in that mode, with a count making that explicit.
 
 ### Module 3 — Analytics Dashboard
 - Spend by category, filterable by custom range, month, quarter, year.
@@ -55,8 +88,12 @@ anti-speculation rule, since it's last in the build sequence.
 
 ## Build sequence
 
-1. Categorization data model + suggestion engine (backend)
-2. Categorization review/assign screen, including bulk-apply (frontend)
+1. ~~Categorization data model + suggestion engine (backend)~~ —
+   **complete** (Sessions 41–42, extended in 49–50, 53, 55).
+2. ~~Categorization review/assign screen, including bulk-apply
+   (frontend)~~ — **complete** (Sessions 43–48, 51–52, 54, 56–58);
+   API-tested, awaiting the manual browser walk recorded in STATE.md's
+   open flags.
 3. Aggregation endpoint + dashboard with filters and LLM commentary
 4. Upload UI with auto-detect (Module 1)
 

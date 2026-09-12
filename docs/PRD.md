@@ -1,18 +1,22 @@
 # PRD: Credit Card Statement Tracker
 
 ## 0. Document Control
-Version 1.1 — 08 Sep 2026 — Owner: Chandra — Consolidated from
+Version 1.2 — 12 Sep 2026 — Owner: Chandra — Consolidated from
 STATE.md, PRODUCT_VISION.md, EXPENSE_ANALYTICS_VISION.md, CONVENTIONS.md.
-This document is regenerated whenever any of those source docs change
-materially — it is not maintained independently of them.
+This document is re-consolidated by hand whenever any of those source
+docs change materially — it is not maintained independently of them.
+(`scripts/generate_prd_docx.py` renders this file to Word; it does not
+generate this file.)
 
 ## 1. Executive Summary
 A personal credit card statement tracker, built session by session as a
 deliberate, hands-on vehicle for learning Claude Code. It parses PDF
 credit card statements from four Indian bank/card types — HDFC Diners
 (two layouts), ICICI Coral, SBI Titan and IndusInd Legend, all
-implemented and reconciling — stores transactions locally, and is being
-extended with expense categorization and spend analytics.
+implemented and reconciling — stores transactions locally, lets the user
+label each one with a category, subcategory and merchant through a
+review screen with learned suggestions (built), and is being extended
+with spend analytics (next).
 
 ## 2. Background
 The project's original intent was not just to store statement data, but
@@ -51,8 +55,8 @@ aggregators).
 
 | Priority | # | Requirement | Status | Source |
 |---|---|---|---|---|
-| P0 | 1 | Categorization data model + suggestion engine | Not started | EXPENSE_ANALYTICS_VISION.md, Module 2 |
-| P0 | 2 | Categorization review/assign screen, incl. bulk-apply | Not started | Module 2 |
+| P0 | 1 | Categorization data model + suggestion engines (category, subcategory, merchant) | **Built** (Sessions 41–55) | EXPENSE_ANALYTICS_VISION.md, Module 2 |
+| P0 | 2 | Categorization review/assign screen, incl. multi-select bulk actions and two grouping modes | **Built, awaiting manual browser verification** (Sessions 43–58) | Module 2 |
 | P0 | 3 | Aggregation endpoint + dashboard (filters + LLM commentary) | Not started | Module 3 |
 | P0 | 4 | Upload UI with bank/card auto-detect | Not started | Module 1 |
 | P1 | 5 | Parser config schema (prerequisite for all remaining tiers) | Not started | PRODUCT_VISION.md |
@@ -65,9 +69,9 @@ aggregators).
 | P2 | 12 | Card-identity case-sensitivity cleanup | Open, documented not fixed | STATE.md |
 | P2 | 13 | Pagination for `/transactions` and listing endpoints | Open, no evidence yet needed | STATE.md |
 
-P0 = the arc currently being built, in its locked build order. P1 = the
-parser-tier roadmap, on hold while P0 is in progress. P2 = named gaps
-with no scheduled arc.
+P0 = the arc currently being built, in its locked build order (items 1
+and 2 are built; 3 is next). P1 = the parser-tier roadmap, on hold while
+P0 is in progress. P2 = named gaps with no scheduled arc.
 
 Tier 1 parser work is not listed above because it is complete: all four
 bank parsers are built and reconciling, per STATE.md "Current state" and
@@ -161,8 +165,10 @@ and free (cached config, no LLM call).
 
 ### 7.3 Expense Categorization & Analytics (P0)
 Additive only. Reuses the existing parser pipeline, storage layer, and
-`/transactions` API as-is. Adds a `categories` concept to the data model,
-new endpoints for categorization and aggregation, and new frontend
+`/transactions` API as-is. Adds label columns to the data model (as
+built: nullable `category`, `subcategory`, `merchant` on `transactions`
+— no separate categories table; the catalogs are the distinct values in
+use), new endpoints for categorization and aggregation, and new frontend
 screens alongside the existing transaction-list page.
 
 **Module 1 — Upload & Auto-Import.** Drag-and-drop upload that
@@ -174,16 +180,37 @@ card) handling are deliberately left open — to be resolved when this
 module is actually scoped, per the project's anti-speculation rule, since
 it's last in the build sequence.
 
-**Module 2 — Categorization.**
+**Module 2 — Categorization (built, Sessions 41–58).**
 
-- Free-text categories only — no predefined starter list.
-- Suggestion engine: simple pattern-matching learned from the user's own
-  past categorizations. No AI/LLM call for suggestions. Room to add an
-  AI-based layer later if accuracy proves insufficient.
-- Bulk categorization is in scope: applying a category to every
-  transaction from a given merchant in one action, not row by row —
-  without this, the "learns over time" benefit doesn't get exercised
-  fast enough to matter.
+- Free-text categories only — no predefined starter list. Values are
+  Title-Cased on write by one shared rule; `NULL` is the only "unset".
+- Suggestion engines, all pattern-matching over the user's own past
+  labels, no AI/LLM call: *category* — exact description match (majority
+  vote, confidence = winning share) then most-similar description, global
+  across cards; *subcategory* — exact match only, scoped to rows with the
+  same category, falling back to the category name; *merchant* —
+  category's exact-then-similar matching on the merchant field, global,
+  falling back to the raw description. Fallbacks are shown in words, not
+  as a percentage. One batch endpoint returns all three per transaction.
+  Room to add an AI-based layer later if accuracy proves insufficient.
+- Bulk categorization, as built: **manual multi-select of arbitrary
+  transactions** (any category state, across groups) with a typed
+  bulk-assign and separate per-field bulk-accepts for category and
+  merchant (each applying every selected row's own displayed suggestion;
+  merchant bulk excludes the raw-description fallback), plus a
+  group-level "accept all" and a per-row change that can spread to the
+  row's group. The originally-stated mechanism — "apply a category to
+  every transaction from a given merchant in one action" — was not built
+  as such: raw description text is the only merchant identity available
+  and is not a reliable grouping key on its own. Grouping by suggested
+  category and by description similarity fills that role.
+- Review screen grouping modes: by suggested category (default) or by
+  description similarity above a user-set percentage (anchor-based,
+  non-transitive clustering; unmatched rows omitted with a visible
+  count). Filters are a Bank → Card cascade plus month and date range,
+  bidirectionally narrowed, URL-synced.
+- Every write goes through one atomic assign endpoint taking
+  per-field-optional entries; any unknown id rejects the whole request.
 
 **Module 3 — Analytics Dashboard.**
 
@@ -197,9 +224,11 @@ it's last in the build sequence.
 
 **Build sequence:**
 
-1. Categorization data model + suggestion engine (backend)
+1. Categorization data model + suggestion engine (backend) — **done**
 2. Categorization review/assign screen, including bulk-apply (frontend)
-3. Aggregation endpoint + dashboard with filters and LLM commentary
+   — **done**, pending manual browser verification
+3. Aggregation endpoint + dashboard with filters and LLM commentary —
+   next
 4. Upload UI with auto-detect (Module 1)
 
 ## 8. Non-Functional / Technical Constraints
@@ -291,6 +320,13 @@ scoped):
   second, deliberate asymmetry.
 - A `StarletteDeprecationWarning` (`httpx` with `starlette.testclient`)
   surfaced during Session 23's test run — unresolved, low-priority.
+- The categorization frontend (Sessions 43–58) has not yet been seen
+  rendered by Claude Code — verified by script parsing and code trace
+  only; the manual browser walk is the outstanding gate (STATE.md open
+  flags).
+- The multi-select bar's "N selected" can include rows not currently on
+  screen after a bulk accept or in similarity mode — deliberate, so the
+  second bulk action can use the same selection; documented in STATE.md.
 
 ## 12. Revision History
 
@@ -298,3 +334,4 @@ scoped):
 |---|---|---|
 | 1.0 | 08 Sep 2026 | Initial consolidated PRD |
 | 1.1 | 08 Sep 2026 | Sourced from reconciled STATE.md/PRODUCT_VISION.md; removed source-currency note and staleness entry |
+| 1.2 | 12 Sep 2026 | Module 2 reconciled with what was built (Sessions 41–58): three labels, three suggestion engines, multi-select bulk actions in place of merchant-keyed bulk-apply, two grouping modes; requirements 1–2 marked built; verification gap recorded |

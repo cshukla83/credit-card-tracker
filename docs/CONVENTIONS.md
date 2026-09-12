@@ -173,6 +173,17 @@ The discipline this project is built under, session after session:
   verifies, that's a real gap worth closing in the same session. A
   feature nobody asked for yet is not a gap; it's speculation, and it
   waits.
+- **Every session's final report states its session number.** The
+  report Claude Code gives back at the end of a prompt — the summary of
+  what was built, wherever it is delivered: terminal, chat interface, or
+  any other surface — must explicitly name the session number it just
+  completed, matching the number used in that session's own
+  `docs/DEVLOG.md` entry; e.g. "Session 59 committed as `<hash>`."
+  **Why:** Chandra relays these reports into a separate Claude
+  conversation used for scoping and review, and that conversation has no
+  independent way to confirm which session number a given report
+  corresponds to. Explicit numbering keeps both conversations in sync
+  without relying on manual tracking. (Added in Session 59.)
 
 ## Verification Tooling
 

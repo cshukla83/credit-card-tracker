@@ -239,7 +239,7 @@ One line item from a statement, as extracted by the bank-specific parser.
 
 - **`category`** (Session 41) is the user-assigned, free-text spend
   category. `NULL` is the only representation of "uncategorized" — the
-  code never writes an empty string (`storage.categories.assign_category()`
+  code never writes an empty string (`storage.categories.assign_categories()`
   rejects one, and the API strips whitespace and rejects the result if
   empty). There is no `CHECK` constraint and no categories table: the set
   of categories is simply the distinct non-null values in this column.

@@ -6999,3 +6999,124 @@ before. Checked by reading the code, not by seeing it run.
 Manual scroll test: pin point and shadow, header parking with the chevron
 reachable, the bar's height change when N labels wrap, and the toggle
 round-trip with a selection held through a bulk accept.
+
+## Session 59 — 2026-09-12
+
+### Goal
+Documentation only, two parts. Part 1: bring `STATE.md`,
+`EXPENSE_ANALYTICS_VISION.md`, and `PRD.md` back in line with what
+Sessions 40–58 actually built, using the DEVLOG entries as the source of
+truth and the live test suite for the count. Part 2: a new
+`CONVENTIONS.md` rule that every session's final report states its
+session number. No code, no server, no database.
+
+### What happened
+
+**Ground truth first.** The DEVLOG entries for Sessions 40–58 (plus the
+2026-09-12 data note) were re-read as the record, and the suite was run
+read-only: **361 passing**. That number, not any figure copied from an
+earlier entry, is what the docs now say.
+
+**`docs/STATE.md`.**
+- *Current state* rewritten as two layers: parse-and-store (unchanged
+  since Session 35) and categorization (Sessions 41–58): the three label
+  columns and their shared migration and normalization; the three
+  differently-shaped suggestion engines — category exact+fuzzy global,
+  subcategory exact-only category-scoped with the category-value
+  fallback, merchant exact+fuzzy global plus `from_description`; every
+  endpoint added in the stretch, including the clustering endpoint's
+  anchor-based, non-transitive, singles-dropped semantics; and the
+  frontend's two tabs, Bank → Card cascade with bidirectional narrowing,
+  two grouping modes, three editable labels, and the sticky bulk bar. The
+  18-statement seed (336 transactions) is noted as present for manual
+  testing.
+- *Locked architectural decisions* gained the stretch's durable ones,
+  in the section's style: one read-path filter definition (`filter_sql`);
+  one fuzzy-similarity definition and shared exact/fuzzy tier helpers
+  across category, merchant, and clustering; one Title Case rule across
+  all three labels, with `str.title()`'s apostrophe behaviour accepted;
+  every accept writes the client-displayed value; highest-id as the
+  tie-break proxy; learned-vs-default suggestion labelling; and
+  suggestion endpoints being pure reads.
+- *Open flags*: no existing flag was removed — the DEVLOG shows none of
+  them resolved. Added: the **manual visual verification gap**, stated as
+  exactly that — every frontend session 43–58 was parsed and reasoned
+  through, none seen rendered, with the list of what a walk must cover
+  and the two bugs code-trace alone caught; the
+  selection-count-can-include-hidden-rows behaviour (Sessions 51 and
+  57) and why it is deliberate; and a note that the suggestion/assign
+  shapes were reshaped in place three times, acceptable only while this
+  repository is their sole consumer.
+- *Next arc*: checked against the vision document's build sequence.
+  Steps 1 and 2 are built and API-tested but the manual browser walk is
+  named as the gate before Module 2 is called done; step 3 (Module 3) is
+  next. The intro paragraph's "single-page web dashboard" — never true —
+  now describes the review screen.
+
+**`docs/EXPENSE_ANALYTICS_VISION.md`.** Module 2's bulk bullet no longer
+claims merchant-keyed bulk-apply; it describes what exists — manual
+multi-select of arbitrary transactions with typed bulk-assign and
+separate per-field bulk-accepts — and says why the original mechanism was
+dropped: raw, unnormalized description text is the only merchant identity
+the statements provide and is not a reliable grouping key on its own;
+grouping by suggested category and by similarity took that role. Two
+scope-growth notes were added at the document's own level of detail —
+three labels instead of one, and the second grouping mode — and the
+"Relationship to the existing system" line now says label columns, not a
+`categories` concept, since no categories table exists. Build-sequence
+steps 1 and 2 are struck through as complete, with step 2 carrying the
+manual-verification caveat. Modules 1 and 3 and the open questions are
+untouched.
+
+**`docs/PRD.md`.** Its header said "regenerated"; the only generator
+(`scripts/generate_prd_docx.py`) renders PRD.md *to* Word and does not
+produce it, so PRD.md is hand-consolidated and was edited directly — and
+the header now says so. Version 1.2: executive summary, requirements
+index rows 1–2 marked built (row 2 "awaiting manual browser
+verification"), Module 2 rewritten with the same corrections as the
+vision document, build sequence updated, two Known Issues entries added
+(the verification gap; the selection-count note), revision history row.
+`PRD.docx` is git-ignored generated output and was not regenerated.
+
+**`docs/DATA_MODEL.md` spot-check.** Accurate for every schema fact
+(four migrations, three label columns, the `CREATE TABLE` reference, the
+per-label notes). One stale identifier found: the `category` note still
+named `assign_category()`, renamed `assign_categories()` in Session 42.
+Fixed in place — one word; nothing else changed.
+
+**Part 2 — `docs/CONVENTIONS.md`.** New bullet under *Session
+Methodology*: every session's final report must state the session number
+it completed, matching the DEVLOG entry, on whatever surface it is
+delivered — with the reason inline: the reports are relayed into a
+separate Claude conversation for scoping and review, which has no
+independent way to confirm which session a report belongs to.
+
+### Outcome
+The three planning documents describe the system that exists rather than
+the one planned in Session 37; the discrepancies between "merchant-keyed
+bulk apply" and what was built, and between "single label" and three,
+are resolved in the docs' own words with the reasons recorded. The test
+count in STATE.md is the one the suite reports today. The
+session-numbering rule is in force from this report onward.
+
+### In plain English
+The project's overview documents had fallen behind the work of the last
+twenty sessions: they still described a plan in which bulk labelling
+worked by merchant name and only one kind of label existed. They now
+describe what was actually built — three labels, three suggestion
+methods, bulk actions driven by ticking rows, and two ways of grouping
+the review list — and explain why the original bulk idea was set aside:
+the raw bank descriptions aren't clean enough to group by merchant
+reliably. They also state plainly that none of the recent screen work has
+yet been looked at in a browser, so nobody mistakes "built and tested"
+for "seen working".
+
+One process rule was added: every end-of-session summary must say which
+session it is. Chandra passes those summaries into a second conversation
+that plans the next steps, and that conversation can't otherwise tell
+which session a summary refers to.
+
+### Next steps
+The manual browser walk of Sessions 43–58's frontend work, against the
+seeded data, is the gate before Module 2 is called complete. Then step 3
+of the build sequence: the aggregation endpoint and analytics dashboard.

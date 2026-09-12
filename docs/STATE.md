@@ -10,8 +10,10 @@ docs/CONVENTIONS.md.
 A personal credit card statement tracker, built session by session as a
 deliberate, hands-on vehicle for learning Claude Code. It parses monthly
 PDF credit card statements, persists parsed transactions to a local
-SQLite database, and exposes that data through a queryable API and a
-single-page web dashboard.
+SQLite database, exposes that data through a queryable API, and — as of
+the current arc — lets the user label every transaction with a category,
+subcategory, and merchant through a single-page review screen with
+learned suggestions.
 
 Four bank/card types are implemented and reconciling: HDFC Diners (across
 two known statement layouts, a current template and an older "legacy"
@@ -21,26 +23,71 @@ started.
 
 ## Current state
 
-As of Session 35 (239 tests passing, working tree clean), the import
-pipeline works end-to-end against real sample statements for four banks —
-HDFC Diners (both layouts), ICICI Coral, SBI Titan, and IndusInd Legend —
-and is bank-agnostic from the CLI down: parsing, an adapter bridging
-parser output to storage (`from_parsed_statement`, shared by all four
-banks), atomic deduped writes, a filtered read path, and
-`GET /transactions`, `GET /cards`,
-`GET /statement-months`, and `GET /card-types` FastAPI endpoints. The
-`statements` table carries a `statement_month` column (e.g. `July-2026`),
-generated from `period_end` rather than typed in. A single-page HTML
-frontend (`static/index.html`, served at `GET /`) consumes all four
-endpoints via `fetch()`, rendering a transactions table filterable by
-card, bank/card type, statement month, and date range, with filter state
-synced to the URL. Three command-line tools exist — `create_card`,
-`import_statement`, and `query_transactions` — all following the same
-shape, each documented with a usage docstring plus a README section.
+As of Session 58 (**361 tests passing**, confirmed by running the suite in
+Session 59; working tree clean), the project has two layers.
 
-All 18 real sample statements on disk — six HDFC, four ICICI, four SBI,
-four IndusInd — parse and reconcile against each statement's own summary
-totals, and every one of them is covered by a committed integration test.
+**Parse-and-store (Sessions 1–35), unchanged since.** The import pipeline
+works end-to-end against real sample statements for four banks — HDFC
+Diners (both layouts), ICICI Coral, SBI Titan, and IndusInd Legend — and
+is bank-agnostic from the CLI down: parsing, an adapter bridging parser
+output to storage (`from_parsed_statement`, shared by all four banks),
+atomic deduped writes, and three command-line tools (`create_card`,
+`import_statement`, `query_transactions`). All 18 real sample statements
+on disk — six HDFC, four ICICI, four SBI, four IndusInd — parse and
+reconcile against each statement's own summary totals, every one covered
+by a committed integration test, and all 18 are loaded into the local
+database for manual testing (336 transactions; the 2026-09-12 data note
+in the DEVLOG, between Sessions 43 and 44).
+
+**Categorization (Sessions 41–58), Module 2 of the expense analytics
+arc.** `transactions` carries three nullable free-text labels —
+`category`, `subcategory`, `merchant` — each added by the same
+`table_xinfo`-guarded migration, each Title-Cased on write by one shared
+rule, `NULL` the only representation of "unset" (`docs/DATA_MODEL.md`).
+Three suggestion engines, deliberately different in shape, run off one
+labelled-rows query per request:
+
+- *category*: exact (case-insensitive description match, majority vote,
+  confidence = winning share) then fuzzy (`difflib` ratio, best match, no
+  floor), global across all cards; cold start → `none`.
+- *subcategory*: exact only, scoped to rows sharing the transaction's own
+  category; nothing until the row has a category; otherwise falls back to
+  the category value itself (`same_as_category`, shown in words, not as a
+  percentage).
+- *merchant*: category's exact and fuzzy tiers on the merchant field,
+  global; plus a fallback tier category lacks — the raw description
+  (`from_description`, confidence null, shown in words).
+
+Endpoints: `GET /transactions/{id}/suggestion` and
+`POST /transactions/suggestions` (one batch, one labelled-rows query,
+shape `{category, subcategory | null, merchant}`);
+`POST /transactions/category` taking per-field-optional entries
+`{transaction_id, category?, subcategory?, merchant?}` written atomically
+(any unknown id → 404, nothing written); `GET /categories`,
+`GET /subcategories?category=`, `GET /merchants`; and
+`POST /transactions/clusters` — anchor-based description clustering at a
+0–100 threshold: walk in the given order, each unplaced row anchors a
+cluster, later rows join if their similarity *to that anchor* meets the
+threshold (not transitive, so order-dependent by design), clusters of one
+are dropped entirely, each member reports its similarity to the anchor.
+
+Frontend (`static/index.html`, still one file, no framework): two tabs
+over one filter bar. The filter bar is a Bank → Card cascade plus
+statement month and date range, with **bidirectional narrowing** — every
+picker's options are recomputed from the listing endpoints using all
+filters except its own (Bank also omits Card; picking a card snaps Bank to
+its bank), date inputs bounded by the real data, invalidated selections
+kept and flagged rather than silently cleared, URL as source of truth on
+load, and a second sequence counter guarding the pickers. *All
+transactions* lists rows read-only with merchant/category/subcategory.
+*Review & assign* groups rows either by suggested category (default) or by
+description similarity at a chosen threshold; each row shows its
+suggestions with accept/change for all three labels (one-click dropdown,
+spread-to-group, add-new); a sticky multi-select bar offers typed bulk
+assign and per-field bulk accept for category and merchant (merchant bulk
+excludes `from_description`), with a Category/Merchant display toggle.
+Groups are collapsible; the visual system is CSS-variable based with a
+system font stack.
 
 ## Locked architectural decisions
 
@@ -92,9 +139,9 @@ totals, and every one of them is covered by a committed integration test.
   statement, via `storage.cards.list_cards_with_statements()` — a
   separate function from `list_cards()`, which still returns every card
   and is left untouched for the CLI. The frontend page is a thin
-  `fetch()`-based consumer of both `/transactions` and `/cards` — it
-  never reaches into the database directly, and never exposes anything
-  those two endpoints don't already return.
+  `fetch()`-based consumer of the API — it never reaches into the
+  database directly, and never exposes anything the endpoints don't
+  already return.
 - The frontend's filter-triggered fetches to `/transactions` are tagged
   with an incrementing sequence number so an out-of-order network
   response (an older request resolving after a newer one) can't
@@ -120,6 +167,43 @@ totals, and every one of them is covered by a committed integration test.
   lives in `storage/reads.py` and returns bank/card-type pairs rather
   than full card rows — a second, deliberate asymmetry alongside the
   `id`-vs-`created_at` ordering asymmetry already noted below.
+- The read-path filter set has **one definition**:
+  `storage.reads.filter_sql(anchor, ...)` (Session 45) builds the JOIN and
+  WHERE clauses for a query anchored on `cards`, `statements`, or
+  `transactions`, joining only the tables the active filters need.
+  `get_transactions()` and all three listing endpoints use it; each
+  listing accepts every filter except the one dimension it *is*, so a
+  picker can never narrow itself.
+- **Fuzzy similarity has one definition**:
+  `storage.categories.fuzzy_similarity()` (Session 50) — `difflib`
+  `SequenceMatcher.ratio()` over casefolded strings. The category and
+  merchant suggestion engines' Tier 2 and the clustering endpoint all call
+  it; Tier 1 exact matching and Tier 2 fuzzy matching are themselves
+  shared, field-generic helpers (`_exact_tier`, `_fuzzy_tier`, Session
+  55) rather than copies per label.
+- **One normalization rule for all three text labels**:
+  `normalize_category()` in `main.py` — `strip().title()`, reject empty —
+  applied by the API's validator to `category`, `subcategory`, and
+  `merchant` alike (Sessions 49, 53, 55). `str.title()`'s behaviour on
+  apostrophes/hyphens (`"Mcdonald'S"`) is a known, tested, accepted
+  limitation, not to be special-cased until a real case hurts.
+- **Every "accept" writes the client-displayed suggestion**, never a
+  recompute (Session 43 onward): the frontend sends the value it showed,
+  and the assign endpoint is a direct write that never consults the
+  engine.
+- **Tie-breaks use highest transaction id as a proxy for "most recently
+  assigned"** (Session 41): no assignment timestamp exists, so most
+  recently *imported* stands in, and the ordering falls out of an
+  id-`DESC` query plus `Counter.most_common()` first-seen order. Adding a
+  `category_assigned_at` column is its own decision, not taken.
+- **Suggestion labels distinguish learned from default**: a percentage
+  only for `exact`/`fuzzy`; the words "same as category" /
+  "from description" for the fallback tiers, whose 1.0/null confidence is
+  a default, not evidence (Sessions 53–56). Bulk merchant accept excludes
+  `from_description` for the same reason (Session 57).
+- **The suggestion engines never write.** Every label reaches the
+  database only through `POST /transactions/category`; suggestion
+  endpoints are pure reads.
 
 ## Open flags
 
@@ -176,6 +260,37 @@ totals, and every one of them is covered by a committed integration test.
   project's data size the extra fetch is negligible. Revisit — a small
   `GET /transactions/date-range` taking the same filters — only if real
   usage shows the undated fetch's cost.
+- **Manual visual verification gap.** Every frontend session from 43
+  through 58 was verified by parsing the script (system JavaScriptCore)
+  and reasoning through the code — **none of it has been seen rendered
+  by Claude Code**, because the browser extension was unavailable in each
+  of those sessions, and the project's convention keeps live-server
+  verification with Chandra. That covers: the Review & assign screen and
+  both grouping modes, the Bank/Card cascade and narrowing, the visual
+  refresh, collapsible groups, the sticky bar and header parking, the
+  Category/Merchant toggle, and all three label columns with their
+  editors. Each of those sessions' DEVLOG entries says so plainly and
+  lists what a manual walk should cover; until that walk happens, the
+  frontend's behaviour is what the code specifies, not what has been
+  observed. Two real bugs were caught by code trace alone in that stretch
+  (a disabled-buttons regression in Session 43, a dropdown-clipping bug in
+  Session 44); more may be waiting.
+- **The selection count can include rows that are not on screen.** After
+  a bulk accept from the multi-select bar (Session 57) the selection is
+  deliberately kept whole and the post-reload prune is skipped, so the
+  other bulk button can act on the same rows — but under "Uncategorized
+  only", rows that just received a category leave the visible groups
+  while staying selected. In similarity mode the selection is likewise
+  pruned to the filtered set, not to the rows above threshold (Session
+  51). In both cases the bar's "N selected" is true of the filtered set,
+  not of what is visible; "clear selection" resets it. Acceptable for
+  now; revisit if it confuses in use.
+- `GET /transactions/{id}/suggestion` and `POST /transactions/suggestions`
+  changed shape incompatibly three times in three sessions (53, 55; the
+  assign body likewise in 42, 53, 55), each deliberately and each pinned
+  by tests. Nothing outside this repository consumes them, so no
+  versioning was added; if a second consumer ever appears, that is the
+  moment to stop reshaping in place.
 
 ## Next arc
 
@@ -183,12 +298,18 @@ The Tier 1 parser arc (Sessions 27–35) is complete: all four known bank
 parsers are built, generalized behind one bank-agnostic registry, and
 verified against every real sample statement on disk.
 
-The project is now in the Expense Categorization & Analytics arc —
-labelling transactions and surfacing spend insight on top of the existing
-parse-and-store pipeline. Its scope, module breakdown, build order and
-open questions are held in the expense categorization and analytics
-vision document rather than restated here; that document is the source of
-truth for this arc.
+The project is in the Expense Categorization & Analytics arc. Against that
+document's build sequence, **steps 1 and 2 — the categorization data model
+and suggestion engines, and the review/assign screen with bulk apply —
+are built** (Sessions 41–58), and grew beyond their original scope with
+subcategory and merchant labels and a similarity-grouping mode. They are
+built, tested at the API level, and **not yet manually verified in a
+browser** (see Open flags); that walk is the gate before calling Module 2
+done. Step 3 — the aggregation endpoint and analytics dashboard with
+filters and LLM commentary (Module 3) — is next in sequence, and step 4
+(upload with auto-detect, Module 1) after it. Scope, open questions, and
+sequencing remain in the vision document, which is the source of truth
+for this arc.
 
 The preceding "HDFC UI end-to-end" arc (Sessions 23–26) and the
 second-bank/generalization work that followed it are both done, and the
