@@ -7120,3 +7120,62 @@ which session a summary refers to.
 The manual browser walk of Sessions 43–58's frontend work, against the
 seeded data, is the gate before Module 2 is called complete. Then step 3
 of the build sequence: the aggregation endpoint and analytics dashboard.
+
+## Session 60 — 2026-09-12
+
+### Goal
+Create the learning summaries for 11 and 12 September 2026 per the
+Learning Summary Convention — one file per day worked, sourced only from
+this log's entries for that date. Documentation only.
+
+### What happened
+
+**What existed.** `docs/learnings/` had summaries through 08 Sep 2026 and
+none for 11 or 12 Sep, so both were created; nothing was overwritten.
+
+**Grouping by date.** Entries were assigned by their own dates: 11 Sep
+covers Sessions 40 and 41 (the data-model document and the categorization
+backend); 12 Sep covers Sessions 42–59 plus the 2026-09-12 data note —
+eighteen entries in one day, from the batch-suggestion endpoint through
+the review screen, the seed of all 18 statements, the visual refresh, the
+filter cascade and its two fixes, Title Case normalisation, similarity
+clustering and its legibility fix, subcategory, merchant, the bulk-accept
+split, the sticky bar and toggle, and the document reconciliation.
+
+**Sourcing discipline.** Every bullet and every learning was written
+against a specific claim in the corresponding DEVLOG entry's "What
+happened", "Outcome", or "In plain English" — the last of which exists for
+exactly this purpose. Nothing about future plans was included except what
+those entries themselves recorded as decided. Numbers used are the ones
+the entries record (267 → 361 tests; 18 statements; 336 transactions; 28
+new tests in Session 41), and no merchant, amount, date, or reference
+appears — the 12 Sep summary's mention of raw bank text describes the
+*kind* of value, not a value.
+
+**Tone check.** Both files were read back against the convention: no code
+paths, no function or module names, no session numbers, no jargon;
+structure and heading shape identical to the existing files; bullets one
+to two sentences; four and five Key Learnings respectively, each anchored
+to something that happened that day (the auto-index discovery, the
+tie-break stand-in, the three bugs caught by code trace, the eager bulk
+accept, the "all banks" ambiguity, the order-dependence of anchor-based
+clustering, the document drift).
+
+No code changed; no tests run (nothing to verify); no server, no
+database.
+
+### Outcome
+`docs/learnings/learning_summary_11-Sep-2026.md` and
+`docs/learnings/learning_summary_12-Sep-2026.md` exist, traceable line by
+line to this log, in the convention's format.
+
+### In plain English
+Two short, plain-language summaries were written of what was done on the
+last two working days and what was learned, one per day, in the same shape
+as the earlier ones. They were built only from the detailed day-by-day
+record, so each sentence in them can be checked against it, and they leave
+out anything that record does not actually say.
+
+### Next steps
+None from this session. The manual browser walk named in Session 59
+remains the next gate for the categorization module.
