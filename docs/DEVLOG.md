@@ -6925,3 +6925,77 @@ Manual walk: a mixed selection — count both N's, press category then
 merchant and merchant then category, confirm from-description rows are
 untouched by bulk and still acceptable per row, and that "clear selection"
 tidies up afterwards.
+
+## Session 58 — 2026-09-12
+
+### Goal
+Two UX refinements to the Review & assign multi-select bar (introduced in
+Session 43, split into two bulk accepts in Session 57): keep it in view
+while scrolling long lists, and show one field's bulk controls at a time
+behind a Category / Merchant toggle — a display choice, explicitly not a
+restriction on using one selection across both fields. Frontend only.
+
+### What happened
+
+**Sticky bar.** `.selection-bar` is `position: sticky; top: 0.75rem`
+(pinned a little below the viewport top, not the page top) with `z-index`
+above the tables. It only renders when something is selected, so the
+stickiness appears with the selection and goes with it. A 1px sentinel
+sits immediately above the bar in normal flow; an `IntersectionObserver`
+with a `rootMargin` equal to the sticky offset flips a `.stuck` class when
+the sentinel scrolls past the pin point, and only that state carries the
+floating shadow and accent border. In place, the bar looks as it did.
+
+**Not covering the chevrons.** A sticky bar overlays whatever scrolls
+beneath it, which would have hidden the collapse chevron of the group
+header nearest the top. Rather than shrink or offset the bar, the group
+header rows themselves become sticky **just beneath it** — but only while
+the bar is shown (`#panel-review.has-selection tr.group td`), so the
+unselected state behaves exactly as before. Their `top` is a
+`--bar-offset` CSS variable measured from the bar's real height after each
+render and via a `ResizeObserver` (its contents wrap and its N labels
+change width). The header with the chevron therefore parks under the bar
+and stays fully visible and clickable instead of sliding under it.
+
+**Category / Merchant toggle.** A two-button segmented control
+(`aria-pressed`, `role="group"`) selects `review.bulkField`, Category by
+default. Rendering shows only that field's typeahead and bulk-accept
+button; the "N selected · ₹total" summary and "clear selection" are always
+present. Clicking the toggle re-renders the bar only — `renderSelectionBar()`,
+not the rows — and touches nothing else: the selection `Set` is neither
+cleared nor pruned nor restricted, both options are always enabled, and each
+field's typeahead text survives the flip (`review.query` /
+`review.merchantQuery` are separate). Session 57's `keepSelection` on both
+bulk accepts is untouched, so "accept categories → flip to Merchant → accept
+merchants" runs on the same rows, as it did with both buttons side by side.
+The two fields' controls are described in one small table and the toggled
+entry is rendered, so the category and merchant paths cannot drift apart.
+
+**Verification.** Script parsed with the system JavaScriptCore; backend
+suite unaffected (361). **Reasoned through only — not verified visually.**
+The browser extension was unavailable; sticky behaviour, the stuck shadow,
+and header parking are exactly the things a manual scroll should confirm.
+No server started, no live request, no frontend test suite invented.
+
+### Outcome
+The bulk bar follows the user down long lists with a shadow only while
+pinned; group headers park beneath it rather than under it; and the bar
+shows one field's controls at a time, switchable freely, with the
+selection and the two-step category-then-merchant flow unchanged.
+
+### In plain English
+The bar that appears when rows are ticked now stays on screen as you
+scroll, so acting on a long selection no longer means scrolling back to
+the top; it picks up a soft shadow only while it is pinned, and the group
+headings tuck in just beneath it instead of disappearing under it. The
+bar also shows one thing at a time — the category controls or the
+merchant controls — behind a small Category / Merchant switch. That switch
+only changes what is displayed: the ticked rows stay ticked whichever side
+is showing, both sides are always available, and accepting categories and
+then flipping over to accept merchants on the same rows works exactly as
+before. Checked by reading the code, not by seeing it run.
+
+### Next steps
+Manual scroll test: pin point and shadow, header parking with the chevron
+reachable, the bar's height change when N labels wrap, and the toggle
+round-trip with a selection held through a bulk accept.

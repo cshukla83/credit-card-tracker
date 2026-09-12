@@ -322,7 +322,19 @@
   }
 
   /* --- Review & assign: selection bar ---------------------------------- */
+  /* Sticky once shown: pinned a little below the viewport top so it stays
+     in reach while scrolling long lists. The sentinel just before it lets
+     an IntersectionObserver tell "stuck" from "in place"; only the stuck
+     state gets the shadow, so it reads as floating over the content. */
+  :root { --bar-top: 0.75rem; }
+  #selection-bar-sentinel {
+    height: 1px;
+    margin-top: -1px;
+  }
   .selection-bar {
+    position: sticky;
+    top: var(--bar-top);
+    z-index: 20;
     display: flex;
     flex-wrap: wrap;
     gap: 0.9rem 1.1rem;
@@ -333,6 +345,43 @@
     padding: 0.7rem 1rem;
     margin-bottom: 1rem;
     color: var(--accent-ink);
+    transition: box-shadow 120ms ease;
+  }
+  .selection-bar.stuck {
+    box-shadow: var(--shadow-pop);
+    border-color: var(--accent);
+  }
+  /* While the bar is shown, group header rows stick just beneath it
+     instead of sliding under it -- so the header nearest the top, chevron
+     included, is never hidden by the bar. --bar-offset is set from the
+     bar's measured height. Off when there is no bar: no behaviour change
+     for the unselected state. */
+  #panel-review.has-selection tr.group td {
+    position: sticky;
+    top: var(--bar-offset, 0px);
+    z-index: 5;
+  }
+  .segmented {
+    display: inline-flex;
+    border: 1px solid var(--accent-wash-strong);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--surface);
+  }
+  .segmented button, .selection-bar .segmented button {
+    border: none;
+    border-radius: 0;
+    padding: 0.3rem 0.75rem;
+    background: transparent;
+    color: var(--muted);
+  }
+  .segmented button + button {
+    border-left: 1px solid var(--accent-wash-strong);
+  }
+  .segmented button[aria-pressed="true"],
+  .selection-bar .segmented button[aria-pressed="true"] {
+    background: var(--accent);
+    color: #fff;
   }
   .selection-bar .label {
     font-weight: 600;
@@ -669,6 +718,7 @@
     <div id="review-status">Loading…</div>
     <div id="review-mode-note" class="mode-note" style="display: none;"></div>
     <div id="review-error" class="error" style="display: none;"></div>
+    <div id="selection-bar-sentinel" aria-hidden="true"></div>
     <div id="selection-bar" class="selection-bar" style="display: none;"></div>
     <div id="nothing-left" class="nothing-left" style="display: none;"></div>
     <table id="review-table" style="display: none;">
@@ -715,6 +765,7 @@
     const thresholdInputEl = document.getElementById("threshold-input");
     const reviewErrorEl = document.getElementById("review-error");
     const selectionBarEl = document.getElementById("selection-bar");
+    const selectionBarSentinelEl = document.getElementById("selection-bar-sentinel");
     const nothingLeftEl = document.getElementById("nothing-left");
     const reviewTableEl = document.getElementById("review-table");
     const reviewBodyEl = document.getElementById("review-body");
@@ -927,6 +978,7 @@
       catalog: [],            // GET /categories, sorted
       merchants: [],          // GET /merchants, sorted (dropdown + typeahead)
       merchantQuery: "",      // selection-bar merchant typeahead text
+      bulkField: "category",  // which field's bulk controls the bar shows; display-only
       selected: new Set(),    // manual multi-select, independent of groups
       query: "",              // selection-bar category typeahead text
       editing: null,          // {id, groupIds, spread, adding} while a row's "change" is open
@@ -1456,6 +1508,8 @@
       const selectedTxns = review.transactions.filter((t) => review.selected.has(t.id));
       if (selectedTxns.length === 0) {
         selectionBarEl.style.display = "none";
+        selectionBarEl.classList.remove("stuck");
+        panelReviewEl.classList.remove("has-selection");
         return;
       }
       const selectedIds = selectedTxns.map((t) => t.id);
@@ -1468,60 +1522,79 @@
       label.textContent = selectedIds.length + " selected · " + fmtAmount(amount);
       selectionBarEl.appendChild(label);
 
-      // Two typeaheads, one per bulk-assignable label: category (since
-      // Session 43) and merchant (Session 56). Subcategory is deliberately
-      // not here. Each writes one typed value to every selected transaction.
-      selectionBarEl.appendChild(
-        buildTypeahead({
-          placeholder: "Assign category\u2026",
-          options: () => review.catalog,
-          getQuery: () => review.query,
-          setQuery: (v) => { review.query = v; },
-          emptyText: "Type a category name",
-          onPick: (value) => assign(uniformPairs(selectedIds, value)),
-        }),
-      );
-      selectionBarEl.appendChild(
-        buildTypeahead({
-          placeholder: "Assign merchant\u2026",
-          options: () => review.merchants,
-          getQuery: () => review.merchantQuery,
-          setQuery: (v) => { review.merchantQuery = v; },
-          emptyText: "Type a merchant name",
-          onPick: (value) => assign(uniformMerchantPairs(selectedIds, value)),
-        }),
-      );
+      // Category / Merchant toggle: a display-only filter over which field's
+      // typeahead and accept button are shown. It never touches the
+      // selection, both options are always clickable, and the count above
+      // stays regardless. Flip to Merchant after a category bulk accept and
+      // the same rows are still there for the merchant one (Session 57's
+      // keepSelection), which is the whole point of not restricting it.
+      const seg = document.createElement("div");
+      seg.className = "segmented";
+      seg.setAttribute("role", "group");
+      seg.setAttribute("aria-label", "Bulk field");
+      for (const [field, text] of [["category", "Category"], ["merchant", "Merchant"]]) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = text;
+        b.setAttribute("aria-pressed", String(review.bulkField === field));
+        b.addEventListener("click", () => {
+          if (review.bulkField === field) return;
+          review.bulkField = field;
+          renderSelectionBar(); // bar only; rows and selection untouched
+        });
+        seg.appendChild(b);
+      }
+      selectionBarEl.appendChild(seg);
 
-      // Two independent bulk accepts, each its own assign call, each N
-      // counting only rows with an applicable suggestion for that field.
-      // Either order, or both: each passes keepSelection so the selection
-      // is intact for the other afterwards; the N on each recounts against
-      // the reloaded rows (a row whose category was just accepted no longer
-      // has a category suggestion, so it drops out of that N -- as it should).
-      const acceptCategoryBtn = document.createElement("button");
-      acceptCategoryBtn.type = "button";
-      acceptCategoryBtn.textContent = "Accept category suggestions (" + categoryPairs.length + ")";
-      acceptCategoryBtn.disabled = categoryPairs.length === 0 || review.busy;
-      acceptCategoryBtn.title =
-        "Writes each selected transaction its own suggested category (as displayed); " +
-        "rows with no category suggestion are left as they are";
-      acceptCategoryBtn.addEventListener("click", () =>
-        assign(categoryPairs, { keepSelection: true }),
-      );
-      selectionBarEl.appendChild(acceptCategoryBtn);
+      // The two fields' controls: one typeahead (one typed value to every
+      // selected transaction) and one bulk accept (its own assign call, N
+      // counting only rows with an applicable suggestion for that field --
+      // for merchant, learned exact/fuzzy only; see acceptMerchantPairs).
+      // Only the toggled field's pair is rendered. Subcategory is
+      // deliberately not here.
+      const controls = {
+        category: {
+          typeahead: {
+            placeholder: "Assign category\u2026",
+            options: () => review.catalog,
+            getQuery: () => review.query,
+            setQuery: (v) => { review.query = v; },
+            emptyText: "Type a category name",
+            onPick: (value) => assign(uniformPairs(selectedIds, value)),
+          },
+          pairs: categoryPairs,
+          label: "Accept category suggestions (" + categoryPairs.length + ")",
+          title:
+            "Writes each selected transaction its own suggested category (as displayed); " +
+            "rows with no category suggestion are left as they are",
+        },
+        merchant: {
+          typeahead: {
+            placeholder: "Assign merchant\u2026",
+            options: () => review.merchants,
+            getQuery: () => review.merchantQuery,
+            setQuery: (v) => { review.merchantQuery = v; },
+            emptyText: "Type a merchant name",
+            onPick: (value) => assign(uniformMerchantPairs(selectedIds, value)),
+          },
+          pairs: merchantPairs,
+          label: "Accept merchant suggestions (" + merchantPairs.length + ")",
+          title:
+            "Writes each selected transaction its own learned merchant suggestion (exact or " +
+            "fuzzy, as displayed); \u201cfrom description\u201d rows are skipped here and " +
+            "can be accepted one at a time",
+        },
+      }[review.bulkField];
 
-      const acceptMerchantBtn = document.createElement("button");
-      acceptMerchantBtn.type = "button";
-      acceptMerchantBtn.textContent = "Accept merchant suggestions (" + merchantPairs.length + ")";
-      acceptMerchantBtn.disabled = merchantPairs.length === 0 || review.busy;
-      acceptMerchantBtn.title =
-        "Writes each selected transaction its own learned merchant suggestion (exact or " +
-        "fuzzy, as displayed); \u201cfrom description\u201d rows are skipped here and " +
-        "can be accepted one at a time";
-      acceptMerchantBtn.addEventListener("click", () =>
-        assign(merchantPairs, { keepSelection: true }),
-      );
-      selectionBarEl.appendChild(acceptMerchantBtn);
+      selectionBarEl.appendChild(buildTypeahead(controls.typeahead));
+
+      const acceptBtn = document.createElement("button");
+      acceptBtn.type = "button";
+      acceptBtn.textContent = controls.label;
+      acceptBtn.disabled = controls.pairs.length === 0 || review.busy;
+      acceptBtn.title = controls.title;
+      acceptBtn.addEventListener("click", () => assign(controls.pairs, { keepSelection: true }));
+      selectionBarEl.appendChild(acceptBtn);
 
       const clear = document.createElement("button");
       clear.type = "button";
@@ -1536,6 +1609,40 @@
       selectionBarEl.appendChild(clear);
 
       selectionBarEl.style.display = "";
+      panelReviewEl.classList.add("has-selection");
+      updateBarOffset();
+    }
+
+    // Group headers stick just beneath the bar (CSS reads --bar-offset), so
+    // the offset must track the bar's real height, which changes as its
+    // contents wrap or the N labels change. Measured after each render and
+    // whenever the bar resizes.
+    function updateBarOffset() {
+      const gap = 6;
+      const height = selectionBarEl.offsetHeight;
+      const top = parseFloat(getComputedStyle(selectionBarEl).top) || 0;
+      panelReviewEl.style.setProperty("--bar-offset", top + height + gap + "px");
+    }
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(() => {
+        if (selectionBarEl.style.display !== "none") updateBarOffset();
+      }).observe(selectionBarEl);
+    }
+
+    // "Stuck" detection: the 1px sentinel sits where the bar's top would be
+    // in normal flow. Once it scrolls past the bar's sticky top, the bar is
+    // pinned and gets its floating shadow; when it comes back, the shadow
+    // goes. rootMargin pulls the observed top edge down by the sticky offset
+    // (+1px) so the flip happens exactly at the pin point.
+    if (typeof IntersectionObserver !== "undefined") {
+      const stickyTop = parseFloat(getComputedStyle(selectionBarEl).top) || 0;
+      new IntersectionObserver(
+        ([entry]) => {
+          const shown = selectionBarEl.style.display !== "none";
+          selectionBarEl.classList.toggle("stuck", shown && !entry.isIntersecting);
+        },
+        { rootMargin: "-" + (Math.ceil(stickyTop) + 1) + "px 0px 0px 0px", threshold: 0 },
+      ).observe(selectionBarSentinelEl);
     }
 
     // --- group header --------------------------------------------------
