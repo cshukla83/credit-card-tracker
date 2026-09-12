@@ -535,7 +535,7 @@
       </label>
       <label>
         Card
-        <select id="card-filter" disabled>
+        <select id="card-filter">
           <option value="">All cards</option>
         </select>
       </label>
@@ -1511,9 +1511,10 @@
       const banksP = fetchJSON(
         withParams("/card-types", buildParams(filters, ["bank", "cardId"])),
       );
-      const cardsP = filters.bank
-        ? fetchJSON(withParams("/cards", buildParams(filters, ["cardId"])))
-        : Promise.resolve([]);
+      // "All banks" is a bank selection like any other for Card's purposes:
+      // it narrows Card's options (to every card with data under the other
+      // filters) rather than locking the picker. Session 47.
+      const cardsP = fetchJSON(withParams("/cards", buildParams(filters, ["cardId"])));
       const monthsP = fetchJSON(
         withParams("/statement-months", buildParams(filters, ["statementMonth"])),
       );
@@ -1537,9 +1538,8 @@
             "All cards",
             cards.map((c) => ({ value: String(c.id), label: cardLabel(c) })),
             filters.cardId,
-            filters.bank ? "No cards with data" : "All cards",
+            "No cards with data",
           );
-          cardFilterEl.disabled = !filters.bank;
           setOptions(
             statementMonthFilterEl,
             "All months",
@@ -1582,7 +1582,11 @@
         .then(([cards, statementMonths]) => {
           const card = cards.find((c) => String(c.id) === urlCardId);
           const knownBanks = new Set(cards.map((c) => c.bank));
-          const bank = card ? card.bank : knownBanks.has(urlBank) ? urlBank : "";
+          // "All banks" + a specific card is a valid state, so a card in the
+          // URL does not imply its bank; the bank is taken from the URL, and
+          // only overridden by the card's when the two disagree.
+          const urlBankKnown = knownBanks.has(urlBank) ? urlBank : "";
+          const bank = card && urlBankKnown && card.bank !== urlBankKnown ? card.bank : urlBankKnown;
           const filters = {
             bank,
             cardId: card ? String(card.id) : "",

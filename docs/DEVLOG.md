@@ -5948,3 +5948,79 @@ banks): bank → card, month narrowing per card, date bounds, the "(no
 matching data)" state, URL round-trip with `card_id` and with only `bank`,
 and the pickers under rapid filter changes. Decide whether a min/max-date
 endpoint is warranted once real usage shows the undated fetch's cost.
+
+## Session 47 — 2026-09-12
+
+### Goal
+Bug fix against Session 46's cascade: the Card picker was disabled, with
+only "All cards" selectable, whenever Bank was "All banks". It should be
+enabled there and list every card across every bank, narrowed by the other
+filters like any other picker.
+
+### What happened
+
+**The gap.** Session 46's brief said Card is "disabled until a bank is
+picked" and the build read the "All banks" default as *no bank picked*, so
+`recomputeOptions()` skipped the `/cards` fetch and set
+`cardFilterEl.disabled = !filters.bank`. The brief never said whether the
+default counts as a pick; this session closes that: **"All banks" is a bank
+selection like any other for Card's purposes** — it narrows Card's options
+(to every card with data under the remaining filters) rather than locking
+the picker.
+
+**The fix**, all in `static/index.html`:
+
+- `/cards` is now always fetched in `recomputeOptions()`, with every filter
+  except Card's own (`bank` is included when set, so a specific bank still
+  scopes the list exactly as before). The `disabled` toggle is gone, as is
+  the `disabled` attribute on the `<select>` markup; the empty-state label is
+  "No cards with data" in both cases.
+- **A second instance of the same gap, in `initFromURL()`.** On load, a
+  `card_id` in the URL used to *imply* its bank (`bank = card ? card.bank :
+  …`), which was correct only while "All banks + a specific card" was an
+  impossible state. Now that it is a valid state, forcing the bank on reload
+  would silently convert it into "that card's bank + that card" — a filter
+  change behind the user's back, and a different URL after the next
+  `replaceState`. The bank now comes from the URL's `bank` param when it
+  names a known bank, and the card's bank overrides it only when the two
+  genuinely disagree. A URL with `card_id` and no `bank` reloads as "All
+  banks" with the card selected, exactly as it was left.
+
+Labels (`{card_type} — {nickname}`, or `{card_type}` alone), bank-scoped
+narrowing once a bank *is* chosen, the reset of Card on a bank change, and
+the bidirectional narrowing against month and dates are unchanged. One
+consequence worth naming, not changing: under "All banks", two cards from
+different banks with the same card type and no nickname would show identical
+labels. The label format was fixed by the Session 46 brief and reaffirmed by
+this one, and no such pair exists in the seeded data; if it ever does, a
+bank prefix under "All banks" is the obvious small change.
+
+**Verification.** Script parsed with the system JavaScriptCore; a grep
+confirms no remaining code path disables the Card picker. No server started,
+no live request, no frontend test suite invented. The browser extension was
+unavailable, so the fix is unexercised by eye.
+
+### Outcome
+With Bank at "All banks", Card is enabled and offers every card that has
+data under the current month/date filters; picking one filters the table by
+that card alone, and reloading the URL restores that state without inventing
+a bank.
+
+### In plain English
+The card dropdown used to go grey whenever the bank dropdown was left on
+"All banks", so you could only pick a card after first picking a bank. That
+came from an ambiguity in the original instruction — it said the card list
+should wait for a bank to be chosen, without saying whether "all banks"
+counts as choosing. It now does: with all banks selected, the card list
+simply shows every card, still trimmed to the ones with data for the other
+filters.
+
+Fixing that exposed a matching assumption in how the page reloads: a saved
+link with a card but no bank used to fill the bank in automatically, which
+would now quietly change what you had chosen. It no longer does; the link
+comes back exactly as it was left.
+
+### Next steps
+Include this state in the manual walk: "All banks" with a specific card,
+its URL round-trip, and the card list narrowing by month and dates with no
+bank chosen.
