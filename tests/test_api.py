@@ -692,3 +692,87 @@ def test_filter_sql_joins_only_what_the_filters_need():
 
     joins, _, _ = filter_sql("cards", end_date="2026-01-01", always_join=("statements",))
     assert joins.index("JOIN statements") < joins.index("JOIN transactions")
+
+
+# --- clustering endpoint ----------------------------------------------------
+
+
+@pytest.fixture
+def similar_descriptions(db_path):
+    """One card, six transactions: two families of three similar descriptions
+    plus nothing else, so a 70% threshold yields exactly two clusters."""
+    conn = get_connection()
+    try:
+        card = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+        insert_statement(
+            conn,
+            card,
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            [
+                _txn(1, "COFFEE SHOP 12"),
+                _txn(2, "AIRLINE TICKETS 88"),
+                _txn(3, "COFFEE SHOP 34"),
+                _txn(4, "AIRLINE TICKETS 99"),
+                _txn(5, "COFFEE SHOP 56"),
+                _txn(6, "SOMETHING UNRELATED ZZZ"),
+            ],
+        )
+        rows = conn.execute("SELECT id FROM transactions ORDER BY id").fetchall()
+        return [r["id"] for r in rows]
+    finally:
+        conn.close()
+
+
+def test_clusters_valid_request_groups_in_given_order(client, similar_descriptions):
+    ids = similar_descriptions
+    response = client.post("/transactions/clusters", json={"transaction_ids": ids, "threshold": 70})
+    assert response.status_code == 200
+    assert response.json() == {"clusters": [[ids[0], ids[2], ids[4]], [ids[1], ids[3]]]}
+    # Response shape: clusters only -- no leftover / ungrouped key of any kind.
+    assert set(response.json().keys()) == {"clusters"}
+
+
+def test_clusters_threshold_defaults_to_70(client, similar_descriptions):
+    ids = similar_descriptions
+    with_default = client.post("/transactions/clusters", json={"transaction_ids": ids}).json()
+    explicit = client.post(
+        "/transactions/clusters", json={"transaction_ids": ids, "threshold": 70}
+    ).json()
+    assert with_default == explicit
+
+
+@pytest.mark.parametrize("threshold", [-1, 101, 250, "high"])
+def test_clusters_out_of_range_threshold_is_422(client, similar_descriptions, threshold):
+    response = client.post(
+        "/transactions/clusters",
+        json={"transaction_ids": similar_descriptions, "threshold": threshold},
+    )
+    assert response.status_code == 422
+
+
+def test_clusters_empty_input_is_empty_result_not_error(client, similar_descriptions):
+    response = client.post("/transactions/clusters", json={"transaction_ids": []})
+    assert response.status_code == 200
+    assert response.json() == {"clusters": []}
+
+
+def test_clusters_all_singletons_is_empty_list(client, similar_descriptions):
+    ids = similar_descriptions
+    response = client.post(
+        "/transactions/clusters", json={"transaction_ids": ids, "threshold": 100}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"clusters": []}
+
+
+def test_clusters_unknown_id_is_404(client, similar_descriptions):
+    response = client.post(
+        "/transactions/clusters", json={"transaction_ids": [similar_descriptions[0], 9999]}
+    )
+    assert response.status_code == 404
+    assert "9999" in response.json()["detail"]
+
+
+def test_clusters_rejects_missing_ids_field(client, similar_descriptions):
+    assert client.post("/transactions/clusters", json={"threshold": 70}).status_code == 422

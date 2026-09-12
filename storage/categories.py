@@ -15,6 +15,19 @@ class TransactionNotFoundError(Exception):
         super().__init__(f"No such transaction(s): {missing_ids}")
 
 
+def fuzzy_similarity(a: str, b: str) -> float:
+    """The codebase's one definition of "how similar are these two descriptions".
+
+    difflib.SequenceMatcher(None, a, b).ratio() over both strings casefolded,
+    so a case difference never depresses the score (Session 41's Tier 2
+    decision, now shared). 0.0 = nothing in common, 1.0 = identical after
+    casefolding. Argument order follows SequenceMatcher's: the first string
+    is the one being matched *from*, the second the candidate. Used by the
+    suggestion engine's Tier 2 and by cluster_by_similarity().
+    """
+    return SequenceMatcher(None, a.casefold(), b.casefold()).ratio()
+
+
 def _no_suggestion() -> dict:
     return {"category": None, "confidence": 0.0, "match_type": "none"}
 
@@ -109,11 +122,13 @@ def _suggest_from(
 
     # Tier 2. max() returns the first maximal element, and candidates are
     # id-descending, so an exact ratio tie again resolves to the highest id.
+    # `needle` is already casefolded; fuzzy_similarity casefolds again, which
+    # is idempotent, so the scores are exactly what the inline version gave.
     best = max(
         candidates,
-        key=lambda row: SequenceMatcher(None, needle, row["description"].casefold()).ratio(),
+        key=lambda row: fuzzy_similarity(needle, row["description"]),
     )
-    ratio = SequenceMatcher(None, needle, best["description"].casefold()).ratio()
+    ratio = fuzzy_similarity(needle, best["description"])
     return {"category": best["category"], "confidence": ratio, "match_type": "fuzzy"}
 
 
@@ -147,6 +162,67 @@ def suggest_categories(conn: sqlite3.Connection, transaction_ids: "list[int]") -
     return [
         {"transaction_id": i, **_suggest_from(i, targets[i], categorized)} for i in ids
     ]
+
+
+def cluster_by_similarity(
+    items: "list[tuple[int, str]]", threshold: "int | float"
+) -> "list[list[int]]":
+    """Anchor-based clustering of (id, description) pairs by fuzzy similarity.
+
+    `threshold` is 0-100, a percentage of fuzzy_similarity()'s 0-1 ratio; a
+    pair joins when ratio >= threshold / 100 (so 70 admits exactly 0.70).
+
+    Walk the list in the order given. Each not-yet-clustered item becomes
+    the anchor of a new cluster; every later not-yet-clustered item whose
+    similarity *to that anchor* meets the threshold joins it, in list order.
+    Membership is decided against the anchor only -- not transitively, not
+    against other members -- so the outcome depends on the input order,
+    which is why the caller's order is respected rather than re-sorted.
+
+    Only clusters of two or more are returned, as lists of ids with the
+    anchor first. A singleton is dropped entirely: not returned, not
+    bucketed. Duplicate ids are collapsed to their first occurrence. Pure
+    function, no database access; the endpoint resolves descriptions.
+    """
+    seen = set()
+    ordered = []
+    for item in items:
+        if item[0] not in seen:
+            seen.add(item[0])
+            ordered.append(item)
+
+    cutoff = threshold / 100
+    clustered = set()
+    clusters = []
+    for i, (anchor_id, anchor_desc) in enumerate(ordered):
+        if anchor_id in clustered:
+            continue
+        clustered.add(anchor_id)
+        members = [anchor_id]
+        for other_id, other_desc in ordered[i + 1 :]:
+            if other_id in clustered:
+                continue
+            if fuzzy_similarity(anchor_desc, other_desc) >= cutoff:
+                clustered.add(other_id)
+                members.append(other_id)
+        if len(members) >= 2:
+            clusters.append(members)
+    return clusters
+
+
+def cluster_transactions(
+    conn: sqlite3.Connection, transaction_ids: "list[int]", threshold: "int | float"
+) -> "list[list[int]]":
+    """cluster_by_similarity over real rows: resolves descriptions by id.
+
+    Empty input -> empty result. Any unknown id -> TransactionNotFoundError,
+    nothing computed, matching the other id-taking endpoints.
+    """
+    ids = list(dict.fromkeys(transaction_ids))
+    if not ids:
+        return []
+    descriptions = _fetch_targets(conn, ids)
+    return cluster_by_similarity([(i, descriptions[i]) for i in ids], threshold)
 
 
 def assign_categories(

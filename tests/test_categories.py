@@ -8,6 +8,9 @@ from storage import categories
 from storage.categories import (
     TransactionNotFoundError,
     assign_categories,
+    cluster_by_similarity,
+    cluster_transactions,
+    fuzzy_similarity,
     list_categories,
     suggest_categories,
     suggest_category,
@@ -478,5 +481,117 @@ def test_list_categories_is_sorted_distinct_and_empty_before_any_assignment(db_p
         # Reassigning the only "Travel" row drops it from the catalog.
         assign_categories(conn, [(a, "Food")])
         assert list_categories(conn) == ["Food"]
+    finally:
+        conn.close()
+
+
+# --- fuzzy_similarity (shared comparison) -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        ("COFFEE SHOP 12", "COFFEE SHOP 34"),
+        ("coffee shop 12", "COFFEE SHOP 12"),
+        ("ZZZZZZZZ", "AAAAAAAA"),
+        ("SHOP 1", "SHOP 1 "),
+        ("", "ANYTHING"),
+    ],
+)
+def test_fuzzy_similarity_is_exactly_tier_twos_inline_formula(a, b):
+    # The extraction must not move Tier 2 by a single ulp: the shared
+    # function is SequenceMatcher(None, a.casefold(), b.casefold()).ratio(),
+    # which is what Session 41 wrote inline.
+    from difflib import SequenceMatcher
+
+    assert fuzzy_similarity(a, b) == SequenceMatcher(None, a.casefold(), b.casefold()).ratio()
+    # Idempotent under pre-casefolded input, which is how Tier 2 calls it.
+    assert fuzzy_similarity(a.casefold(), b) == fuzzy_similarity(a, b)
+
+
+def test_fuzzy_similarity_bounds_and_case_insensitivity():
+    assert fuzzy_similarity("Shop", "SHOP") == 1.0
+    assert fuzzy_similarity("ZZZZ", "AAAA") == 0.0
+    assert 0.0 < fuzzy_similarity("COFFEE SHOP 12", "COFFEE SHOP 34") < 1.0
+
+
+def test_tier_two_confidence_equals_shared_function(db_path):
+    # End to end: the engine's reported confidence is the shared function's
+    # value for the winning pair, so the two cannot drift apart.
+    conn = get_connection()
+    try:
+        target, close, far = _seed(conn, ["COFFEE SHOP 12", "COFFEE SHOP 34", "AIRLINE TICKETS"])
+        _assign(conn, [close], "Food")
+        _assign(conn, [far], "Travel")
+        result = suggest_category(conn, target)
+        assert result["confidence"] == fuzzy_similarity("COFFEE SHOP 12", "COFFEE SHOP 34")
+    finally:
+        conn.close()
+
+
+# --- cluster_by_similarity ----------------------------------------------------
+
+
+def test_clustering_produces_multiple_clusters_in_anchor_order():
+    items = [
+        (1, "COFFEE SHOP 12"),
+        (2, "AIRLINE TICKETS 88"),
+        (3, "COFFEE SHOP 34"),
+        (4, "AIRLINE TICKETS 99"),
+        (5, "COFFEE SHOP 56"),
+        (6, "SOMETHING UNRELATED ZZZ"),
+    ]
+    assert cluster_by_similarity(items, 70) == [[1, 3, 5], [2, 4]]
+
+
+def test_clustering_everything_in_one_cluster():
+    items = [(10, "SHOP A"), (11, "SHOP B"), (12, "SHOP C")]
+    assert cluster_by_similarity(items, 60) == [[10, 11, 12]]
+    # Threshold 0 admits everything, whatever the descriptions.
+    assert cluster_by_similarity([(1, "AAAA"), (2, "ZZZZ")], 0) == [[1, 2]]
+
+
+def test_clustering_all_singletons_returns_no_clusters():
+    items = [(1, "AAAA"), (2, "BBBB"), (3, "CCCC")]
+    assert cluster_by_similarity(items, 70) == []
+    # 100 requires identity (after casefolding).
+    assert cluster_by_similarity([(1, "SHOP"), (2, "SHOP "), (3, "shop")], 100) == [[1, 3]]
+    assert cluster_by_similarity([], 70) == []
+    assert cluster_by_similarity([(1, "ONLY")], 0) == []
+
+
+def test_clustering_threshold_boundary_is_inclusive():
+    # "abcd" vs "abce": 3 matching of 8 total chars -> ratio exactly 0.75.
+    assert fuzzy_similarity("abcd", "abce") == 0.75
+    items = [(1, "abcd"), (2, "abce")]
+    assert cluster_by_similarity(items, 75) == [[1, 2]]
+    assert cluster_by_similarity(items, 76) == []
+
+
+def test_clustering_is_anchor_based_not_transitive_and_respects_order():
+    # B is close to A and to C, but A and C are far apart. Anchored on A,
+    # B joins A and C is left alone as a singleton (dropped) -- membership is
+    # decided against the anchor only. Reordering changes the outcome, which
+    # is why the input order is honoured rather than re-sorted.
+    a, b, c = (1, "AAAAAAAAXXXX"), (2, "AAAAXXXXCCCC"), (3, "XXXXCCCCCCCC")
+    assert fuzzy_similarity(a[1], b[1]) >= 0.6
+    assert fuzzy_similarity(b[1], c[1]) >= 0.6
+    assert fuzzy_similarity(a[1], c[1]) < 0.6
+    assert cluster_by_similarity([a, b, c], 60) == [[1, 2]]
+    assert cluster_by_similarity([b, a, c], 60) == [[2, 1, 3]]
+
+
+def test_clustering_collapses_duplicate_ids():
+    assert cluster_by_similarity([(1, "SHOP A"), (1, "SHOP A"), (2, "SHOP B")], 60) == [[1, 2]]
+
+
+def test_cluster_transactions_resolves_descriptions_and_404s(db_path):
+    conn = get_connection()
+    try:
+        a, b, c = _seed(conn, ["COFFEE SHOP 12", "AIRLINE TICKETS", "COFFEE SHOP 34"])
+        assert cluster_transactions(conn, [a, b, c], 70) == [[a, c]]
+        assert cluster_transactions(conn, [], 70) == []
+        with pytest.raises(TransactionNotFoundError):
+            cluster_transactions(conn, [a, 9999], 70)
     finally:
         conn.close()

@@ -8,6 +8,7 @@ from storage.cards import list_cards_with_statements
 from storage.categories import (
     TransactionNotFoundError,
     assign_categories,
+    cluster_transactions,
     list_categories,
     suggest_categories,
     suggest_category,
@@ -183,6 +184,25 @@ def read_category_suggestions(body: SuggestionBatch, conn=Depends(get_db)):
     # unknown id is a 404 for the whole request, nothing computed.
     try:
         return {"suggestions": suggest_categories(conn, body.transaction_ids)}
+    except TransactionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"No such transaction(s): {e.missing_ids}")
+
+
+class ClusterRequest(BaseModel):
+    transaction_ids: list[int]
+    # Percentage of the 0-1 similarity ratio; 70 admits pairs at >= 0.70.
+    threshold: int = Field(default=70, ge=0, le=100)
+
+
+@app.post("/transactions/clusters")
+def read_clusters(body: ClusterRequest, conn=Depends(get_db)):
+    # Groups the given transactions by description similarity, anchor-based,
+    # in the order given. Returns only clusters of two or more -- there is
+    # deliberately no "ungrouped" list; a transaction that matched nothing
+    # is simply absent. Empty input and all-singletons both return an
+    # empty list, not an error. Unknown ids are a 404 like everywhere else.
+    try:
+        return {"clusters": cluster_transactions(conn, body.transaction_ids, body.threshold)}
     except TransactionNotFoundError as e:
         raise HTTPException(status_code=404, detail=f"No such transaction(s): {e.missing_ids}")
 

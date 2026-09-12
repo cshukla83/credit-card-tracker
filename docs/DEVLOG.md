@@ -6179,3 +6179,92 @@ The existing data was checked against the same rule in a single pass: all
 ### Next steps
 None specific. Revisit `str.title()` only if a real category with an
 apostrophe or hyphen becomes a practical nuisance.
+
+## Session 50 — 2026-09-12
+
+### Goal
+Step 1 of a two-step build: extract the suggestion engine's Tier 2 fuzzy
+comparison into one shared function, add anchor-based similarity clustering
+on top of it, and expose it as `POST /transactions/clusters`. No schema
+change; Step 2 is the frontend mode.
+
+### What happened
+
+**One definition of "similar".** `fuzzy_similarity(a, b)` in
+`storage/categories.py` is `SequenceMatcher(None, a.casefold(),
+b.casefold()).ratio()` — exactly the formula Session 41 wrote inline in
+Tier 2, casefolding included. Tier 2 now calls it; its `needle` is already
+casefolded and `casefold()` is idempotent, so scores are unchanged to the
+ulp. That claim is tested three ways: a parametrised test asserts the shared
+function equals the inline formula on the same inputs (including the
+pre-casefolded call shape); an end-to-end test asserts the engine's reported
+confidence *is* the shared function's value for the winning pair; and every
+Session 41 fuzzy-tier test passes untouched.
+
+**Clustering.** `cluster_by_similarity(items, threshold)` is a pure function
+over `(id, description)` pairs. It walks the list in the order given; each
+not-yet-clustered item anchors a new cluster; every *later* unclustered item
+whose similarity **to the anchor** is `>= threshold / 100` joins, in list
+order. Two properties fall out of that definition and are pinned by tests
+because they will surprise someone eventually:
+
+- *It is anchor-based, not transitive.* If B is close to A and to C but A
+  and C are far apart, anchoring on A yields `[A, B]` and drops C; anchoring
+  on B yields `[B, A, C]`. The outcome depends on input order, which is why
+  the function honours the caller's order instead of re-sorting. The
+  endpoint uses the request's id order, so the frontend controls it.
+- *The boundary is inclusive*, compared as `ratio >= threshold / 100`
+  rather than `ratio * 100 >= threshold`, to avoid float noise at the edge.
+  Pinned with a pair whose ratio is exactly 0.75: 75 joins, 76 doesn't.
+
+Only clusters of two or more are returned, anchor first. A singleton is
+dropped entirely — not returned, not bucketed, no "leftovers" list anywhere,
+per the brief. Duplicate ids collapse to their first occurrence.
+`cluster_transactions(conn, ids, threshold)` resolves descriptions via the
+existing `_fetch_targets` (so an unknown id raises before anything is
+computed) and returns `[]` for empty input without touching the database.
+
+**Endpoint.** `POST /transactions/clusters`, body `{"transaction_ids":
+[...], "threshold": 0-100}`; `threshold` defaults to 70 and is bounded by
+Pydantic (`ge=0, le=100`, integer) so out-of-range or non-numeric values are
+422. Response is `{"clusters": [[id, ...], ...]}` and nothing else — a test
+asserts the key set. Empty input → `{"clusters": []}`; all singletons →
+`{"clusters": []}`; unknown id → 404 naming it, consistent with the
+suggestion and assign endpoints.
+
+**Tests.** 24 new: 5 parametrised formula-equality cases, bounds/case, the
+engine-equals-shared-function check, multiple clusters, one cluster (and
+threshold 0), all singletons (and threshold 100, empty, single item), the
+0.75 boundary, the non-transitivity/order case, duplicate ids, the
+DB-backed wrapper with its 404; and on the endpoint: valid request with
+shape check, default threshold, four out-of-range values, empty input, all
+singletons, unknown id, missing field. Full suite: **323 passing** (299 +
+24). `docs/DATA_MODEL.md` untouched — no schema change.
+
+### Outcome
+Fuzzy similarity has one definition, the suggestion engine's behaviour is
+provably unchanged, and any list of transaction ids can be clustered by
+description similarity at a chosen threshold through one endpoint that
+returns only real groups.
+
+### In plain English
+The rule the system uses to judge how alike two transaction descriptions
+are was pulled out into one shared piece, so the existing suggestion
+feature and the new grouping feature can never disagree about what
+"similar" means — and tests confirm the suggestion feature's scores did
+not move at all.
+
+On top of it, transactions can now be grouped by how similar their
+descriptions look, at a similarity level the caller chooses. The grouping is
+simple by design: it takes the first transaction as a reference, gathers
+everything similar enough to it, then moves on to the next unplaced one.
+Only groups of two or more come back; anything that matched nothing is
+left out rather than shown as an "other" pile. Because membership is judged
+against each group's first member only, the result can depend on the order
+the transactions are given in — that is a known property, written down and
+tested, not a bug.
+
+### Next steps
+Step 2: a "Group by similarity" mode on the Review & assign screen with a
+percentage input, rendering one collapsible group per cluster and a status
+line making the omitted, below-threshold rows legible.
