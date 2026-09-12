@@ -8100,3 +8100,47 @@ everything on it lives in main.
 Next work starts from `main` on a new branch. The outstanding manual
 browser walk (Review & assign, dashboard, drill-down, insight button) is
 still the gate before Modules 2 and 3 are called verified.
+
+## Session 72 — 2026-09-12
+
+### Goal
+Bring `docs/learnings/learning_summary_12-Sep-2026.md` — written in
+Session 60, covering Sessions 42–59 — up to date with everything this log
+records for 12 September. Docs only.
+
+### What happened
+Branch confirmed (`main`, clean). The DEVLOG's own headings for
+2026-09-12 run from Session 42 through Session 71 (plus the data note);
+the existing summary stopped at Session 59, so Sessions 60–71 were the
+gap: the two learning summaries (60), the card-payment flag with its
+per-bank detection and cascade (61) and its checkbox and modal (62), bank
+and card on every row (63), three backlog flags (64), the aggregation
+endpoint (65), the Dashboard tab (66) and its drill-down (67), the
+commentary endpoint and cache (68) and its button (69), the model addendum
+(70), and the merge to `main` (71).
+
+The file was updated in place, not rewritten: every existing bullet and
+learning stands; the test-count bullet was extended from "267 to 361" to
+add "and to 476 by its end"; eight achievement bullets, five approach
+bullets, and four key learnings (6–9) were added, each traced to a
+specific entry — the twenty/thirteen payment-vs-refund counts (61), the
+field-by-field payload construction and its over-stuffed-input test (68),
+the three-plus-one commentary outcomes (68/69), the withdrawn model and
+the settings-only fix (70), the corrected key-presence claim (69), the
+branch-confirmation habit (60), and the merge counts (71). Tone and
+structure follow CONVENTIONS.md: no session numbers, code paths, or
+function names inside the summary; no claims beyond what the entries say.
+
+### Outcome
+The 12 September learning summary reflects the whole day's record. No
+code, no tests.
+
+### In plain English
+The plain-language summary of today's work, first written at midday, now
+covers the afternoon and evening as well — the bill-payment flag, the
+spending dashboard and its commentary, and the merge — with four new
+lessons drawn from things that actually happened. Nothing already in it
+was changed except one running total.
+
+### Next steps
+None from this session.
