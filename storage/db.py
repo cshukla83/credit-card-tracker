@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 from storage.schema import (
     ADD_CATEGORY_COLUMN,
+    ADD_SUBCATEGORY_COLUMN,
     ADD_STATEMENT_MONTH_COLUMN,
     CREATE_CARDS_TABLE,
     CREATE_STATEMENTS_TABLE,
@@ -50,6 +51,7 @@ def init_db() -> None:
         conn.execute(CREATE_TRANSACTIONS_TABLE)
         _ensure_statement_month_column(conn)
         _ensure_category_column(conn)
+        _ensure_subcategory_column(conn)
         conn.commit()
     finally:
         conn.close()
@@ -82,3 +84,11 @@ def _ensure_category_column(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_xinfo(transactions)")}
     if "category" not in columns:
         conn.execute(ADD_CATEGORY_COLUMN)
+
+
+def _ensure_subcategory_column(conn: sqlite3.Connection) -> None:
+    # Third copy of the same idiom (Session 53): table_xinfo check, ALTER only
+    # if absent, so init_db() stays idempotent on fresh and migrated DBs.
+    columns = {row["name"] for row in conn.execute("PRAGMA table_xinfo(transactions)")}
+    if "subcategory" not in columns:
+        conn.execute(ADD_SUBCATEGORY_COLUMN)

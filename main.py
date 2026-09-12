@@ -2,7 +2,7 @@ from datetime import date
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from storage.cards import list_cards_with_statements
 from storage.categories import (
@@ -10,6 +10,7 @@ from storage.categories import (
     assign_categories,
     cluster_transactions,
     list_categories,
+    list_subcategories,
     suggest_categories,
     suggest_category,
 )
@@ -162,8 +163,18 @@ def read_categories(conn=Depends(get_db)):
     return list_categories(conn)
 
 
+@app.get("/subcategories")
+def read_subcategories(category: str | None = None, conn=Depends(get_db)):
+    # Sorted distinct subcategories in use; ?category= narrows to rows with
+    # that category. Feeds the per-row subcategory dropdown.
+    return list_subcategories(conn, category=category)
+
+
 @app.get("/transactions/{transaction_id}/suggestion")
 def read_category_suggestion(transaction_id: int, conn=Depends(get_db)):
+    # Returns {"category": {value, confidence, match_type},
+    #          "subcategory": {value, confidence, match_type} | null}
+    # (Session 53 shape; the flat single-suggestion shape is gone).
     # Unlike the /transactions filters, an unknown id here is a real 404:
     # there is no "exists but has nothing to suggest" ambiguity -- that case
     # is a 200 with match_type "none".
@@ -208,7 +219,7 @@ def read_clusters(body: ClusterRequest, conn=Depends(get_db)):
 
 
 def normalize_category(value: str) -> str:
-    """The one place a category value is shaped before it is stored.
+    """The one place a category or subcategory value is shaped before storage.
 
     strip() then str.title(). NULL is the only representation of
     "uncategorized", so an empty or whitespace-only category is rejected
@@ -222,7 +233,8 @@ def normalize_category(value: str) -> str:
     (Session 49) -- no special-casing until a real example causes a real
     problem. Applied server-side so the stored form is consistent
     regardless of what called the API; the Session 49 backfill applied the
-    same function to rows written before it existed.
+    same function to rows written before it existed. Subcategory (Session
+    53) uses this same function -- one rule, not a copy.
     """
     value = value.strip().title()
     if not value:
@@ -232,9 +244,21 @@ def normalize_category(value: str) -> str:
 
 class CategoryAssignment(BaseModel):
     transaction_id: int
-    category: str
+    category: str | None = None
+    subcategory: str | None = None
 
-    _clean = field_validator("category")(normalize_category)
+    @field_validator("category", "subcategory")
+    @classmethod
+    def _normalize(cls, value: "str | None") -> "str | None":
+        # None means "leave this column alone"; a present value gets the
+        # shared normalization and must survive it non-empty.
+        return None if value is None else normalize_category(value)
+
+    @model_validator(mode="after")
+    def _require_a_field(self):
+        if self.category is None and self.subcategory is None:
+            raise ValueError("each assignment needs category or subcategory (or both)")
+        return self
 
 
 class CategoryAssignmentBatch(BaseModel):
@@ -249,7 +273,9 @@ def write_category(body: CategoryAssignmentBatch, conn=Depends(get_db)):
     # assignment is just N pairs with the same category; a single id is a
     # list of length 1. This is a direct write -- it never consults the
     # suggestion engine.
-    pairs = [(a.transaction_id, a.category) for a in body.assignments]
+    # Each entry writes only the field(s) it carries; the other column on
+    # that row is left as it is (Session 53).
+    pairs = [(a.transaction_id, a.category, a.subcategory) for a in body.assignments]
     try:
         updated = assign_categories(conn, pairs)
     except TransactionNotFoundError as e:
@@ -257,6 +283,6 @@ def write_category(body: CategoryAssignmentBatch, conn=Depends(get_db)):
         # whole request is a 404 naming the ids that were missing.
         raise HTTPException(status_code=404, detail=f"No such transaction(s): {e.missing_ids}")
     except ValueError as e:
-        # The same id with two different categories in one request.
+        # The same id with two different values for one field in one request.
         raise HTTPException(status_code=422, detail=str(e))
     return {"updated": updated}

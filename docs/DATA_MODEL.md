@@ -38,7 +38,7 @@ it is not part of the application model and is never referenced by code.
 ### How the schema is applied
 
 `storage.db.init_db()` runs the three `CREATE TABLE IF NOT EXISTS`
-statements, then two column migrations of identical shape, each of which
+statements, then three column migrations of identical shape, each of which
 checks `PRAGMA table_xinfo(<table>)` for the column and runs
 `ALTER TABLE ... ADD COLUMN` only if it is absent:
 
@@ -49,8 +49,10 @@ checks `PRAGMA table_xinfo(<table>)` for the column and runs
 - `_ensure_category_column()` → `transactions.category` (Session 41).
   A plain column, so `table_info` would also work; `table_xinfo` is used
   for consistency.
+- `_ensure_subcategory_column()` → `transactions.subcategory` (Session
+  53). Same idiom as `category`.
 
-Both `ALTER TABLE` statements live in `storage/schema.py` next to the
+All three `ALTER TABLE` statements live in `storage/schema.py` next to the
 `CREATE TABLE` they must stay identical to.
 
 Every connection from `storage.db.get_connection()` sets
@@ -178,6 +180,7 @@ One line item from a statement, as extracted by the bank-specific parser.
 | `txn_type`      | `TEXT`        | `NOT NULL`                                                         |
 | `reward_points` | `REAL`        | nullable                                                           |
 | `category`      | `TEXT`        | nullable — `NULL` means uncategorized                              |
+| `subcategory`   | `TEXT`        | nullable — `NULL` means no subcategory                             |
 
 **Table constraints**
 
@@ -243,6 +246,20 @@ One line item from a statement, as extracted by the bank-specific parser.
   **No assignment timestamp is recorded**, so "most recently assigned"
   is not knowable; the engine's tie-break uses highest `id` (most
   recently *imported*) as a documented proxy.
+
+- **`subcategory`** (Session 53) is a second, finer free-text label under
+  `category`, with the same rules: nullable, `NULL` is the only
+  representation of "not set", never an empty string, Title-Cased on
+  write by the API, no `CHECK`, no lookup table — the set of
+  subcategories is the distinct non-null values (optionally per
+  `category`, via `GET /subcategories?category=`). It is **not
+  constrained to be non-null only when `category` is set**: the assign
+  endpoint writes whichever of the two fields a request carries and
+  leaves the other alone, so a row *can* hold a subcategory with a
+  `NULL` category. The subcategory suggestion engine, by contrast,
+  returns nothing for a row until its `category` is set; it has no
+  fuzzy tier and falls back to the row's own `category` value
+  (`match_type "same_as_category"`).
 
 ---
 
@@ -344,6 +361,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     txn_type TEXT NOT NULL,
     reward_points REAL,
     category TEXT,
+    subcategory TEXT,
     FOREIGN KEY(statement_id) REFERENCES statements(id) ON DELETE CASCADE
 );
 ```

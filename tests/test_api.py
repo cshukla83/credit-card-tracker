@@ -88,6 +88,7 @@ def test_no_filters_returns_all_transactions(client, two_cards):
         "txn_type",
         "reward_points",
         "category",
+        "subcategory",
     }
 
 
@@ -338,7 +339,11 @@ def test_suggestion_cold_start_is_200_with_none(client, two_cards):
     target = _ids(client)[0]
     response = client.get(f"/transactions/{target}/suggestion")
     assert response.status_code == 200
-    assert response.json() == {"category": None, "confidence": 0.0, "match_type": "none"}
+    # Session 53 shape: two halves. Category unset -> subcategory is null.
+    assert response.json() == {
+        "category": {"value": None, "confidence": 0.0, "match_type": "none"},
+        "subcategory": None,
+    }
 
 
 def test_suggestion_unknown_transaction_is_404(client, two_cards):
@@ -360,9 +365,18 @@ def test_assign_then_suggest_round_trip(client, two_cards):
     assert response.json() == {"updated": 1}
 
     body = client.get(f"/transactions/{target}/suggestion").json()
-    assert body["category"] == "Food"
-    assert body["match_type"] == "fuzzy"
-    assert 0.0 <= body["confidence"] <= 1.0
+    assert body["category"]["value"] == "Food"
+    assert body["category"]["match_type"] == "fuzzy"
+    assert 0.0 <= body["category"]["confidence"] <= 1.0
+    assert body["subcategory"] is None  # target has no category yet
+    # The categorized row itself: no exact description peer with a
+    # subcategory, so the fallback is its own category.
+    other_body = client.get(f"/transactions/{other}/suggestion").json()
+    assert other_body["subcategory"] == {
+        "value": "Food",
+        "confidence": 1.0,
+        "match_type": "same_as_category",
+    }
 
     # And the write is visible on the listing endpoint.
     listed = {t["id"]: t["category"] for t in client.get("/transactions").json()}
@@ -516,7 +530,8 @@ def test_batch_suggestions_match_single_id_shape_and_order(client, two_cards):
         assert {k: v for k, v in entry.items() if k != "transaction_id"} == single
     # The categorized row itself gets no exact self-match; with nothing else
     # categorized it is a cold start.
-    assert body[2]["match_type"] == "none"
+    assert body[2]["category"]["match_type"] == "none"
+    assert body[2]["subcategory"]["match_type"] == "same_as_category"
 
 
 def test_batch_suggestions_run_categorized_query_once(client, two_cards, monkeypatch):
@@ -815,3 +830,145 @@ def test_clusters_unknown_id_is_404(client, similar_descriptions):
 
 def test_clusters_rejects_missing_ids_field(client, similar_descriptions):
     assert client.post("/transactions/clusters", json={"threshold": 70}).status_code == 422
+
+
+# --- subcategory (Session 53) ----------------------------------------------
+
+
+def _subcats(client):
+    return {t["id"]: t["subcategory"] for t in client.get("/transactions").json()}
+
+
+def _cats(client):
+    return {t["id"]: t["category"] for t in client.get("/transactions").json()}
+
+
+def test_assign_subcategory_only_writes_subcategory_and_normalizes(client, two_cards):
+    ids = _ids(client)
+    client.post("/transactions/category", json=_pairs([ids[0]], "Food"))
+    response = client.post(
+        "/transactions/category",
+        json={"assignments": [{"transaction_id": ids[0], "subcategory": "  coffee shops "}]},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"updated": 1}
+    assert _cats(client)[ids[0]] == "Food"
+    assert _subcats(client)[ids[0]] == "Coffee Shops"
+
+
+def test_assign_category_only_leaves_subcategory_alone(client, two_cards):
+    ids = _ids(client)
+    client.post(
+        "/transactions/category",
+        json={"assignments": [{"transaction_id": ids[0], "category": "Food", "subcategory": "Cafe"}]},
+    )
+    response = client.post("/transactions/category", json=_pairs([ids[0]], "Travel"))
+    assert response.status_code == 200
+    assert _cats(client)[ids[0]] == "Travel"
+    assert _subcats(client)[ids[0]] == "Cafe"
+
+
+def test_assign_both_fields_together(client, two_cards):
+    ids = _ids(client)
+    response = client.post(
+        "/transactions/category",
+        json={
+            "assignments": [
+                {"transaction_id": ids[0], "category": "food", "subcategory": "cafe"},
+                {"transaction_id": ids[1], "category": "travel", "subcategory": "flights"},
+            ]
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"updated": 2}
+    assert [_cats(client)[i] for i in ids[:2]] == ["Food", "Travel"]
+    assert [_subcats(client)[i] for i in ids[:2]] == ["Cafe", "Flights"]
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        {"transaction_id": 1},
+        {"transaction_id": 1, "subcategory": ""},
+        {"transaction_id": 1, "subcategory": "   "},
+        {"transaction_id": 1, "category": None, "subcategory": None},
+    ],
+)
+def test_assign_pair_with_neither_field_is_422(client, two_cards, assignment):
+    response = client.post("/transactions/category", json={"assignments": [assignment]})
+    assert response.status_code == 422
+
+
+def test_assign_conflicting_subcategories_for_one_id_is_422(client, two_cards):
+    ids = _ids(client)
+    response = client.post(
+        "/transactions/category",
+        json={
+            "assignments": [
+                {"transaction_id": ids[0], "subcategory": "Cafe"},
+                {"transaction_id": ids[0], "subcategory": "Tea"},
+            ]
+        },
+    )
+    assert response.status_code == 422
+    assert _subcats(client)[ids[0]] is None
+
+
+def test_suggestion_endpoints_report_subcategory_exact_and_fallback(client, db_path):
+    conn = get_connection()
+    try:
+        card = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+        insert_statement(
+            conn, card, date(2026, 1, 1), date(2026, 1, 31),
+            [_txn(1, "SHOP"), _txn(2, "SHOP"), _txn(3, "OTHER")],
+        )
+        target, peer, other = [r["id"] for r in conn.execute("SELECT id FROM transactions ORDER BY id")]
+    finally:
+        conn.close()
+    client.post(
+        "/transactions/category",
+        json={
+            "assignments": [
+                {"transaction_id": target, "category": "Food"},
+                {"transaction_id": peer, "category": "Food", "subcategory": "Cafe"},
+            ]
+        },
+    )
+    single = client.get(f"/transactions/{target}/suggestion").json()
+    assert single["subcategory"] == {"value": "Cafe", "confidence": 1.0, "match_type": "exact"}
+    assert single["category"]["match_type"] == "exact"
+
+    batch = client.post(
+        "/transactions/suggestions", json={"transaction_ids": [target, peer, other]}
+    ).json()["suggestions"]
+    by_id = {e["transaction_id"]: e for e in batch}
+    assert by_id[target]["subcategory"] == single["subcategory"]
+    assert by_id[peer]["subcategory"] == {
+        "value": "Food",
+        "confidence": 1.0,
+        "match_type": "same_as_category",
+    }
+    assert by_id[other]["subcategory"] is None
+    for entry in batch:
+        assert set(entry.keys()) == {"transaction_id", "category", "subcategory"}
+        assert set(entry["category"].keys()) == {"value", "confidence", "match_type"}
+
+
+def test_subcategories_catalog_unfiltered_and_filtered(client, two_cards):
+    ids = _ids(client)
+    assert client.get("/subcategories").json() == []
+    client.post(
+        "/transactions/category",
+        json={
+            "assignments": [
+                {"transaction_id": ids[0], "category": "Food", "subcategory": "Tea"},
+                {"transaction_id": ids[1], "category": "Food", "subcategory": "Cafe"},
+                {"transaction_id": ids[2], "category": "Travel", "subcategory": "Flights"},
+                {"transaction_id": ids[3], "category": "Food"},
+            ]
+        },
+    )
+    assert client.get("/subcategories").json() == ["Cafe", "Flights", "Tea"]
+    assert client.get("/subcategories", params={"category": "Food"}).json() == ["Cafe", "Tea"]
+    assert client.get("/subcategories", params={"category": "Travel"}).json() == ["Flights"]
+    assert client.get("/subcategories", params={"category": "Nothing"}).json() == []

@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     txn_type TEXT NOT NULL,
     reward_points REAL,
     category TEXT,
+    subcategory TEXT,
     FOREIGN KEY(statement_id) REFERENCES statements(id) ON DELETE CASCADE
 )
 """
@@ -66,4 +67,11 @@ CREATE TABLE IF NOT EXISTS transactions (
 ADD_CATEGORY_COLUMN = """
 ALTER TABLE transactions
 ADD COLUMN category TEXT
+"""
+
+# Same rules as category: NULL means "no subcategory", never an empty string,
+# and this stays identical to the CREATE TABLE column above.
+ADD_SUBCATEGORY_COLUMN = """
+ALTER TABLE transactions
+ADD COLUMN subcategory TEXT
 """

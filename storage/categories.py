@@ -29,7 +29,7 @@ def fuzzy_similarity(a: str, b: str) -> float:
 
 
 def _no_suggestion() -> dict:
-    return {"category": None, "confidence": 0.0, "match_type": "none"}
+    return {"value": None, "confidence": 0.0, "match_type": "none"}
 
 
 def _fetch_categorized(conn: sqlite3.Connection) -> "list[sqlite3.Row]":
@@ -46,32 +46,33 @@ def _fetch_categorized(conn: sqlite3.Connection) -> "list[sqlite3.Row]":
     definition of "case-insensitive".
     """
     return conn.execute(
-        "SELECT id, description, category FROM transactions "
+        "SELECT id, description, category, subcategory FROM transactions "
         "WHERE category IS NOT NULL ORDER BY id DESC"
     ).fetchall()
 
 
-def _fetch_targets(conn: sqlite3.Connection, transaction_ids: "list[int]") -> "dict[int, str]":
-    """id -> description for the given ids; raises if any id is unknown."""
+def _fetch_targets(conn: sqlite3.Connection, transaction_ids: "list[int]") -> "dict[int, sqlite3.Row]":
+    """id -> row (id, description, category) for the given ids; raises if any is unknown."""
     placeholders = ",".join("?" * len(transaction_ids))
     rows = conn.execute(
-        f"SELECT id, description FROM transactions WHERE id IN ({placeholders})",
+        f"SELECT id, description, category FROM transactions WHERE id IN ({placeholders})",
         transaction_ids,
     ).fetchall()
-    found = {row["id"]: row["description"] for row in rows}
+    found = {row["id"]: row for row in rows}
     missing = [i for i in transaction_ids if i not in found]
     if missing:
         raise TransactionNotFoundError(missing)
     return found
 
 
-def _suggest_from(
+def _suggest_category_from(
     target_id: int, description: str, categorized: "list[sqlite3.Row]"
 ) -> dict:
-    """The two-tier engine, over an already-fetched candidate list.
+    """The two-tier category engine, over an already-fetched candidate list.
 
-    Returns {"category": str | None, "confidence": float, "match_type": str}
-    where match_type is "exact", "fuzzy", or "none".
+    Returns {"value": str | None, "confidence": float, "match_type": str}
+    where match_type is "exact", "fuzzy", or "none". (The key was "category"
+    until Session 53 reshaped the response to carry a subcategory too.)
 
     `categorized` must be id-descending (as `_fetch_categorized` returns
     it) -- the tie-break relies on that order. The target itself is
@@ -115,7 +116,7 @@ def _suggest_from(
         counts = Counter(row["category"] for row in exact)
         category, count = counts.most_common(1)[0]
         return {
-            "category": category,
+            "value": category,
             "confidence": count / len(exact),
             "match_type": "exact",
         }
@@ -129,21 +130,75 @@ def _suggest_from(
         key=lambda row: fuzzy_similarity(needle, row["description"]),
     )
     ratio = fuzzy_similarity(needle, best["description"])
-    return {"category": best["category"], "confidence": ratio, "match_type": "fuzzy"}
+    return {"value": best["category"], "confidence": ratio, "match_type": "fuzzy"}
+
+
+def _suggest_subcategory_from(
+    target_id: int,
+    description: str,
+    category: "str | None",
+    categorized: "list[sqlite3.Row]",
+) -> "dict | None":
+    """Subcategory suggestion -- deliberately simpler than category's. No fuzzy tier.
+
+    - Category not yet set on the row -> None (the API renders it as null):
+      subcategory suggestion does not run until the row has a category.
+    - Otherwise, peers are OTHER rows with the same category (case-
+      insensitive), a non-null subcategory, and an exactly matching
+      description (casefold equality, nothing else normalised -- category
+      Tier 1's rule). If any: most frequent subcategory wins, confidence is
+      its share, ties break to the highest id via the same id-DESC ordering
+      + Counter.most_common() first-seen trick as Tier 1. match_type "exact".
+    - No peers (including a category nobody has sub-labelled yet) -> the
+      row's own category value, match_type "same_as_category", confidence
+      1.0. That 1.0 is a default, not a learned match; the frontend labels
+      it in words rather than as a percentage for exactly that reason.
+    """
+    if category is None:
+        return None
+    needle = description.casefold()
+    wanted = category.casefold()
+    peers = [
+        row
+        for row in categorized
+        if row["id"] != target_id
+        and row["subcategory"] is not None
+        and row["category"].casefold() == wanted
+        and row["description"].casefold() == needle
+    ]
+    if peers:
+        counts = Counter(row["subcategory"] for row in peers)
+        value, count = counts.most_common(1)[0]
+        return {"value": value, "confidence": count / len(peers), "match_type": "exact"}
+    return {"value": category, "confidence": 1.0, "match_type": "same_as_category"}
+
+
+def _suggest_from(target: sqlite3.Row, categorized: "list[sqlite3.Row]") -> dict:
+    """Both suggestions for one target row, in the response shape:
+    {"category": {...}, "subcategory": {...} | None}."""
+    return {
+        "category": _suggest_category_from(target["id"], target["description"], categorized),
+        "subcategory": _suggest_subcategory_from(
+            target["id"], target["description"], target["category"], categorized
+        ),
+    }
 
 
 def suggest_category(conn: sqlite3.Connection, transaction_id: int) -> dict:
-    """Suggest a category for one transaction from every OTHER categorized one.
+    """Suggest a category and subcategory for one transaction.
 
-    Search is global -- all cards, all statements. See `_suggest_from` for
-    the engine's rules; this is the single-id entry point over it.
+    Category search is global over every OTHER categorized transaction --
+    all cards, all statements; see `_suggest_category_from`. Subcategory
+    follows `_suggest_subcategory_from`. Returns
+    {"category": {value, confidence, match_type},
+     "subcategory": {value, confidence, match_type} | None}.
     """
     targets = _fetch_targets(conn, [transaction_id])
-    return _suggest_from(transaction_id, targets[transaction_id], _fetch_categorized(conn))
+    return _suggest_from(targets[transaction_id], _fetch_categorized(conn))
 
 
 def suggest_categories(conn: sqlite3.Connection, transaction_ids: "list[int]") -> "list[dict]":
-    """Suggest a category for each listed transaction, in input order.
+    """Suggestions for each listed transaction, in input order.
 
     Returns one dict per distinct id, each the single-id shape plus a
     "transaction_id" key. The categorized-transaction query runs exactly
@@ -159,9 +214,7 @@ def suggest_categories(conn: sqlite3.Connection, transaction_ids: "list[int]") -
         raise ValueError("transaction_ids must not be empty")
     targets = _fetch_targets(conn, ids)
     categorized = _fetch_categorized(conn)
-    return [
-        {"transaction_id": i, **_suggest_from(i, targets[i], categorized)} for i in ids
-    ]
+    return [{"transaction_id": i, **_suggest_from(targets[i], categorized)} for i in ids]
 
 
 def cluster_by_similarity(
@@ -226,49 +279,67 @@ def cluster_transactions(
     ids = list(dict.fromkeys(transaction_ids))
     if not ids:
         return []
-    descriptions = _fetch_targets(conn, ids)
-    return cluster_by_similarity([(i, descriptions[i]) for i in ids], threshold)
+    targets = _fetch_targets(conn, ids)
+    return cluster_by_similarity([(i, targets[i]["description"]) for i in ids], threshold)
 
 
 def assign_categories(
-    conn: sqlite3.Connection, assignments: "list[tuple[int, str]]"
+    conn: sqlite3.Connection,
+    assignments: "list[tuple[int, str | None, str | None]]",
 ) -> int:
-    """Write each (transaction_id, category) pair, unconditionally, in one transaction.
+    """Write each (transaction_id, category, subcategory) triple, in one transaction.
 
-    Overwrites any existing category. Returns the number of distinct
-    transactions updated. A uniform assignment is just N pairs with the
-    same category; a mixed one (accepting several different suggestions
-    at once) is N pairs with different categories -- either way one call,
-    one SQL transaction.
+    A None field means "leave that column as it is"; only the fields present
+    are written, unconditionally overwriting whatever was there (Session 53
+    -- until then every pair carried a category). Returns the number of
+    distinct transactions updated. A uniform assignment is just N triples
+    with the same values; a mixed one (accepting several different
+    suggestions at once) is N triples with different values -- either way
+    one call, one SQL transaction.
 
     All-or-nothing: if any id does not exist, TransactionNotFoundError is
     raised and nothing is written -- a bulk assign must never partially
     apply (the Session 17 invariant). The existence check and the UPDATEs
     share one `with conn:` block so a row can't vanish between them.
 
-    Identical duplicate pairs collapse and count once. The same id with two
-    *different* categories is rejected with ValueError rather than resolved
-    by position: it can only come from a client bug, and last-wins would
-    hide it.
-
-    Every category must be a non-empty string; NULL is the only
-    representation of "uncategorized" and this function never writes an
-    empty string. The caller is expected to have stripped/validated (the
-    API layer does).
+    Rules on the input:
+    - A triple with neither field raises ValueError.
+    - Identical duplicate triples collapse and count once. Two triples for
+      the same id that both set the same field to *different* values raise
+      ValueError rather than resolving by position: that can only be a
+      client bug, and last-wins would hide it. Two triples for the same id
+      setting *different* fields are merged into one row update.
+    - A present field must be a non-empty string; NULL is the only
+      representation of "unset" and this function never writes an empty
+      string. The caller is expected to have stripped/normalised (the API
+      layer does).
     """
     if not assignments:
         raise ValueError("assignments must not be empty")
 
-    by_id: "dict[int, str]" = {}
-    for transaction_id, category in assignments:
-        if not category:
-            raise ValueError("category must be a non-empty string")
-        previous = by_id.setdefault(transaction_id, category)
-        if previous != category:
+    # id -> {"category": ..., "subcategory": ...} for the fields present.
+    by_id: "dict[int, dict[str, str]]" = {}
+    for transaction_id, category, subcategory in assignments:
+        fields = {}
+        if category is not None:
+            fields["category"] = category
+        if subcategory is not None:
+            fields["subcategory"] = subcategory
+        if not fields:
             raise ValueError(
-                f"transaction {transaction_id} assigned conflicting categories: "
-                f"{previous!r} and {category!r}"
+                f"transaction {transaction_id}: at least one of category or subcategory is required"
             )
+        for column, value in fields.items():
+            if not value:
+                raise ValueError(f"{column} must be a non-empty string")
+        merged = by_id.setdefault(transaction_id, {})
+        for column, value in fields.items():
+            previous = merged.setdefault(column, value)
+            if previous != value:
+                raise ValueError(
+                    f"transaction {transaction_id} assigned conflicting {column} values: "
+                    f"{previous!r} and {value!r}"
+                )
 
     ids = sorted(by_id)
     placeholders = ",".join("?" * len(ids))
@@ -283,18 +354,21 @@ def assign_categories(
         if missing:
             raise TransactionNotFoundError(missing)
 
-        # One UPDATE per distinct category, not per row: the common case
-        # (accept a whole suggestion group, or assign one typed value) is
-        # still a single statement.
-        by_category: "dict[str, list[int]]" = {}
-        for transaction_id, category in by_id.items():
-            by_category.setdefault(category, []).append(transaction_id)
+        # One UPDATE per distinct (fields, values) combination, not per row:
+        # the common case (accept a whole suggestion group, or assign one
+        # typed value) is still a single statement.
+        by_update: "dict[tuple, list[int]]" = {}
+        for transaction_id, fields in by_id.items():
+            key = tuple(sorted(fields.items()))
+            by_update.setdefault(key, []).append(transaction_id)
         updated = 0
-        for category, group in by_category.items():
+        for key, group in by_update.items():
+            set_sql = ", ".join(f"{column} = ?" for column, _ in key)
+            values = [value for _, value in key]
             marks = ",".join("?" * len(group))
             cursor = conn.execute(
-                f"UPDATE transactions SET category = ? WHERE id IN ({marks})",
-                [category, *group],
+                f"UPDATE transactions SET {set_sql} WHERE id IN ({marks})",
+                [*values, *group],
             )
             updated += cursor.rowcount
     return updated
@@ -312,3 +386,21 @@ def list_categories(conn: sqlite3.Connection) -> "list[str]":
         "WHERE category IS NOT NULL ORDER BY category"
     ).fetchall()
     return [row["category"] for row in rows]
+
+
+def list_subcategories(conn: sqlite3.Connection, category: "str | None" = None) -> "list[str]":
+    """Sorted distinct subcategory values in use, optionally within one category.
+
+    Same role for subcategory as list_categories() has for category: there
+    is no predefined list, so this is the only source of "subcategories
+    you've used before". With `category`, only rows carrying that exact
+    category value are considered (values are Title-Cased on write, so an
+    exact comparison is a case-insensitive one in practice).
+    """
+    sql = "SELECT DISTINCT subcategory FROM transactions WHERE subcategory IS NOT NULL"
+    params: list = []
+    if category is not None:
+        sql += " AND category = ?"
+        params.append(category)
+    rows = conn.execute(sql + " ORDER BY subcategory", params).fetchall()
+    return [row["subcategory"] for row in rows]

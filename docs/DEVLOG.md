@@ -6449,3 +6449,122 @@ run — a manual look is the next step.
 Manual walk of similarity mode: badge legibility on rows with and without
 a suggestion, the ordering of open-vs-done groups, and that unfolding a
 done group and toggling back works as expected.
+
+## Session 53 — 2026-09-12
+
+### Goal
+Step 1 of a two-step build: a nullable `transactions.subcategory` column
+with its migration; a deliberately simple subcategory suggestion; and two
+**breaking** endpoint reshapes — the suggestion response now carries both
+labels, and the assign body's fields are optional. Step 2 is the frontend
+column.
+
+### What happened
+
+**Schema.** `subcategory TEXT`, nullable, added to
+`CREATE_TRANSACTIONS_TABLE` and as `ADD_SUBCATEGORY_COLUMN`;
+`_ensure_subcategory_column()` in `storage/db.py` is the third copy of the
+`table_xinfo`-check-then-`ALTER` idiom, so `init_db()` stays idempotent on
+fresh and pre-Session-53 databases. The fresh-DB and hand-built-legacy-DB
+migration tests now assert the new column too. `docs/DATA_MODEL.md` is
+updated in this commit: the migration list, the `transactions` table, a
+column note, and the `CREATE TABLE` reference. `GET /transactions` rows gain
+`subcategory` for free via `SELECT transactions.*` (one key-set assertion
+extended, as with `category` in Session 41).
+
+**Normalization.** One function, not a copy: `normalize_category()` is
+applied to both fields by the same Pydantic validator (`strip().title()`,
+reject empty). Its docstring now says so.
+
+**Subcategory suggestion — simpler on purpose.** `_suggest_subcategory_from`
+in `storage/categories.py`, with no fuzzy tier:
+
+- Row's `category` is `NULL` → `None` (rendered `null`): subcategory
+  suggestion does not run until the row has a category.
+- Else peers are *other* rows with the same category (casefold equality),
+  a non-null subcategory, and an exactly matching description — Tier 1's
+  rule, nothing else normalised. Most frequent subcategory wins, confidence
+  is its share, ties break to the highest id by the same id-`DESC` +
+  `Counter.most_common()` ordering trick Tier 1 uses. `match_type
+  "exact"`.
+- No peers (a fuzzy neighbour with a subcategory does *not* count; an exact
+  peer *without* one does not count) → the row's own `category` value,
+  `match_type "same_as_category"`, confidence `1.0`. That 1.0 is a
+  default, not evidence; Step 2 labels it in words for that reason.
+
+`_fetch_categorized` now also selects `subcategory` and `_fetch_targets`
+returns rows (id, description, category) instead of bare descriptions, so
+the batch path still makes **one** categorized query for both suggestions
+— the Session 42 call-count tests pass unchanged. `cluster_transactions`
+was touched only to read `["description"]` from the new row shape.
+
+**Breaking change 1 — suggestion response.** Both
+`GET /transactions/{id}/suggestion` and `POST /transactions/suggestions`
+(Sessions 41/42) now return
+`{"category": {"value", "confidence", "match_type"}, "subcategory": {...} | null}`
+in place of the flat `{"category", "confidence", "match_type"}`. The flat
+shape had no room for a second label without ambiguous key names
+(`category` was the *value*), so the value key is now `value` under each
+half. The old shape is gone, not tolerated alongside. Every test that read
+the flat shape was updated; a storage helper `_cat()` reads the category
+half so the Session 41 engine tests keep asserting exactly what they did.
+
+**Breaking change 2 — assign body.** `POST /transactions/category`'s
+entries are now `{transaction_id, category?, subcategory?}`; at least one
+must be present (a `model_validator` → 422 otherwise), and **only the
+fields present are written** — the other column is left untouched. Storage
+takes `(id, category | None, subcategory | None)` triples, merges entries
+for the same id that set *different* fields into one row update, still
+rejects two entries setting the same field to different values (422), and
+issues one `UPDATE` per distinct field-set/value combination, so the common
+cases remain a single statement. A consequence recorded in DATA_MODEL: a
+row *can* carry a subcategory with a `NULL` category — the endpoint does not
+forbid it, only the suggestion engine declines to suggest until category
+is set.
+
+**`GET /subcategories`** with optional `?category=`: sorted distinct
+non-null subcategory values, narrowed to rows with that exact category when
+given (values are Title-Cased on write, so exact is case-insensitive in
+practice).
+
+**Tests.** Storage: subcategory-only / category-only / both / merged-fields
+assignment, neither-field and conflicting-subcategory rejection,
+suggestion none-until-category, exact match with non-peers excluded on both
+axes, same-as-category fallback with the fuzzy-neighbour and no-subcategory
+exclusions, majority share, tie-break in both directions, case-insensitive
+category match with self-exclusion, batch carrying subcategory,
+`list_subcategories` filtered/unfiltered. API: subcategory-only with
+normalisation, category-only leaves subcategory, both together, four
+neither-field payloads → 422, conflicting subcategories → 422, single and
+batch suggestion shapes with exact / fallback / null, catalog filtered and
+unfiltered. Full suite: **347 passing** (325 + 22).
+
+### Outcome
+Every transaction can carry a subcategory under its category; the API
+suggests one from exact same-category, same-description peers or falls
+back to the category itself; either or both labels can be written in one
+atomic call; and the set of subcategories in use is queryable. Two endpoint
+shapes changed incompatibly, deliberately, and the tests pin the new ones.
+Verified by the suite only.
+
+### In plain English
+Transactions can now have a second, finer label underneath their category —
+"Coffee" under "Food", say. When a transaction already has a category, the
+system suggests a finer label by looking only at other transactions with
+the same merchant description *and* the same category that already carry
+one; if there are none, it suggests reusing the category name itself as a
+placeholder. That fallback is honest about being a default rather than a
+discovery, which is why it will be shown in words rather than as a
+percentage.
+
+Two things clients talk to changed shape: the suggestion reply now has two
+parts, one per label, and the labelling request can carry either label or
+both — whichever is sent is written, and the other is left as it was. The
+old formats are gone rather than kept alongside, so there is one way to do
+each thing.
+
+### Next steps
+Step 2: a Subcategory column in both tables with the suggestion badge
+(words for the fallback, a percentage for a learned match), a per-row
+change dropdown fed by `/subcategories?category=`, and no change to the
+multi-select bar.
