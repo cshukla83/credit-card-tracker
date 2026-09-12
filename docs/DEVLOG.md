@@ -6102,3 +6102,80 @@ not by seeing it run, so a manual look is still the next step.
 Manual walk: "All banks" → pick a card → confirm Bank snaps, Card stays,
 months/dates narrow, URL carries both; reload that URL; then change Bank and
 confirm Card resets as before.
+
+## Session 49 — 2026-09-12
+
+### Goal
+Normalize category values to Title Case server-side, at the assign
+endpoint's write path, so the stored form is consistent regardless of which
+client wrote it; backfill any existing rows under the same rule; test it.
+
+### What happened
+
+**The rule.** `main.py`'s category validator, previously
+`_strip_and_require_nonempty`, is now `normalize_category(value)`:
+`value.strip().title()`, then reject empty. It is applied by the Pydantic
+`field_validator` on `CategoryAssignment.category`, i.e. before the value
+reaches `assign_categories()` — the storage function still writes exactly
+what it is given, and its "caller validates" contract is unchanged. Because
+normalization happens before the pairs are folded, two pairs for the same
+id with `"travel"` and `"Travel"` are now *identical duplicates* (collapsed,
+`updated: 1`) rather than a conflict (422) — pinned by a test.
+
+**Deliberately simple.** `str.title()` capitalises after any non-letter, so
+`"mcdonald's"` → `"Mcdonald'S"` and `"e-commerce"` → `"E-Commerce"`. This
+is a known, accepted limitation, written in the function's docstring and
+pinned by a test so that changing it later is a decision, not drift. No
+special-casing was built; the trigger for revisiting is a real example
+causing a real problem, not the existence of the oddity.
+
+**Effect on the suggestion engine — none on matching, one on counting.**
+Tier 1's exact match is `casefold()` on *descriptions*, so which rows match
+is unchanged. What normalization does change is the majority vote *over
+categories*: before, `"food"` and `"Food"` were two competing categories
+splitting the share; now they are one. A test seeds three case variants and
+asserts the catalog holds a single entry. All Session 41 engine tests pass
+untouched.
+
+**Backfill.** Under the CONVENTIONS.md exception, scoped to exactly this:
+`normalize_category` was registered into SQLite as a function and one
+statement run —
+`UPDATE transactions SET category = normalize_category(category) WHERE
+category IS NOT NULL AND category != normalize_category(category)`.
+Counts only: **72 categorized rows, 10 distinct values, 0 rows changed**;
+a follow-up count confirmed 0 rows still differ from their normalized form.
+Every value written during manual testing already satisfied the rule, so
+the migration was a verified no-op rather than a correction. No values were
+printed or recorded.
+
+**Tests.** Six new in `tests/test_api.py`: five parametrised
+input → stored cases (`"food and dining"` → `"Food And Dining"`, all-caps,
+padded, alternating case, and the apostrophe oddity), plus the
+collapse-to-one-catalog-entry / duplicate-not-conflict test. Full suite:
+**299 passing** (293 + 6).
+
+The frontend needed no change: it already matches typeahead entries
+case-insensitively, sends whatever the user typed, and re-fetches the
+catalog after every write, so the normalized form appears immediately.
+
+### Outcome
+Every category reaching the database through the API is stripped and
+Title-Cased in one place; the live database already conformed; the rule and
+its one known oddity are tested and documented.
+
+### In plain English
+Category labels are now tidied automatically when they're saved — trimmed
+of stray spaces and put into Title Case — so "food", "FOOD" and "Food" all
+become the same "Food" no matter how they were typed or which screen sent
+them. This keeps the list of categories from filling up with near-duplicates
+and stops the suggestion engine from treating spelling variants as rival
+answers. The tidying rule is intentionally basic and is known to look odd
+on words with apostrophes; that's accepted and written down rather than
+worked around, until it actually causes trouble.
+
+The existing data was checked against the same rule in a single pass: all
+72 labelled transactions already conformed, so nothing needed changing.
+
+### Next steps
+None specific. Revisit `str.title()` only if a real category with an
+apostrophe or hyphen becomes a practical nuisance.

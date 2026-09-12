@@ -432,6 +432,59 @@ def test_assign_strips_category_whitespace(client, two_cards):
 
 
 @pytest.mark.parametrize(
+    "sent, stored",
+    [
+        ("food and dining", "Food And Dining"),
+        ("FOOD", "Food"),
+        ("  travel  ", "Travel"),
+        ("fOoD dElIvErY", "Food Delivery"),
+        # str.title() is deliberately simple: it capitalises after any
+        # non-letter. This oddity is the documented limitation, pinned so a
+        # change to it is a decision rather than an accident.
+        ("mcdonald's", "Mcdonald'S"),
+    ],
+)
+def test_assign_normalizes_category_to_title_case(client, two_cards, sent, stored):
+    ids = _ids(client)
+    response = client.post("/transactions/category", json=_pairs([ids[0]], sent))
+    assert response.status_code == 200
+    listed = {t["id"]: t["category"] for t in client.get("/transactions").json()}
+    assert listed[ids[0]] == stored
+
+
+def test_case_variants_collapse_to_one_catalog_entry_and_one_suggestion(client, two_cards):
+    # Without normalization "food" and "Food" would be two catalog entries
+    # and, for the suggestion engine's Tier 1 majority count, two competing
+    # categories with a 0.5 share each. With it they are one.
+    ids = _ids(client)
+    client.post(
+        "/transactions/category",
+        json={
+            "assignments": [
+                {"transaction_id": ids[1], "category": "food"},
+                {"transaction_id": ids[2], "category": "Food"},
+                {"transaction_id": ids[3], "category": "FOOD"},
+            ]
+        },
+    )
+    assert client.get("/categories").json() == ["Food"]
+    # Only one "food" entry on a single row in a mixed request, too.
+    response = client.post(
+        "/transactions/category",
+        json={
+            "assignments": [
+                {"transaction_id": ids[0], "category": "travel"},
+                {"transaction_id": ids[0], "category": "Travel"},
+            ]
+        },
+    )
+    # Same id, same category after normalization: identical duplicates
+    # collapse rather than being rejected as conflicting.
+    assert response.status_code == 200
+    assert response.json() == {"updated": 1}
+
+
+@pytest.mark.parametrize(
     "payload",
     [
         {"assignments": []},

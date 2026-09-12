@@ -187,11 +187,24 @@ def read_category_suggestions(body: SuggestionBatch, conn=Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"No such transaction(s): {e.missing_ids}")
 
 
-def _strip_and_require_nonempty(value: str) -> str:
-    # NULL is the only representation of "uncategorized", so an empty or
-    # whitespace-only category is rejected rather than stored. Stripping
-    # also keeps " Food" and "Food" from becoming two distinct categories.
-    value = value.strip()
+def normalize_category(value: str) -> str:
+    """The one place a category value is shaped before it is stored.
+
+    strip() then str.title(). NULL is the only representation of
+    "uncategorized", so an empty or whitespace-only category is rejected
+    rather than stored. Stripping keeps " Food" and "Food" from becoming
+    two catalog entries; title-casing keeps "food" and "Food" from doing
+    the same, whatever client sent them.
+
+    str.title() is a deliberately simple rule, not a smart title-caser:
+    it capitalises after any non-letter, so "mcdonald's" becomes
+    "Mcdonald'S" and "e-commerce" becomes "E-Commerce". Known and accepted
+    (Session 49) -- no special-casing until a real example causes a real
+    problem. Applied server-side so the stored form is consistent
+    regardless of what called the API; the Session 49 backfill applied the
+    same function to rows written before it existed.
+    """
+    value = value.strip().title()
     if not value:
         raise ValueError("category must not be empty")
     return value
@@ -201,7 +214,7 @@ class CategoryAssignment(BaseModel):
     transaction_id: int
     category: str
 
-    _clean = field_validator("category")(_strip_and_require_nonempty)
+    _clean = field_validator("category")(normalize_category)
 
 
 class CategoryAssignmentBatch(BaseModel):
