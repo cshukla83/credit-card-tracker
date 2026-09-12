@@ -528,15 +528,15 @@
   <div id="filters">
     <div class="filter-row">
       <label>
-        Card
-        <select id="card-filter">
-          <option value="">All cards</option>
+        Bank
+        <select id="bank-filter">
+          <option value="">All banks</option>
         </select>
       </label>
       <label>
-        Bank / card type
-        <select id="bank-card-type-filter">
-          <option value="">All banks &amp; card types</option>
+        Card
+        <select id="card-filter" disabled>
+          <option value="">All cards</option>
         </select>
       </label>
     </div>
@@ -606,8 +606,8 @@
     const statusEl = document.getElementById("status");
     const tableEl = document.getElementById("transactions-table");
     const bodyEl = document.getElementById("transactions-body");
+    const bankFilterEl = document.getElementById("bank-filter");
     const cardFilterEl = document.getElementById("card-filter");
-    const bankCardTypeFilterEl = document.getElementById("bank-card-type-filter");
     const statementMonthFilterEl = document.getElementById("statement-month-filter");
     const startFilterEl = document.getElementById("start-filter");
     const endFilterEl = document.getElementById("end-filter");
@@ -668,33 +668,36 @@
       }).then(handleResponse);
     }
 
-    function currentBankCardType() {
-      if (!bankCardTypeFilterEl.value) return { bank: "", cardType: "" };
-      const parsed = JSON.parse(bankCardTypeFilterEl.value);
-      return { bank: parsed.bank, cardType: parsed.card_type };
-    }
-
     function currentFilters() {
-      const { bank, cardType } = currentBankCardType();
       return {
+        bank: bankFilterEl.value,
         cardId: cardFilterEl.value,
         statementMonth: statementMonthFilterEl.value,
-        bank,
-        cardType,
         start: startFilterEl.value,
         end: endFilterEl.value,
       };
     }
 
-    function buildParams(filters) {
+    // Query params for a filter set. `omit` names filters to leave out --
+    // that is how a picker's own options are computed "as if it were not
+    // set", so a picker can never narrow itself out of the options it needs
+    // to change its own value.
+    function buildParams(filters, omit) {
+      const skip = new Set(omit || []);
       const params = new URLSearchParams();
-      if (filters.cardId) params.set("card_id", filters.cardId);
-      if (filters.statementMonth) params.set("statement_month", filters.statementMonth);
-      if (filters.bank) params.set("bank", filters.bank);
-      if (filters.cardType) params.set("card_type", filters.cardType);
-      if (filters.start) params.set("start", filters.start);
-      if (filters.end) params.set("end", filters.end);
+      if (filters.bank && !skip.has("bank")) params.set("bank", filters.bank);
+      if (filters.cardId && !skip.has("cardId")) params.set("card_id", filters.cardId);
+      if (filters.statementMonth && !skip.has("statementMonth")) {
+        params.set("statement_month", filters.statementMonth);
+      }
+      if (filters.start && !skip.has("start")) params.set("start", filters.start);
+      if (filters.end && !skip.has("end")) params.set("end", filters.end);
       return params;
+    }
+
+    function withParams(path, params) {
+      const query = params.toString();
+      return path + (query ? "?" + query : "");
     }
 
     function updateURL(filters) {
@@ -705,14 +708,33 @@
         params.set("tab", "review");
         if (!uncategorizedOnlyEl.checked) params.set("uncategorized", "0");
       }
-      const query = params.toString();
-      const newURL = window.location.pathname + (query ? "?" + query : "");
-      window.history.replaceState(null, "", newURL);
+      window.history.replaceState(null, "", withParams(window.location.pathname, params));
     }
 
     function transactionsURL(filters) {
-      const query = buildParams(filters).toString();
-      return "/transactions" + (query ? "?" + query : "");
+      return withParams("/transactions", buildParams(filters));
+    }
+
+    // The date inputs' "options" are their min/max bounds: the earliest and
+    // latest transaction dates given every filter *except* the dates. When
+    // no date is set, the table's own result is exactly that set, so the
+    // loaders pass it here for free; only when a date is set does
+    // recomputeOptions() fetch the undated set separately.
+    function applyDateBounds(transactions) {
+      let min = "", max = "";
+      for (const t of transactions) {
+        if (!min || t.txn_date < min) min = t.txn_date;
+        if (!max || t.txn_date > max) max = t.txn_date;
+      }
+      for (const el of [startFilterEl, endFilterEl]) {
+        if (min) el.min = min; else el.removeAttribute("min");
+        if (max) el.max = max; else el.removeAttribute("max");
+        el.title = min ? "Data from " + min + " to " + max : "";
+      }
+    }
+
+    function hasDateFilter(filters) {
+      return Boolean(filters.start || filters.end);
     }
 
     // The stored txn_type is lowercase ("debit"/"credit"); it's shown
@@ -779,6 +801,7 @@
       fetchJSON(transactionsURL(filters))
         .then((transactions) => {
           if (seq !== requestSeq) return; // a newer request has since been issued
+          if (!hasDateFilter(filters)) applyDateBounds(transactions);
           renderTransactions(transactions);
         })
         .catch((error) => {
@@ -966,6 +989,7 @@
       return Promise.all([transactionsP, suggestionsP, catalogP])
         .then(([transactions, suggestionBody, catalog]) => {
           if (seq !== requestSeq) return;
+          if (!hasDateFilter(filters)) applyDateBounds(transactions);
           review.transactions = transactions;
           review.suggestions = new Map(
             suggestionBody.suggestions.map((s) => [s.transaction_id, s]),
@@ -1421,7 +1445,13 @@
       panelAllEl.style.display = isReview ? "none" : "";
       panelReviewEl.style.display = isReview ? "" : "none";
       uncategorizedOnlyLabelEl.style.display = isReview ? "" : "none";
-      if (load) onFilterChange();
+      if (load) {
+        // Filters didn't change, so the pickers' options don't need
+        // recomputing -- only the table for the newly active tab.
+        const filters = currentFilters();
+        updateURL(filters);
+        loadActiveTab(filters);
+      }
     }
 
     function loadActiveTab(filters) {
@@ -1432,70 +1462,110 @@
     // ------------------------------------------------------------------
     // Filter pickers + initial load
     // ------------------------------------------------------------------
-    function populateCardPicker(cards) {
-      if (cards.length === 0) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "No cards with statements yet";
-        option.disabled = true;
-        option.selected = true;
-        cardFilterEl.appendChild(option);
-        return;
-      }
-
-      for (const card of cards) {
-        const option = document.createElement("option");
-        option.value = String(card.id);
-        option.textContent =
-          card.bank + " " + card.card_type + (card.nickname ? " (" + card.nickname + ")" : "");
-        cardFilterEl.appendChild(option);
-      }
+    function cardLabel(card) {
+      return card.nickname ? card.card_type + " \u2014 " + card.nickname : card.card_type;
     }
 
-    function populateStatementMonthPicker(statementMonths) {
-      if (statementMonths.length === 0) {
+    // Rebuild a <select>'s options, keeping its current value selected. If
+    // the current value is no longer among the narrowed options it is kept
+    // -- flagged, not silently cleared -- so the user sees why the table is
+    // empty and can change it themselves; nothing changes filter state
+    // behind their back.
+    function setOptions(select, allLabel, options, current, emptyLabel) {
+      select.textContent = "";
+      const all = document.createElement("option");
+      all.value = "";
+      all.textContent = options.length || !emptyLabel ? allLabel : emptyLabel;
+      select.appendChild(all);
+      let seen = false;
+      for (const o of options) {
         const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "No statement months yet";
-        option.disabled = true;
-        option.selected = true;
-        statementMonthFilterEl.appendChild(option);
-        return;
+        option.value = o.value;
+        option.textContent = o.label;
+        if (o.value === current) seen = true;
+        select.appendChild(option);
       }
-
-      for (const month of statementMonths) {
-        const option = document.createElement("option");
-        option.value = month;
-        option.textContent = month;
-        statementMonthFilterEl.appendChild(option);
+      if (current && !seen) {
+        const stale = document.createElement("option");
+        stale.value = current;
+        stale.textContent = current + " (no matching data)";
+        select.appendChild(stale);
       }
+      select.value = current;
     }
 
-    function populateBankCardTypePicker(cardTypes) {
-      if (cardTypes.length === 0) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "No banks/card types yet";
-        option.disabled = true;
-        option.selected = true;
-        bankCardTypeFilterEl.appendChild(option);
-        return;
-      }
+    // Out-of-order guard for the option fetches, separate from the table's
+    // requestSeq: both run on every filter change, and a slow options
+    // response for an older filter set must not repopulate the pickers
+    // after a newer one has.
+    let optionsSeq = 0;
 
-      for (const pair of cardTypes) {
-        const option = document.createElement("option");
-        option.value = JSON.stringify({ bank: pair.bank, card_type: pair.card_type });
-        option.textContent = pair.bank + " " + pair.card_type;
-        bankCardTypeFilterEl.appendChild(option);
-      }
+    // Bidirectional narrowing: every picker's options are recomputed from
+    // the listing endpoints with every filter applied except the picker's
+    // own. Card is subordinate to Bank, so Bank's options also leave Card
+    // out (otherwise choosing a card would pin the bank list to one entry
+    // and the user could never switch banks without clearing the card).
+    function recomputeOptions(filters) {
+      const seq = ++optionsSeq;
+
+      const banksP = fetchJSON(
+        withParams("/card-types", buildParams(filters, ["bank", "cardId"])),
+      );
+      const cardsP = filters.bank
+        ? fetchJSON(withParams("/cards", buildParams(filters, ["cardId"])))
+        : Promise.resolve([]);
+      const monthsP = fetchJSON(
+        withParams("/statement-months", buildParams(filters, ["statementMonth"])),
+      );
+      const boundsP = hasDateFilter(filters)
+        ? fetchJSON(withParams("/transactions", buildParams(filters, ["start", "end"])))
+        : Promise.resolve(null);
+
+      return Promise.all([banksP, cardsP, monthsP, boundsP])
+        .then(([cardTypes, cards, months, undated]) => {
+          if (seq !== optionsSeq) return; // a newer filter set has since been issued
+          const banks = Array.from(new Set(cardTypes.map((p) => p.bank)));
+          setOptions(
+            bankFilterEl,
+            "All banks",
+            banks.map((b) => ({ value: b, label: b })),
+            filters.bank,
+            "No banks with data",
+          );
+          setOptions(
+            cardFilterEl,
+            "All cards",
+            cards.map((c) => ({ value: String(c.id), label: cardLabel(c) })),
+            filters.cardId,
+            filters.bank ? "No cards with data" : "All cards",
+          );
+          cardFilterEl.disabled = !filters.bank;
+          setOptions(
+            statementMonthFilterEl,
+            "All months",
+            months.map((m) => ({ value: m, label: m })),
+            filters.statementMonth,
+            "No statement months",
+          );
+          if (undated !== null) applyDateBounds(undated);
+        })
+        .catch(() => {
+          // Options are a convenience layer over the table; a failed
+          // options fetch leaves the pickers as they were, and the table's
+          // own error path reports the problem.
+        });
     }
 
-    function fetchFiltersThenTransactions() {
+    // On load the URL is the source of truth. Card and month are validated
+    // against the *unfiltered* lists so a stale or hand-typed value falls
+    // back to "all" rather than sticking as an invisible filter; the bank
+    // is taken from the card when a card is given (the card wins), else
+    // from the URL.
+    function initFromURL() {
       const params = new URLSearchParams(window.location.search);
+      const urlBank = params.get("bank") || "";
       const urlCardId = params.get("card_id") || "";
       const urlStatementMonth = params.get("statement_month") || "";
-      const urlBank = params.get("bank") || "";
-      const urlCardType = params.get("card_type") || "";
       const urlStart = params.get("start") || "";
       const urlEnd = params.get("end") || "";
       const urlTab = params.get("tab") === "review" ? "review" : "all";
@@ -1508,49 +1578,37 @@
       statusEl.textContent = "Loading…";
       reviewStatusEl.textContent = "Loading…";
 
-      // /cards, /statement-months, and /card-types are independent of each
-      // other, so they're fetched together -- but all three must resolve
-      // before /transactions is fetched, since hydrating filter values from
-      // the URL requires validating them against these three lists first.
-      Promise.all([
-        fetchJSON("/cards"),
-        fetchJSON("/statement-months"),
-        fetchJSON("/card-types"),
-      ])
-        .then(([cards, statementMonths, cardTypes]) => {
-          populateCardPicker(cards);
-          populateStatementMonthPicker(statementMonths);
-          populateBankCardTypePicker(cardTypes);
-
-          const knownCardIds = new Set(cards.map((card) => String(card.id)));
-          const resolvedCardId = knownCardIds.has(urlCardId) ? urlCardId : "";
-          cardFilterEl.value = resolvedCardId;
-
-          const knownMonths = new Set(statementMonths);
-          const resolvedStatementMonth = knownMonths.has(urlStatementMonth)
-            ? urlStatementMonth
-            : "";
-          statementMonthFilterEl.value = resolvedStatementMonth;
-
-          const matchingPair =
-            urlBank && urlCardType
-              ? cardTypes.find(
-                  (pair) => pair.bank === urlBank && pair.card_type === urlCardType,
-                )
-              : undefined;
-          bankCardTypeFilterEl.value = matchingPair
-            ? JSON.stringify({ bank: matchingPair.bank, card_type: matchingPair.card_type })
-            : "";
-
+      Promise.all([fetchJSON("/cards"), fetchJSON("/statement-months")])
+        .then(([cards, statementMonths]) => {
+          const card = cards.find((c) => String(c.id) === urlCardId);
+          const knownBanks = new Set(cards.map((c) => c.bank));
+          const bank = card ? card.bank : knownBanks.has(urlBank) ? urlBank : "";
           const filters = {
-            cardId: resolvedCardId,
-            statementMonth: resolvedStatementMonth,
-            bank: matchingPair ? matchingPair.bank : "",
-            cardType: matchingPair ? matchingPair.card_type : "",
+            bank,
+            cardId: card ? String(card.id) : "",
+            statementMonth: statementMonths.includes(urlStatementMonth) ? urlStatementMonth : "",
             start: urlStart,
             end: urlEnd,
           };
+          // Seed the selects with the resolved values so currentFilters()
+          // reads them back; recomputeOptions() then fills in the options.
+          setOptions(bankFilterEl, "All banks", bank ? [{ value: bank, label: bank }] : [], bank);
+          setOptions(
+            cardFilterEl,
+            "All cards",
+            card ? [{ value: String(card.id), label: cardLabel(card) }] : [],
+            filters.cardId,
+          );
+          setOptions(
+            statementMonthFilterEl,
+            "All months",
+            filters.statementMonth
+              ? [{ value: filters.statementMonth, label: filters.statementMonth }]
+              : [],
+            filters.statementMonth,
+          );
           updateURL(filters);
+          recomputeOptions(filters);
           loadActiveTab(filters);
         })
         .catch((error) => {
@@ -1562,7 +1620,14 @@
     function onFilterChange() {
       const filters = currentFilters();
       updateURL(filters);
+      recomputeOptions(filters);
       loadActiveTab(filters);
+    }
+
+    function onBankChange() {
+      // Card is a child of Bank: a new bank always means "all cards" of it.
+      cardFilterEl.value = "";
+      onFilterChange();
     }
 
     function onDateInput() {
@@ -1570,8 +1635,8 @@
       debounceTimer = setTimeout(onFilterChange, DEBOUNCE_MS);
     }
 
+    bankFilterEl.addEventListener("change", onBankChange);
     cardFilterEl.addEventListener("change", onFilterChange);
-    bankCardTypeFilterEl.addEventListener("change", onFilterChange);
     statementMonthFilterEl.addEventListener("change", onFilterChange);
     startFilterEl.addEventListener("input", onDateInput);
     endFilterEl.addEventListener("input", onDateInput);
@@ -1587,7 +1652,7 @@
     tabAllEl.addEventListener("click", () => setTab("all", true));
     tabReviewEl.addEventListener("click", () => setTab("review", true));
 
-    fetchFiltersThenTransactions();
+    initFromURL();
   </script>
 </body>
 </html>

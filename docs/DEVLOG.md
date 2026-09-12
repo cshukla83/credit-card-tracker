@@ -5835,3 +5835,116 @@ built on.
 Step 2: replace the card and bank/card-type pickers with a Bank → Card
 cascade, and recompute every picker's options from these endpoints whenever
 any filter changes, under the same fetch-sequencing guard the table uses.
+
+## Session 46 — 2026-09-12
+
+### Goal
+Step 2 of the two-step build: replace the frontend's separate "card" and
+"bank / card type" pickers with a Bank → Card cascade, and make every filter
+narrow every other filter's options using the Session 45 endpoints — on both
+tabs, under the same URL-as-truth and fetch-sequencing rules already
+documented in STATE.md.
+
+### What happened
+
+**Cascade.** The filter bar is now Bank, Card, Statement month, Start, End
+(+ the review-only "Uncategorized only"). Card is populated from
+`GET /cards?bank=<bank>` and labelled `{card_type} — {nickname}`, or
+`{card_type}` alone when the nickname is null (no dangling dash). Card is
+disabled until a bank is chosen, and choosing a different bank resets Card
+to "All cards" — a card belongs to one bank, so any other value would be a
+lie. "All banks" and "All cards" remain available. The old `card_type`
+query param is no longer read from or written to the URL; `card_id` carries
+the more specific fact and `bank` the less specific one. When a URL carries
+a `card_id`, the bank is taken from that card (the card wins over a
+conflicting `bank` param).
+
+**Narrowing.** `buildParams(filters, omit)` gained an `omit` list, and every
+picker's options are fetched "as if it were not set":
+
+| picker | endpoint | filters applied |
+|---|---|---|
+| Bank | `/card-types` → distinct banks | month, start, end |
+| Card | `/cards` | bank, month, start, end |
+| Statement month | `/statement-months` | bank, card, start, end |
+| Start / End bounds | `/transactions` | bank, card, month |
+
+Bank additionally leaves *Card* out, not just itself: Card is subordinate,
+and if the bank list were narrowed by the selected card it would collapse to
+one bank and the user could never switch banks without first clearing the
+card. This is the one place the rule "exclude only the filter's own
+selection" was bent, and for that stated reason.
+
+The date inputs have no dropdown, so their "options" are their `min`/`max`
+attributes plus a hover title: the earliest and latest transaction dates in
+the undated set. That set is fetched separately only when a date filter is
+actually set; when none is, the table's own result *is* the undated set and
+the loaders pass it to `applyDateBounds()` for free, so the common case costs
+no extra request. The separate fetch is a full `/transactions` list; at this
+project's data size that is negligible, and if it ever isn't, a min/max
+endpoint is the fix — noted, not built.
+
+**A selection that the narrowing invalidates is kept, not cleared.** If a
+month is selected and the user then picks a card that has no statement in
+that month, the month stays selected but is rendered as `March-2026 (no
+matching data)`, and the table shows the honest empty result. The
+alternative — silently clearing the month — would change filter state (and
+the URL) behind the user's back and could cascade into further recomputes.
+Keeping it visible and flagged lets the user see *why* the table is empty and
+decide.
+
+**Sequencing.** Option fetches got their own counter, `optionsSeq`, separate
+from the table's `requestSeq`: both fire on every filter change, and a slow
+options response for an older filter set must not repopulate the pickers
+after a newer one already has. The four option requests for one filter set
+are awaited together and applied only if the sequence still matches. A
+failed options fetch leaves the pickers as they were — options are a
+convenience layer over the table, and the table's own error path reports
+problems. Switching tabs reloads the table only; the filters did not change,
+so the options are not recomputed.
+
+**Load.** `initFromURL()` fetches the *unfiltered* `/cards` and
+`/statement-months` once to validate the URL's `card_id` and
+`statement_month` (a stale or hand-typed value falls back to "all" rather
+than sticking as an invisible filter), resolves the bank, seeds the selects
+with just the resolved values so `currentFilters()` reads them back, then
+runs `recomputeOptions()` and the table load in parallel. `replaceState`
+throughout, as before.
+
+**Verification.** Script parsed with the system JavaScriptCore; no leftover
+references to the removed elements or helpers (grep). Backend suite
+unaffected (293). The browser extension was again unavailable, so — as in
+Sessions 43 and 44 — **the screen has not been seen rendered** and the
+behaviour above is what the code specifies.
+
+### Outcome
+One filter bar, shared by both tabs, whose pickers describe each other:
+pick a card and the months shrink to that card's; pick a month and the banks
+and cards shrink to those with data in it; set a date range and everything
+else follows, with the date inputs bounded by the real data. URL state and
+out-of-order protection are preserved, with a second sequence counter
+guarding the pickers themselves.
+
+### In plain English
+Choosing a bank now offers only that bank's cards, and every filter in the
+bar reshapes the others: pick a card and the month list shrinks to the
+months that card actually has, pick a month and the bank and card lists
+shrink to those with activity in it, set a date range and all of them follow
+— with the date boxes themselves bounded by the earliest and latest real
+dates. A filter never narrows its own list, so nothing you choose can ever
+hide the choices you'd need to change your mind.
+
+If a combination stops making sense — say a month is chosen and then a card
+that has nothing in that month — the choice is left in place and marked
+rather than quietly removed, so the empty result is explained instead of
+mysterious. Filter changes and option updates each carry a sequence number,
+so a slow reply about an old combination can't overwrite a newer one. As
+with the last two sessions, the page could not be viewed in a browser from
+here, so a manual look is the next step.
+
+### Next steps
+Manual walk of the cascade and narrowing against the seeded data (all four
+banks): bank → card, month narrowing per card, date bounds, the "(no
+matching data)" state, URL round-trip with `card_id` and with only `bank`,
+and the pickers under rapid filter changes. Decide whether a min/max-date
+endpoint is warranted once real usage shows the undated fetch's cost.
