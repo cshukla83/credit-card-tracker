@@ -167,6 +167,15 @@ totals, and every one of them is covered by a committed integration test.
   Neither was built because the brief scoped that session to the system
   font stack and to styling within the existing layout. Both are open for
   a future, separately scoped frontend session; neither blocks anything.
+- No min/max-date endpoint (Session 46). The frontend bounds the Start
+  and End date inputs by the earliest and latest transaction dates in the
+  undated filtered set. When no date filter is set, the table's own
+  result is that set and no extra request is made; when one *is* set,
+  the frontend fetches the full undated `/transactions` list just to
+  derive two dates. Deliberately not built as an endpoint: at this
+  project's data size the extra fetch is negligible. Revisit — a small
+  `GET /transactions/date-range` taking the same filters — only if real
+  usage shows the undated fetch's cost.
 
 ## Next arc
 
