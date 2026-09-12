@@ -7306,3 +7306,102 @@ overwrite labels someone has since adjusted.
 Step 3b: the review-screen checkbox and its confirmation dialogs (frontend),
 then the Module 3 aggregation endpoint that excludes `is_payment` rows from
 spend.
+
+## Session 62 — 2026-09-12
+
+### Goal
+Step 3a, frontend: a card-payment checkbox on the Review & assign screen,
+credit rows only, in both grouping modes, that opens a custom confirmation
+modal before calling Session 61's cascade endpoint and then reflects the
+cascade's guaranteed result locally. `static/index.html` only.
+
+### What happened
+
+**Column.** A ninth column, "card payment", after Subcategory on the
+Review & assign table (group header `colSpan` 8 → 9). `renderPaymentCell()`
+renders a checkbox only when `txn_type === "credit"`; a debit's cell is
+empty — no disabled control, no placeholder — matching the project's habit
+of not showing controls that can't act. The All transactions tab is
+untouched: it does not display the flag at all.
+
+**The box never toggles itself.** The checkbox's `click` is
+`preventDefault`ed and stopped, so the browser does not flip it; the modal
+is opened instead, and the box is redrawn from row state after the write
+succeeds (or not at all). Cancel, Escape, and a backdrop click all resolve
+the modal as "no" and change nothing — no request, no visual change.
+
+**First modal in the app, built reusable.** One overlay + dialog in the
+markup (`role="dialog"`, `aria-modal`, labelled by its title and message),
+styled from the existing CSS variables and font stack; `showModal({title,
+message, confirmLabel, cancelLabel})` returns a `Promise<boolean>`. Focus
+moves to Confirm on open and returns to the opener on close; a second call
+while one is open resolves false rather than stacking. Clicks inside the
+dialog are stopped so the document-level "close editors" listener doesn't
+fire.
+
+**Messages** are the locked texts, with one adaptation forced by the data
+the row actually has — see below. The check message names the bank when
+it is known and otherwise says "the card's bank name"; the uncheck message
+is verbatim.
+
+**Wiring.** Confirm posts `{transaction_id, is_payment: true|false}` to
+`POST /transactions/category` — no client-side cascade logic. On success
+the row object is updated to what the endpoint's contract guarantees:
+check → `is_payment = 1`, category and subcategory = "Credit Card Payment",
+merchant = bank; uncheck → flag 0 and all three labels `null`. Then
+`renderReview()` regroups — a checked row simply lands under "Credit Card
+Payment" in suggested-category mode (or leaves view under "Uncategorized
+only"), no special-casing. On uncheck the row re-enters the suggestion flow
+exactly as any open row: since suggestions are only ever fetched for open
+rows, this one's are fetched now (one id through the batch endpoint) so its
+badges appear; if that fetch fails the write still stands and the row
+shows "needs a category". A 400/422 shows inline in the row's payment cell
+("Not saved: …"), the row state is unchanged, and the box is redrawn
+unchecked/checked as it was; the next successful load clears it.
+
+**A brief assumption that doesn't hold, and what was done about it.** The
+brief interpolates the bank "from the row's already-known card/bank data".
+`/transactions` rows are `SELECT transactions.*` — no bank, no card id — and
+`/cards` does not expose statement ids, so the frontend cannot map a row to
+its bank on its own. What it *does* know is the Bank filter: when a bank
+is selected (and picking a card snaps Bank to that card's bank, so that
+case is covered), the name is interpolated and the merchant is set locally
+after success, exactly per the brief. Under "All banks" the modal says
+"the card's bank name" instead, and — as the one deviation from "no second
+fetch" — after a successful check the row's merchant is re-read from the
+API so the screen shows the real bank rather than a guess or a blank. The
+proper fix is a backend one (a bank or card id on `/transactions` rows),
+out of this prompt's scope and flagged for decision.
+
+**Verification.** Script parsed with the system JavaScriptCore. **Reasoned
+through only — not verified visually**: the browser extension was not
+available this session, as in every frontend session since 43. No server,
+no live request, no frontend test suite invented. Backend suite unaffected
+(396).
+
+### Outcome
+Credit rows on the review screen carry a card-payment checkbox that asks
+before it acts, writes through the cascade endpoint, and reflects the
+result without a reload — in both grouping modes, with the All transactions
+tab untouched.
+
+### In plain English
+On the review screen, every incoming-money row now has a tick-box for "this
+was me paying my card bill". Ticking or unticking it first shows a small
+confirmation window explaining what will happen — the row's labels will be
+set to "Credit Card Payment" with the bank as the merchant, or cleared back
+to empty — and nothing changes until you confirm; cancelling leaves the box
+exactly as it was. Purchases show no box at all, since they can never be a
+bill payment.
+
+One thing the instructions assumed turned out not to be true: each row
+doesn't know which bank it belongs to. When a bank is chosen in the filters
+the message names it; otherwise it says "the card's bank" and, after
+saving, the row is re-read so the real bank appears. As with every screen
+change since the review screen was built, this was checked by reading the
+code rather than seeing it run.
+
+### Next steps
+Decide whether `/transactions` rows should carry the bank (or card id), which
+would remove the re-read and let the modal always name the bank. Then the
+Module 3 aggregation endpoint, excluding `is_payment` rows from spend.

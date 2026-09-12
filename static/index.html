@@ -190,6 +190,68 @@
     font-size: 0.9rem;
     margin: -0.4rem 0 0.9rem;
   }
+  /* --- modal ---------------------------------------------------------- */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    background: rgba(31, 35, 40, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+  .modal {
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-pop);
+    max-width: 30rem;
+    width: 100%;
+    padding: 1.25rem 1.4rem 1.1rem;
+  }
+  .modal-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 0 0 0.6rem;
+  }
+  .modal-message {
+    margin: 0 0 1.1rem;
+    line-height: 1.5;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.6rem;
+  }
+  .modal-actions button.small {
+    font-size: 0.9rem;
+    padding: 0.4rem 0.9rem;
+  }
+  .modal-actions button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .modal-actions button.primary:hover:not(:disabled) {
+    background: var(--accent-ink);
+    border-color: var(--accent-ink);
+    color: #fff;
+  }
+  /* --- card payment cell ------------------------------------------------ */
+  th.payment, td.payment {
+    width: 7rem;
+    text-align: center;
+  }
+  td.payment .row-error {
+    display: block;
+    color: var(--danger);
+    font-size: 0.78rem;
+    text-align: left;
+    white-space: normal;
+    margin-top: 0.3rem;
+  }
   .nothing-left {
     background: var(--surface);
     border: 1px dashed var(--rule-strong);
@@ -732,10 +794,25 @@
           <th>merchant</th>
           <th>category</th>
           <th>subcategory</th>
+          <th class="payment">card payment</th>
         </tr>
       </thead>
       <tbody id="review-body"></tbody>
     </table>
+  </div>
+
+  <!-- Reusable confirmation modal (first modal in the app, Session 62).
+       Hidden until showModal() opens it. -->
+  <div id="modal-overlay" class="modal-overlay" style="display: none;">
+    <div id="modal" class="modal" role="dialog" aria-modal="true"
+         aria-labelledby="modal-title" aria-describedby="modal-message">
+      <h2 id="modal-title" class="modal-title"></h2>
+      <p id="modal-message" class="modal-message"></p>
+      <div class="modal-actions">
+        <button type="button" id="modal-cancel" class="small">Cancel</button>
+        <button type="button" id="modal-confirm" class="small primary">Confirm</button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -967,6 +1044,61 @@
     }
 
     // ------------------------------------------------------------------
+    // Confirmation modal (reusable)
+    // ------------------------------------------------------------------
+    // showModal({title, message, confirmLabel, cancelLabel}) -> Promise<bool>.
+    // Resolves true on Confirm, false on Cancel, Escape, or a click on the
+    // backdrop. One instance in the DOM; only one dialog can be open at a
+    // time (a second call while open resolves false immediately). Focus
+    // moves to Confirm on open and back to the opener on close.
+    const modalOverlayEl = document.getElementById("modal-overlay");
+    const modalTitleEl = document.getElementById("modal-title");
+    const modalMessageEl = document.getElementById("modal-message");
+    const modalCancelEl = document.getElementById("modal-cancel");
+    const modalConfirmEl = document.getElementById("modal-confirm");
+    let modalResolve = null;
+
+    function closeModal(result) {
+      if (!modalResolve) return;
+      const resolve = modalResolve;
+      modalResolve = null;
+      modalOverlayEl.style.display = "none";
+      const opener = modalOverlayEl._opener;
+      modalOverlayEl._opener = null;
+      if (opener && typeof opener.focus === "function") opener.focus();
+      resolve(result);
+    }
+
+    function showModal({ title, message, confirmLabel, cancelLabel }) {
+      if (modalResolve) return Promise.resolve(false);
+      modalTitleEl.textContent = title || "Confirm";
+      modalMessageEl.textContent = message;
+      modalConfirmEl.textContent = confirmLabel || "Confirm";
+      modalCancelEl.textContent = cancelLabel || "Cancel";
+      modalOverlayEl._opener = document.activeElement;
+      modalOverlayEl.style.display = "";
+      modalConfirmEl.focus();
+      return new Promise((resolve) => {
+        modalResolve = resolve;
+      });
+    }
+
+    modalConfirmEl.addEventListener("click", () => closeModal(true));
+    modalCancelEl.addEventListener("click", () => closeModal(false));
+    modalOverlayEl.addEventListener("click", (event) => {
+      if (event.target === modalOverlayEl) closeModal(false);
+    });
+    modalOverlayEl.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        closeModal(false);
+      }
+    });
+    // Clicks inside the modal must not reach the document listener that
+    // closes editors and menus.
+    document.getElementById("modal").addEventListener("click", (e) => e.stopPropagation());
+
+    // ------------------------------------------------------------------
     // Tab: Review & assign
     // ------------------------------------------------------------------
     // All state for the review screen lives here. Every render reads from
@@ -979,6 +1111,7 @@
       merchants: [],          // GET /merchants, sorted (dropdown + typeahead)
       merchantQuery: "",      // selection-bar merchant typeahead text
       bulkField: "category",  // which field's bulk controls the bar shows; display-only
+      rowError: null,         // {id, message} shown inline in a row's payment cell
       selected: new Set(),    // manual multi-select, independent of groups
       query: "",              // selection-bar category typeahead text
       editing: null,          // {id, groupIds, spread, adding} while a row's "change" is open
@@ -1343,6 +1476,7 @@
           review.catalog = catalog;
           review.merchants = merchants;
           review.clusters = clusters;
+          review.rowError = null;
           review.editing = null;
           // Selection survives a reload but only for rows still on screen --
           // except right after a bulk accept, which keeps it whole so the
@@ -1651,7 +1785,7 @@
       const isCollapsed = isGroupCollapsed(group);
       tr.className = "group" + (isCollapsed ? " collapsed" : "");
       const td = document.createElement("td");
-      td.colSpan = 8;
+      td.colSpan = 9;
       const head = document.createElement("div");
       head.className = "group-head";
 
@@ -1831,6 +1965,7 @@
 
       tr.appendChild(catCell);
       tr.appendChild(renderSubcategoryCell(txn, group, editingField === "subcategory"));
+      tr.appendChild(renderPaymentCell(txn));
       return tr;
     }
 
@@ -1898,6 +2033,123 @@
 
       if (isEditing) cell.appendChild(renderEditor(txn));
       return cell;
+    }
+
+    // --- card payment cell (Session 62) -------------------------------------
+    // Only credit rows get a checkbox; a debit can never be a payment to the
+    // card, so its cell is simply empty -- no disabled control, no
+    // placeholder. Any change goes through the confirmation modal first, and
+    // the checkbox's own state is not allowed to flip until the write has
+    // succeeded: the click is cancelled and the box is redrawn from state.
+    const PAYMENT_LABEL = "Credit Card Payment";
+
+    // What the modal can say about the bank. /transactions rows carry no
+    // card or bank, so the name is known only when the Bank filter pins it
+    // (picking a card snaps Bank to its bank, so that case is covered too).
+    function knownBankForRows() {
+      return bankFilterEl.value || null;
+    }
+
+    function renderPaymentCell(txn) {
+      const cell = document.createElement("td");
+      cell.className = "payment";
+      if (txn.txn_type !== "credit") return cell;
+
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = Boolean(txn.is_payment);
+      cb.disabled = review.busy;
+      cb.title = cb.checked
+        ? "Marked as a payment to the card (not spend)"
+        : "Mark this credit as a payment to the card";
+      cb.addEventListener("click", (event) => {
+        // Don't let the box toggle itself; the modal decides.
+        event.preventDefault();
+        event.stopPropagation();
+        requestPaymentFlag(txn, !txn.is_payment);
+      });
+      cell.appendChild(cb);
+
+      if (review.rowError && review.rowError.id === txn.id) {
+        const err = document.createElement("span");
+        err.className = "row-error";
+        err.textContent = review.rowError.message;
+        cell.appendChild(err);
+      }
+      return cell;
+    }
+
+    function requestPaymentFlag(txn, wanted) {
+      if (review.busy) return;
+      const bank = knownBankForRows();
+      const message = wanted
+        ? "Marking this as a Credit Card Payment will set Category and Subcategory to " +
+          "\u2018" + PAYMENT_LABEL + "\u2019 and Merchant to " +
+          (bank ? "\u2018" + bank + "\u2019" : "the card\u2019s bank name") +
+          ", replacing any existing values on this transaction. This affects expense " +
+          "totals in the analytics dashboard. Confirm?"
+        : "Unmarking this as a Credit Card Payment will clear Category, Subcategory, and " +
+          "Merchant back to unset. This affects expense totals in the analytics dashboard. " +
+          "Confirm?";
+      showModal({
+        title: wanted ? "Mark as credit card payment" : "Unmark credit card payment",
+        message,
+        confirmLabel: wanted ? "Mark as payment" : "Unmark",
+      }).then((confirmed) => {
+        if (!confirmed) return; // Cancel: no write, box already unchanged
+        setPaymentFlag(txn, wanted, bank);
+      });
+    }
+
+    // One write, then the row's local state is set to what the endpoint's
+    // cascade contract guarantees -- no re-read for values the contract
+    // already fixes. The one exception is the merchant on check when the
+    // bank isn't known client-side: that row is re-read so the screen shows
+    // the real value rather than a guess. On uncheck the row re-enters the
+    // suggestion flow, so its suggestions are fetched (one id) as for any
+    // open row. A 400/422 shows inline in the cell and changes nothing.
+    function setPaymentFlag(txn, wanted, knownBank) {
+      review.busy = true;
+      review.rowError = null;
+      setError("");
+      postJSON("/transactions/category", {
+        assignments: [{ transaction_id: txn.id, is_payment: wanted }],
+      })
+        .then(() => {
+          review.busy = false;
+          if (wanted) {
+            txn.is_payment = 1;
+            txn.category = PAYMENT_LABEL;
+            txn.subcategory = PAYMENT_LABEL;
+            if (knownBank) {
+              txn.merchant = knownBank;
+              renderReview();
+              return null;
+            }
+            // Bank not known here: re-read this row's merchant from the API.
+            return fetchJSON(transactionsURL(currentFilters())).then((rows) => {
+              const fresh = rows.find((r) => r.id === txn.id);
+              if (fresh) txn.merchant = fresh.merchant;
+              renderReview();
+            });
+          }
+          txn.is_payment = 0;
+          txn.category = null;
+          txn.subcategory = null;
+          txn.merchant = null;
+          return postJSON("/transactions/suggestions", { transaction_ids: [txn.id] }).then(
+            (body) => {
+              for (const s of body.suggestions) review.suggestions.set(s.transaction_id, s);
+              renderReview();
+            },
+            () => renderReview(), // suggestions are a convenience; the write stood
+          );
+        })
+        .catch((error) => {
+          review.busy = false;
+          review.rowError = { id: txn.id, message: "Not saved: " + error.message };
+          renderReview(); // redraws the box from unchanged state
+        });
     }
 
     // --- subcategory cell ------------------------------------------------
