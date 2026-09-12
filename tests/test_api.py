@@ -724,13 +724,52 @@ def similar_descriptions(db_path):
         conn.close()
 
 
+def _cluster_ids(body):
+    return [[m["transaction_id"] for m in c["members"]] for c in body["clusters"]]
+
+
 def test_clusters_valid_request_groups_in_given_order(client, similar_descriptions):
     ids = similar_descriptions
     response = client.post("/transactions/clusters", json={"transaction_ids": ids, "threshold": 70})
     assert response.status_code == 200
-    assert response.json() == {"clusters": [[ids[0], ids[2], ids[4]], [ids[1], ids[3]]]}
+    body = response.json()
+    assert _cluster_ids(body) == [[ids[0], ids[2], ids[4]], [ids[1], ids[3]]]
     # Response shape: clusters only -- no leftover / ungrouped key of any kind.
-    assert set(response.json().keys()) == {"clusters"}
+    assert set(body.keys()) == {"clusters"}
+    for cluster in body["clusters"]:
+        assert set(cluster.keys()) == {"anchor_id", "members"}
+        assert cluster["members"][0]["transaction_id"] == cluster["anchor_id"]
+        assert cluster["members"][0]["similarity"] == 100.0
+        for member in cluster["members"]:
+            assert set(member.keys()) == {"transaction_id", "similarity"}
+            assert 70.0 <= member["similarity"] <= 100.0
+
+
+def test_clusters_report_known_pair_similarity(client, db_path):
+    # "abcd" / "abce" is exactly 0.75 -> reported as 75.0 against the anchor.
+    conn = get_connection()
+    try:
+        card = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+        insert_statement(
+            conn, card, date(2026, 1, 1), date(2026, 1, 31), [_txn(1, "abcd"), _txn(2, "abce")]
+        )
+        a, b = [r["id"] for r in conn.execute("SELECT id FROM transactions ORDER BY id")]
+    finally:
+        conn.close()
+    body = client.post(
+        "/transactions/clusters", json={"transaction_ids": [a, b], "threshold": 75}
+    ).json()
+    assert body == {
+        "clusters": [
+            {
+                "anchor_id": a,
+                "members": [
+                    {"transaction_id": a, "similarity": 100.0},
+                    {"transaction_id": b, "similarity": 75.0},
+                ],
+            }
+        ]
+    }
 
 
 def test_clusters_threshold_defaults_to_70(client, similar_descriptions):

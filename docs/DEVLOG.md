@@ -6370,3 +6370,82 @@ several values, the mode note's counts, collapse and group-select on a
 cluster, per-row accept and change inside a cluster, a bulk assign from a
 mixed selection, and the switch back. Decide then whether mode/threshold
 belong in the URL.
+
+## Session 52 — 2026-09-12
+
+### Goal
+Two legibility fixes to similarity-grouping mode (Sessions 50–51), found in
+manual testing: rows gave no sense of *how* similar they were to their
+group, and groups that needed no action sat among those that did.
+
+### What happened
+
+**Per-member similarity in the endpoint.** `cluster_by_similarity()`
+already computed each candidate's similarity to the anchor to decide
+membership; it now keeps that number instead of discarding it. The return
+shape is `[{"anchor_id": id, "members": [{"transaction_id": id,
+"similarity": 0-100}, ...]}, ...]` — anchor first with `similarity`
+exactly `100.0`, every other member carrying `ratio * 100` from the very
+comparison that admitted it. No new comparison is made. The endpoint passes
+this through unchanged, so `POST /transactions/clusters` now answers
+`{"clusters": [{anchor_id, members: [...]}, ...]}`. Storage tests that
+asserted membership as id lists were adapted through a small `_ids_of()`
+view rather than rewritten, so they still assert exactly what they did;
+new tests pin the key structure, the anchor's self-similarity, and a
+known pair reported as `75.0` (the same `abcd`/`abce` pair Session 50 used
+for the boundary). Full suite: **325 passing** (323 + 2 net).
+
+**Two badges, two labels.** In similarity mode a row's category cell now
+opens with a `similarity: 84%` pill (teal, matching the accent) and, when
+the row has a suggestion, a muted `suggestion:` label ahead of the existing
+bold category + `fuzzy · 55%` confidence. The two numbers measure different
+things — description-vs-anchor likeness versus the engine's confidence in a
+category — and both were previously bare percentages a reader could
+conflate. Already-categorized rows show the similarity pill and their
+current category, no suggestion badge, as before. Suggested-category mode
+is untouched: no similarity exists there, and the group header already says
+"Suggested:". `review.similarity` (id → score) is filled while the groups
+are built from the new shape.
+
+**Action first, done folded.** Similarity groups are sorted so any group
+with at least one uncategorized member precedes any group where every
+member is categorized. `Array.prototype.sort` is stable, so the endpoint's
+order is preserved inside each bucket — a one-key sort on a boolean, no
+secondary criteria. Fully-categorized clusters default to collapsed;
+anything with an open row keeps the default-expanded behaviour. To express
+"default depends on the group", the flat `collapsed` set became
+`collapseState`, a `Map` of *explicit* user choices by group key;
+`isGroupCollapsed()` returns the explicit choice if there is one, else the
+group's `defaultCollapsed`. Suggested-category groups never set
+`defaultCollapsed`, so their sort and collapse behaviour is exactly as
+before; a user's toggles still persist for the page session in both modes.
+
+**Verification.** Backend by the suite (325). Frontend script parsed with
+the system JavaScriptCore; no remaining reference to the old `collapsed`
+set (grep). **Reasoned through only — not verified visually.** The browser
+extension was unavailable; no server started, no live request, no frontend
+test suite invented.
+
+### Outcome
+Each similarity-group row states its own likeness to the group's first row,
+distinctly from any category suggestion; groups still needing work come
+first and open, finished ones sit below and folded. The endpoint's richer
+shape is tested; the suggested-category mode is unchanged.
+
+### In plain English
+When transactions are grouped by how alike their descriptions look, each
+row now says how alike it is — as its own clearly labelled figure, kept
+visibly separate from the system's category suggestion so the two
+percentages can't be confused. The grouping service was already working
+this number out to decide who belongs together; it now simply reports it.
+
+Groups that still contain something unlabelled are listed first and open;
+groups where everything is already labelled drop below and start folded,
+so the work that remains is what you see first. The other grouping mode
+behaves exactly as it did. Checked by reading the code, not by seeing it
+run — a manual look is the next step.
+
+### Next steps
+Manual walk of similarity mode: badge legibility on rows with and without
+a suggestion, the ordering of open-vs-done groups, and that unfolding a
+done group and toggling back works as expected.

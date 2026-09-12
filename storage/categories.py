@@ -166,7 +166,7 @@ def suggest_categories(conn: sqlite3.Connection, transaction_ids: "list[int]") -
 
 def cluster_by_similarity(
     items: "list[tuple[int, str]]", threshold: "int | float"
-) -> "list[list[int]]":
+) -> "list[dict]":
     """Anchor-based clustering of (id, description) pairs by fuzzy similarity.
 
     `threshold` is 0-100, a percentage of fuzzy_similarity()'s 0-1 ratio; a
@@ -179,10 +179,14 @@ def cluster_by_similarity(
     against other members -- so the outcome depends on the input order,
     which is why the caller's order is respected rather than re-sorted.
 
-    Only clusters of two or more are returned, as lists of ids with the
-    anchor first. A singleton is dropped entirely: not returned, not
-    bucketed. Duplicate ids are collapsed to their first occurrence. Pure
-    function, no database access; the endpoint resolves descriptions.
+    Returns only clusters of two or more, each as
+        {"anchor_id": id, "members": [{"transaction_id": id, "similarity": 0-100}, ...]}
+    with the anchor first (its own similarity is exactly 100.0) and every
+    other member carrying the same anchor-comparison score that admitted it
+    -- the value is exposed, not recomputed (Session 52). A singleton is
+    dropped entirely: not returned, not bucketed. Duplicate ids are collapsed
+    to their first occurrence. Pure function, no database access; the
+    endpoint resolves descriptions.
     """
     seen = set()
     ordered = []
@@ -198,21 +202,22 @@ def cluster_by_similarity(
         if anchor_id in clustered:
             continue
         clustered.add(anchor_id)
-        members = [anchor_id]
+        members = [{"transaction_id": anchor_id, "similarity": 100.0}]
         for other_id, other_desc in ordered[i + 1 :]:
             if other_id in clustered:
                 continue
-            if fuzzy_similarity(anchor_desc, other_desc) >= cutoff:
+            ratio = fuzzy_similarity(anchor_desc, other_desc)
+            if ratio >= cutoff:
                 clustered.add(other_id)
-                members.append(other_id)
+                members.append({"transaction_id": other_id, "similarity": ratio * 100})
         if len(members) >= 2:
-            clusters.append(members)
+            clusters.append({"anchor_id": anchor_id, "members": members})
     return clusters
 
 
 def cluster_transactions(
     conn: sqlite3.Connection, transaction_ids: "list[int]", threshold: "int | float"
-) -> "list[list[int]]":
+) -> "list[dict]":
     """cluster_by_similarity over real rows: resolves descriptions by id.
 
     Empty input -> empty result. Any unknown id -> TransactionNotFoundError,

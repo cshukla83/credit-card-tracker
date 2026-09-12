@@ -466,6 +466,25 @@
   td.category-cell .conf.high { color: var(--credit); }
   td.category-cell .conf.mid  { color: #9a6700; }
   td.category-cell .conf.low  { color: var(--muted); }
+  td.category-cell .badge {
+    display: inline-block;
+    font-size: 0.78rem;
+    line-height: 1;
+    padding: 0.28rem 0.5rem;
+    border-radius: 999px;
+    margin-right: 0.6rem;
+    font-variant-numeric: tabular-nums;
+  }
+  td.category-cell .badge.similarity {
+    color: var(--accent-ink);
+    background: var(--accent-wash);
+    border: 1px solid var(--accent-wash-strong);
+  }
+  td.category-cell .badge-label {
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin-right: 0.35rem;
+  }
   td.category-cell .needs {
     color: #9a6700;
     font-size: 0.85rem;
@@ -883,10 +902,14 @@
       query: "",              // selection-bar typeahead text
       editing: null,          // {id, groupIds, spread, adding} while a row's "change" is open
       busy: false,            // an assign call is in flight
-      collapsed: new Set(),   // group keys collapsed this page session (in-memory only)
+      // Explicit collapse/expand choices this page session, by group key
+      // (in-memory only). Absent key = the group's default: expanded, except
+      // fully-categorized similarity clusters, which default to collapsed.
+      collapseState: new Map(),
       mode: "suggested",      // "suggested" (default) or "similarity"; in-memory only
       threshold: 70,          // similarity mode: 0-100, percentage of the ratio
-      clusters: [],           // similarity mode: [[id, ...], ...] from POST /transactions/clusters
+      clusters: [],           // similarity mode: [{anchor_id, members: [{transaction_id, similarity}]}]
+      similarity: new Map(),  // similarity mode: transaction_id -> 0-100 score vs its cluster's anchor
     };
 
     function isOpen(txn) {
@@ -934,20 +957,33 @@
         // mode note says how many, so they read as "below threshold", not
         // "missing". Category state is irrelevant to membership here.
         const byId = new Map(review.transactions.map((t) => [t.id, t]));
+        review.similarity = new Map();
         const groups = [];
-        for (const ids of review.clusters) {
-          const txns = ids.map((id) => byId.get(id)).filter(Boolean);
+        for (const cluster of review.clusters) {
+          const txns = [];
+          for (const m of cluster.members) {
+            const t = byId.get(m.transaction_id);
+            if (!t) continue;
+            txns.push(t);
+            review.similarity.set(t.id, m.similarity);
+          }
           if (txns.length < 2) continue;
-          const anchor = txns[0];
-          groups.push(
-            makeGroup(
-              "cluster",
-              "Similar to \u201c" + anchor.description + "\u201d",
-              txns,
-              "cluster:" + anchor.id,
-            ),
+          const anchor = byId.get(cluster.anchor_id) || txns[0];
+          const group = makeGroup(
+            "cluster",
+            "Similar to \u201c" + anchor.description + "\u201d",
+            txns,
+            "cluster:" + cluster.anchor_id,
           );
+          group.openCount = txns.filter(isOpen).length;
+          // Fully-categorized clusters need no action: folded by default,
+          // still openable. Anything with an open row stays expanded.
+          group.defaultCollapsed = group.openCount === 0;
+          groups.push(group);
         }
+        // Groups needing action first; Array.prototype.sort is stable, so
+        // the endpoint's order is kept within each of the two buckets.
+        groups.sort((a, b) => Number(a.openCount === 0) - Number(b.openCount === 0));
         return { groups, openCount: open.length, doneCount: done.length };
       }
 
@@ -1008,6 +1044,15 @@
         meta,
         canAccept: kind !== "cluster" && methods.length > 0,
       };
+    }
+
+    function isGroupCollapsed(group) {
+      if (review.collapseState.has(group.key)) return review.collapseState.get(group.key);
+      return group.defaultCollapsed === true;
+    }
+
+    function toggleGroupCollapsed(group) {
+      review.collapseState.set(group.key, !isGroupCollapsed(group));
     }
 
     function visibleIds() {
@@ -1213,7 +1258,7 @@
         // Collapsed groups keep their header (and its checkbox/accept-all);
         // only the rows are withheld. Keyed by title, which is the group's
         // identity across re-renders.
-        if (review.collapsed.has(group.key)) continue;
+        if (isGroupCollapsed(group)) continue;
         for (const txn of group.txns) {
           reviewBodyEl.appendChild(renderRow(txn, group));
         }
@@ -1340,7 +1385,7 @@
     // --- group header --------------------------------------------------
     function renderGroupHeader(group) {
       const tr = document.createElement("tr");
-      const isCollapsed = review.collapsed.has(group.key);
+      const isCollapsed = isGroupCollapsed(group);
       tr.className = "group" + (isCollapsed ? " collapsed" : "");
       const td = document.createElement("td");
       td.colSpan = 6;
@@ -1353,8 +1398,7 @@
       toggle.setAttribute("aria-expanded", String(!isCollapsed));
       toggle.setAttribute("aria-label", (isCollapsed ? "Expand " : "Collapse ") + group.title);
       toggle.addEventListener("click", () => {
-        if (isCollapsed) review.collapsed.delete(group.key);
-        else review.collapsed.add(group.key);
+        toggleGroupCollapsed(group);
         renderReview();
       });
       head.appendChild(toggle);
@@ -1445,8 +1489,27 @@
       catCell.className = "category-cell";
       const s = suggestionFor(txn);
       const hasCategory = !isOpen(txn);
+      const inSimilarityMode = review.mode === "similarity";
+
+      // Similarity mode shows two different numbers on a row -- how alike
+      // this description is to the group's anchor, and (if any) the
+      // suggestion engine's confidence -- so each carries its own label and
+      // they can never be read as the same figure.
+      if (inSimilarityMode && review.similarity.has(txn.id)) {
+        const sim = document.createElement("span");
+        sim.className = "badge similarity";
+        sim.textContent = "similarity: " + Math.round(review.similarity.get(txn.id)) + "%";
+        sim.title = "How closely this description matches the group\u2019s first row";
+        catCell.appendChild(sim);
+      }
 
       if (s) {
+        if (inSimilarityMode) {
+          const label = document.createElement("span");
+          label.className = "badge-label";
+          label.textContent = "suggestion:";
+          catCell.appendChild(label);
+        }
         const sug = document.createElement("span");
         sug.className = "sug";
         sug.textContent = s.category;

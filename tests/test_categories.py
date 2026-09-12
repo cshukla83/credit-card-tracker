@@ -532,6 +532,31 @@ def test_tier_two_confidence_equals_shared_function(db_path):
 # --- cluster_by_similarity ----------------------------------------------------
 
 
+def _ids_of(clusters):
+    """Membership view of the rich cluster shape: [[anchor, member, ...], ...]."""
+    return [[m["transaction_id"] for m in c["members"]] for c in clusters]
+
+
+def test_clustering_reports_anchor_and_per_member_similarity():
+    # "abcd" vs "abce" is exactly 0.75; the member's reported similarity is
+    # that same admitting comparison, as a 0-100 value; the anchor is 100.
+    items = [(1, "abcd"), (2, "abce"), (3, "abcd")]
+    clusters = cluster_by_similarity(items, 70)
+    assert clusters == [
+        {
+            "anchor_id": 1,
+            "members": [
+                {"transaction_id": 1, "similarity": 100.0},
+                {"transaction_id": 2, "similarity": 75.0},
+                {"transaction_id": 3, "similarity": 100.0},
+            ],
+        }
+    ]
+    for c in clusters:
+        assert c["members"][0]["transaction_id"] == c["anchor_id"]
+        assert all(0.0 <= m["similarity"] <= 100.0 for m in c["members"])
+
+
 def test_clustering_produces_multiple_clusters_in_anchor_order():
     items = [
         (1, "COFFEE SHOP 12"),
@@ -541,21 +566,21 @@ def test_clustering_produces_multiple_clusters_in_anchor_order():
         (5, "COFFEE SHOP 56"),
         (6, "SOMETHING UNRELATED ZZZ"),
     ]
-    assert cluster_by_similarity(items, 70) == [[1, 3, 5], [2, 4]]
+    assert _ids_of(cluster_by_similarity(items, 70)) == [[1, 3, 5], [2, 4]]
 
 
 def test_clustering_everything_in_one_cluster():
     items = [(10, "SHOP A"), (11, "SHOP B"), (12, "SHOP C")]
-    assert cluster_by_similarity(items, 60) == [[10, 11, 12]]
+    assert _ids_of(cluster_by_similarity(items, 60)) == [[10, 11, 12]]
     # Threshold 0 admits everything, whatever the descriptions.
-    assert cluster_by_similarity([(1, "AAAA"), (2, "ZZZZ")], 0) == [[1, 2]]
+    assert _ids_of(cluster_by_similarity([(1, "AAAA"), (2, "ZZZZ")], 0)) == [[1, 2]]
 
 
 def test_clustering_all_singletons_returns_no_clusters():
     items = [(1, "AAAA"), (2, "BBBB"), (3, "CCCC")]
     assert cluster_by_similarity(items, 70) == []
     # 100 requires identity (after casefolding).
-    assert cluster_by_similarity([(1, "SHOP"), (2, "SHOP "), (3, "shop")], 100) == [[1, 3]]
+    assert _ids_of(cluster_by_similarity([(1, "SHOP"), (2, "SHOP "), (3, "shop")], 100)) == [[1, 3]]
     assert cluster_by_similarity([], 70) == []
     assert cluster_by_similarity([(1, "ONLY")], 0) == []
 
@@ -564,7 +589,7 @@ def test_clustering_threshold_boundary_is_inclusive():
     # "abcd" vs "abce": 3 matching of 8 total chars -> ratio exactly 0.75.
     assert fuzzy_similarity("abcd", "abce") == 0.75
     items = [(1, "abcd"), (2, "abce")]
-    assert cluster_by_similarity(items, 75) == [[1, 2]]
+    assert _ids_of(cluster_by_similarity(items, 75)) == [[1, 2]]
     assert cluster_by_similarity(items, 76) == []
 
 
@@ -577,19 +602,19 @@ def test_clustering_is_anchor_based_not_transitive_and_respects_order():
     assert fuzzy_similarity(a[1], b[1]) >= 0.6
     assert fuzzy_similarity(b[1], c[1]) >= 0.6
     assert fuzzy_similarity(a[1], c[1]) < 0.6
-    assert cluster_by_similarity([a, b, c], 60) == [[1, 2]]
-    assert cluster_by_similarity([b, a, c], 60) == [[2, 1, 3]]
+    assert _ids_of(cluster_by_similarity([a, b, c], 60)) == [[1, 2]]
+    assert _ids_of(cluster_by_similarity([b, a, c], 60)) == [[2, 1, 3]]
 
 
 def test_clustering_collapses_duplicate_ids():
-    assert cluster_by_similarity([(1, "SHOP A"), (1, "SHOP A"), (2, "SHOP B")], 60) == [[1, 2]]
+    assert _ids_of(cluster_by_similarity([(1, "SHOP A"), (1, "SHOP A"), (2, "SHOP B")], 60)) == [[1, 2]]
 
 
 def test_cluster_transactions_resolves_descriptions_and_404s(db_path):
     conn = get_connection()
     try:
         a, b, c = _seed(conn, ["COFFEE SHOP 12", "AIRLINE TICKETS", "COFFEE SHOP 34"])
-        assert cluster_transactions(conn, [a, b, c], 70) == [[a, c]]
+        assert _ids_of(cluster_transactions(conn, [a, b, c], 70)) == [[a, c]]
         assert cluster_transactions(conn, [], 70) == []
         with pytest.raises(TransactionNotFoundError):
             cluster_transactions(conn, [a, 9999], 70)
