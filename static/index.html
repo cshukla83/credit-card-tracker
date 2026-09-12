@@ -8,6 +8,28 @@
     font-family: sans-serif;
     margin: 2rem;
   }
+  #tabs {
+    display: flex;
+    gap: 0.25rem;
+    border-bottom: 1px solid #ccc;
+    margin-bottom: 1.5rem;
+  }
+  #tabs button {
+    background: none;
+    border: 1px solid transparent;
+    border-bottom: none;
+    padding: 0.5rem 1rem;
+    font: inherit;
+    cursor: pointer;
+    color: #555;
+  }
+  #tabs button.active {
+    border-color: #ccc;
+    background: #fff;
+    color: #111;
+    font-weight: bold;
+    margin-bottom: -1px;
+  }
   #filters {
     margin-bottom: 1.5rem;
   }
@@ -23,6 +45,12 @@
     font-size: 0.85rem;
     gap: 0.25rem;
   }
+  .filter-row label.inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+    padding-bottom: 0.3rem;
+  }
   table {
     border-collapse: collapse;
     width: 100%;
@@ -31,18 +59,217 @@
     text-align: left;
     padding: 0.5rem 0.75rem;
     border-bottom: 1px solid #ccc;
+    vertical-align: top;
   }
   th {
     background-color: #eee;
     font-weight: bold;
   }
-  #status {
+  #status, #review-status {
     margin-bottom: 1rem;
+  }
+  .error {
+    color: #a00;
+    margin-bottom: 1rem;
+  }
+  button.small, .selection-bar button {
+    font: inherit;
+    font-size: 0.85rem;
+    padding: 0.15rem 0.5rem;
+    cursor: pointer;
+  }
+  button.link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #1a56b8;
+    text-decoration: underline;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.85rem;
+  }
+
+  /* Review & assign */
+  .selection-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: center;
+    background: #eef4ff;
+    border: 1px solid #b8cbee;
+    padding: 0.6rem 0.9rem;
+    margin-bottom: 1rem;
+  }
+  .selection-bar .label {
+    font-weight: bold;
+  }
+  .typeahead {
+    position: relative;
+  }
+  .typeahead input {
+    font: inherit;
+    padding: 0.2rem 0.4rem;
+    min-width: 16rem;
+  }
+  .menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 10;
+    background: #fff;
+    border: 1px solid #999;
+    min-width: 100%;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    max-height: 16rem;
+    overflow-y: auto;
+  }
+  .menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 0.35rem 0.6rem;
+    font: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .menu button:hover, .menu button:focus {
+    background: #eef4ff;
+    outline: none;
+  }
+  .menu button.create {
+    color: #1a56b8;
+  }
+  .menu .empty {
+    padding: 0.35rem 0.6rem;
+    color: #777;
+    font-size: 0.85rem;
+  }
+  tr.group td {
+    background: #f6f6f6;
+    border-top: 2px solid #ccc;
+    padding-top: 0.6rem;
+    padding-bottom: 0.6rem;
+  }
+  .group-head {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  .group-head .title {
+    font-weight: bold;
+  }
+  .group-head .meta {
+    color: #555;
+    font-size: 0.85rem;
+  }
+  .group-head .spacer {
+    flex: 1;
+  }
+  tr.selected td {
+    background: #eef4ff;
+  }
+  tr.editing td {
+    background: #fff8dc;
+  }
+  td.category-cell {
+    position: relative;
+    white-space: nowrap;
+    min-width: 18rem;
+  }
+  td.category-cell .sug {
+    font-weight: bold;
+  }
+  td.category-cell .conf {
+    font-size: 0.85rem;
+    margin-left: 0.4rem;
+  }
+  td.category-cell .conf.high { color: #1f7a3d; }
+  td.category-cell .conf.mid  { color: #8a5a00; }
+  td.category-cell .conf.low  { color: #777; }
+  td.category-cell .needs {
+    color: #8a5a00;
+    font-size: 0.85rem;
+  }
+  td.category-cell .actions {
+    display: inline-flex;
+    gap: 0.35rem;
+    margin-left: 0.6rem;
+  }
+  .editor {
+    position: absolute;
+    top: 100%;
+    right: 0.75rem;
+    z-index: 10;
+    background: #fff;
+    border: 1px solid #8a5a00;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    min-width: 16rem;
+    font-size: 0.9rem;
+    white-space: normal;
+  }
+  .editor .spread {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+    padding: 0.4rem 0.6rem;
+    border-bottom: 1px solid #ddd;
+    font-size: 0.85rem;
+  }
+  .editor .list {
+    max-height: 14rem;
+    overflow-y: auto;
+  }
+  .editor .list button, .editor .add-new {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 0.35rem 0.6rem;
+    font: inherit;
+    cursor: pointer;
+  }
+  .editor .list button:hover, .editor .list button:focus, .editor .add-new:hover {
+    background: #fff8dc;
+    outline: none;
+  }
+  .editor .add-new {
+    border-top: 1px solid #ddd;
+    color: #1a56b8;
+  }
+  .editor .new-input {
+    padding: 0.4rem 0.6rem;
+  }
+  .editor .new-input input {
+    font: inherit;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.2rem 0.4rem;
+  }
+  .editor .hint {
+    padding: 0.3rem 0.6rem 0.5rem;
+    color: #777;
+    font-size: 0.8rem;
+  }
+  .nothing-left {
+    padding: 1rem 0;
+    color: #555;
+  }
+  #review-table th.select, td.select {
+    width: 1.5rem;
   }
 </style>
 </head>
 <body>
   <h1>Transactions</h1>
+
+  <div id="tabs">
+    <button type="button" id="tab-all" class="active">All transactions</button>
+    <button type="button" id="tab-review">Review &amp; assign</button>
+  </div>
 
   <div id="filters">
     <div class="filter-row">
@@ -74,23 +301,53 @@
         End date
         <input type="date" id="end-filter">
       </label>
+      <label class="inline" id="uncategorized-only-label" style="display: none;">
+        <input type="checkbox" id="uncategorized-only-filter" checked>
+        Uncategorized only
+      </label>
     </div>
   </div>
 
-  <div id="status">Loading…</div>
-  <table id="transactions-table" style="display: none;">
-    <thead>
-      <tr>
-        <th>date</th>
-        <th>amount</th>
-        <th>type</th>
-        <th>description</th>
-      </tr>
-    </thead>
-    <tbody id="transactions-body"></tbody>
-  </table>
+  <!-- All transactions -->
+  <div id="panel-all">
+    <div id="status">Loading…</div>
+    <table id="transactions-table" style="display: none;">
+      <thead>
+        <tr>
+          <th>date</th>
+          <th>amount</th>
+          <th>type</th>
+          <th>description</th>
+        </tr>
+      </thead>
+      <tbody id="transactions-body"></tbody>
+    </table>
+  </div>
+
+  <!-- Review & assign -->
+  <div id="panel-review" style="display: none;">
+    <div id="review-status">Loading…</div>
+    <div id="review-error" class="error" style="display: none;"></div>
+    <div id="selection-bar" class="selection-bar" style="display: none;"></div>
+    <div id="nothing-left" class="nothing-left" style="display: none;"></div>
+    <table id="review-table" style="display: none;">
+      <thead>
+        <tr>
+          <th class="select"></th>
+          <th>date</th>
+          <th>description</th>
+          <th>amount</th>
+          <th>category</th>
+        </tr>
+      </thead>
+      <tbody id="review-body"></tbody>
+    </table>
+  </div>
 
   <script>
+    // ------------------------------------------------------------------
+    // Shared: filters, fetch helpers, URL state
+    // ------------------------------------------------------------------
     const statusEl = document.getElementById("status");
     const tableEl = document.getElementById("transactions-table");
     const bodyEl = document.getElementById("transactions-body");
@@ -99,34 +356,61 @@
     const statementMonthFilterEl = document.getElementById("statement-month-filter");
     const startFilterEl = document.getElementById("start-filter");
     const endFilterEl = document.getElementById("end-filter");
+    const uncategorizedOnlyLabelEl = document.getElementById("uncategorized-only-label");
+    const uncategorizedOnlyEl = document.getElementById("uncategorized-only-filter");
+
+    const tabAllEl = document.getElementById("tab-all");
+    const tabReviewEl = document.getElementById("tab-review");
+    const panelAllEl = document.getElementById("panel-all");
+    const panelReviewEl = document.getElementById("panel-review");
+
+    const reviewStatusEl = document.getElementById("review-status");
+    const reviewErrorEl = document.getElementById("review-error");
+    const selectionBarEl = document.getElementById("selection-bar");
+    const nothingLeftEl = document.getElementById("nothing-left");
+    const reviewTableEl = document.getElementById("review-table");
+    const reviewBodyEl = document.getElementById("review-body");
 
     // Out-of-order guard: only the response from the most recently issued
-    // /transactions request is allowed to render. Without this, a slow
-    // response to an earlier filter change could land after (and overwrite)
-    // the result of a newer one.
+    // load is allowed to render. Without this, a slow response to an
+    // earlier filter change could land after (and overwrite) the result of
+    // a newer one. One counter serves both tabs, since only the active tab
+    // ever loads.
     let requestSeq = 0;
 
     let debounceTimer = null;
     const DEBOUNCE_MS = 300;
 
+    let activeTab = "all";
+
     function extractErrorMessage(response) {
       return response
         .json()
         .then(
-          (body) => (body && body.detail ? body.detail : String(response.status)),
+          (body) => (body && body.detail ? JSON.stringify(body.detail) : String(response.status)),
           () => String(response.status),
         );
     }
 
+    function handleResponse(response) {
+      if (!response.ok) {
+        return extractErrorMessage(response).then((message) => {
+          throw new Error(message);
+        });
+      }
+      return response.json();
+    }
+
     function fetchJSON(url) {
-      return fetch(url).then((response) => {
-        if (!response.ok) {
-          return extractErrorMessage(response).then((message) => {
-            throw new Error(message);
-          });
-        }
-        return response.json();
-      });
+      return fetch(url).then(handleResponse);
+    }
+
+    function postJSON(url, body) {
+      return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }).then(handleResponse);
     }
 
     function currentBankCardType() {
@@ -159,11 +443,26 @@
     }
 
     function updateURL(filters) {
-      const query = buildParams(filters).toString();
+      // The API params, plus the two pieces of UI state that aren't API
+      // filters (tab, uncategorized-only) so a reload lands where you were.
+      const params = buildParams(filters);
+      if (activeTab === "review") {
+        params.set("tab", "review");
+        if (!uncategorizedOnlyEl.checked) params.set("uncategorized", "0");
+      }
+      const query = params.toString();
       const newURL = window.location.pathname + (query ? "?" + query : "");
       window.history.replaceState(null, "", newURL);
     }
 
+    function transactionsURL(filters) {
+      const query = buildParams(filters).toString();
+      return "/transactions" + (query ? "?" + query : "");
+    }
+
+    // ------------------------------------------------------------------
+    // Tab: All transactions (unchanged behaviour)
+    // ------------------------------------------------------------------
     function renderTransactions(transactions) {
       bodyEl.textContent = "";
 
@@ -205,9 +504,7 @@
       statusEl.textContent = "Loading…";
       tableEl.style.display = "none";
 
-      const query = buildParams(filters).toString();
-
-      fetchJSON("/transactions" + (query ? "?" + query : ""))
+      fetchJSON(transactionsURL(filters))
         .then((transactions) => {
           if (seq !== requestSeq) return; // a newer request has since been issued
           renderTransactions(transactions);
@@ -218,6 +515,629 @@
         });
     }
 
+    // ------------------------------------------------------------------
+    // Tab: Review & assign
+    // ------------------------------------------------------------------
+    // All state for the review screen lives here. Every render reads from
+    // it and rebuilds the DOM; every write goes to the API and then reloads
+    // it, so what's on screen is always what the server has.
+    const review = {
+      transactions: [],
+      suggestions: new Map(), // transaction_id -> {category, confidence, match_type}
+      catalog: [],            // GET /categories, sorted
+      selected: new Set(),    // manual multi-select, independent of groups
+      query: "",              // selection-bar typeahead text
+      editing: null,          // {id, groupIds, spread, adding} while a row's "change" is open
+      busy: false,            // an assign call is in flight
+    };
+
+    function isOpen(txn) {
+      return txn.category === null || txn.category === undefined;
+    }
+
+    function fmtAmount(n) {
+      return "₹" + Number(n).toLocaleString("en-IN", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    }
+
+    function txnLabel(n) {
+      return n + (n === 1 ? " txn" : " txns");
+    }
+
+    // The suggestion the screen displays for a row, or null. Categorized
+    // rows never show one (they are "done"); open rows show one only when
+    // the engine found a match. Every accept on this screen writes exactly
+    // this value -- the client-shown suggestion, never a recomputation.
+    function suggestionFor(txn) {
+      if (!isOpen(txn)) return null;
+      const s = review.suggestions.get(txn.id);
+      if (!s || s.match_type === "none") return null;
+      return s;
+    }
+
+    function confClass(confidence) {
+      return confidence >= 0.85 ? "high" : confidence >= 0.65 ? "mid" : "low";
+    }
+
+    function confText(s) {
+      return s.match_type + " · " + Math.round(s.confidence * 100) + "%";
+    }
+
+    function buildGroups() {
+      const open = review.transactions.filter(isOpen);
+      const done = review.transactions.filter((t) => !isOpen(t));
+
+      const byCategory = new Map();
+      const noSuggestion = [];
+      for (const t of open) {
+        const s = suggestionFor(t);
+        if (!s) {
+          noSuggestion.push(t);
+          continue;
+        }
+        if (!byCategory.has(s.category)) byCategory.set(s.category, []);
+        byCategory.get(s.category).push(t);
+      }
+
+      const groups = [];
+      const suggested = Array.from(byCategory.entries()).sort(
+        (a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]),
+      );
+      for (const [category, txns] of suggested) {
+        groups.push(makeGroup("suggested", "Suggested: " + category, txns));
+      }
+      if (noSuggestion.length) {
+        groups.push(makeGroup("none", "No suggestion", noSuggestion));
+      }
+      if (!uncategorizedOnlyEl.checked && done.length) {
+        groups.push(makeGroup("done", "Already categorized", done));
+      }
+      return { groups, openCount: open.length, doneCount: done.length };
+    }
+
+    function makeGroup(kind, title, txns) {
+      const ids = txns.map((t) => t.id);
+      const total = txns.reduce((n, t) => n + Number(t.amount), 0);
+      const methods = Array.from(
+        new Set(txns.map((t) => suggestionFor(t)).filter(Boolean).map((s) => s.match_type)),
+      );
+      let meta = txnLabel(txns.length) + " · " + fmtAmount(total);
+      if (kind === "done") {
+        meta = txnLabel(txns.length) + " · select any of these to re-assign in bulk";
+      } else if (methods.length) {
+        meta += " · " + methods.join(" + ");
+      } else {
+        meta += " · assign manually";
+      }
+      return { kind, title, txns, ids, meta, canAccept: methods.length > 0 };
+    }
+
+    function visibleIds() {
+      const { groups } = buildGroups();
+      const ids = new Set();
+      for (const g of groups) for (const id of g.ids) ids.add(id);
+      return ids;
+    }
+
+    function pruneSelectionToVisible() {
+      const shown = visibleIds();
+      for (const id of Array.from(review.selected)) {
+        if (!shown.has(id)) review.selected.delete(id);
+      }
+    }
+
+    function setError(message) {
+      if (message) {
+        reviewErrorEl.textContent = message;
+        reviewErrorEl.style.display = "";
+      } else {
+        reviewErrorEl.textContent = "";
+        reviewErrorEl.style.display = "none";
+      }
+    }
+
+    // One assign call, a list of {transaction_id, category} pairs. After a
+    // successful write everything is re-fetched for the current filter, so
+    // groups, the status line, and the catalog reflect the write.
+    function assign(pairs) {
+      if (review.busy || pairs.length === 0) return Promise.resolve();
+      review.busy = true;
+      setError("");
+      return postJSON("/transactions/category", { assignments: pairs })
+        .then(() => {
+          for (const p of pairs) review.selected.delete(p.transaction_id);
+          review.editing = null;
+          review.query = "";
+          // busy is cleared *before* the reload renders, otherwise every
+          // button would be rebuilt disabled and stay that way.
+          review.busy = false;
+          return loadReview(currentFilters());
+        })
+        .catch((error) => {
+          review.busy = false;
+          setError("Error saving category: " + error.message);
+        });
+    }
+
+    function acceptPairs(txns) {
+      // Each row its own displayed suggestion; rows without one are skipped.
+      const pairs = [];
+      for (const t of txns) {
+        const s = suggestionFor(t);
+        if (s) pairs.push({ transaction_id: t.id, category: s.category });
+      }
+      return pairs;
+    }
+
+    function uniformPairs(ids, category) {
+      return ids.map((id) => ({ transaction_id: id, category }));
+    }
+
+    function loadReview(filters) {
+      const seq = ++requestSeq;
+      reviewStatusEl.textContent = "Loading…";
+
+      const transactionsP = fetchJSON(transactionsURL(filters));
+      const catalogP = fetchJSON("/categories");
+      // Suggestions are only asked for open (uncategorized) rows: those are
+      // the only ones the screen shows a suggestion for, and it's one batch
+      // call however many there are.
+      const suggestionsP = transactionsP.then((transactions) => {
+        const openIds = transactions.filter(isOpen).map((t) => t.id);
+        if (openIds.length === 0) return { suggestions: [] };
+        return postJSON("/transactions/suggestions", { transaction_ids: openIds });
+      });
+
+      return Promise.all([transactionsP, suggestionsP, catalogP])
+        .then(([transactions, suggestionBody, catalog]) => {
+          if (seq !== requestSeq) return;
+          review.transactions = transactions;
+          review.suggestions = new Map(
+            suggestionBody.suggestions.map((s) => [s.transaction_id, s]),
+          );
+          review.catalog = catalog;
+          review.editing = null;
+          // Selection survives a reload but only for rows still on screen.
+          pruneSelectionToVisible();
+          renderReview();
+        })
+        .catch((error) => {
+          if (seq !== requestSeq) return;
+          reviewStatusEl.textContent = "Error loading transactions: " + error.message;
+          reviewTableEl.style.display = "none";
+          selectionBarEl.style.display = "none";
+          nothingLeftEl.style.display = "none";
+        });
+    }
+
+    function renderReview() {
+      const { groups, openCount, doneCount } = buildGroups();
+      const total = review.transactions.length;
+
+      reviewBodyEl.textContent = "";
+      nothingLeftEl.style.display = "none";
+
+      if (total === 0) {
+        reviewStatusEl.textContent = "No transactions found.";
+        reviewTableEl.style.display = "none";
+        selectionBarEl.style.display = "none";
+        return;
+      }
+
+      reviewStatusEl.textContent =
+        total + " transactions · " + openCount + " uncategorized · " + doneCount + " done";
+
+      renderSelectionBar();
+
+      if (openCount === 0) {
+        nothingLeftEl.textContent = "Nothing left to review for these filters.";
+        nothingLeftEl.style.display = "";
+      }
+
+      if (groups.length === 0) {
+        reviewTableEl.style.display = "none";
+        return;
+      }
+
+      for (const group of groups) {
+        reviewBodyEl.appendChild(renderGroupHeader(group));
+        for (const txn of group.txns) {
+          reviewBodyEl.appendChild(renderRow(txn, group));
+        }
+      }
+      reviewTableEl.style.display = "";
+
+      // Focus whatever the open editor wants focused, now that it exists.
+      if (review.editing) {
+        const target = reviewBodyEl.querySelector("[data-autofocus]");
+        if (target) target.focus();
+      }
+    }
+
+    // --- selection bar -------------------------------------------------
+    function renderSelectionBar() {
+      selectionBarEl.textContent = "";
+      const selectedTxns = review.transactions.filter((t) => review.selected.has(t.id));
+      if (selectedTxns.length === 0) {
+        selectionBarEl.style.display = "none";
+        return;
+      }
+      const selectedIds = selectedTxns.map((t) => t.id);
+      const amount = selectedTxns.reduce((n, t) => n + Number(t.amount), 0);
+      const withSuggestion = acceptPairs(selectedTxns);
+
+      const label = document.createElement("span");
+      label.className = "label";
+      label.textContent = selectedIds.length + " selected · " + fmtAmount(amount);
+      selectionBarEl.appendChild(label);
+
+      // Typeahead: one typed category to every selected transaction.
+      const typeahead = document.createElement("div");
+      typeahead.className = "typeahead";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = "Assign category…";
+      input.value = review.query;
+      input.autocomplete = "off";
+      const menu = document.createElement("div");
+      menu.className = "menu";
+      menu.style.display = "none";
+      typeahead.appendChild(input);
+      typeahead.appendChild(menu);
+
+      const pick = (category) => assign(uniformPairs(selectedIds, category));
+      const renderMenu = () => {
+        menu.textContent = "";
+        const q = review.query.trim();
+        const qLower = q.toLowerCase();
+        const matches = review.catalog
+          .filter((c) => c.toLowerCase().includes(qLower))
+          .slice(0, 6);
+        const exact = review.catalog.some((c) => c.toLowerCase() === qLower);
+        if (q && !exact) {
+          const create = document.createElement("button");
+          create.type = "button";
+          create.className = "create";
+          create.textContent = "+ create “" + q + "”";
+          create.addEventListener("click", () => pick(q));
+          menu.appendChild(create);
+        }
+        for (const c of matches) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = c;
+          b.addEventListener("click", () => pick(c));
+          menu.appendChild(b);
+        }
+        if (!menu.childNodes.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "Type a category name";
+          menu.appendChild(empty);
+        }
+        menu.style.display = "";
+      };
+      input.addEventListener("focus", renderMenu);
+      input.addEventListener("input", () => {
+        review.query = input.value;
+        renderMenu();
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          const q = review.query.trim();
+          if (!q) return;
+          // Enter picks the exact catalog match if there is one (keeping its
+          // casing), otherwise creates what was typed.
+          const exact = review.catalog.find((c) => c.toLowerCase() === q.toLowerCase());
+          pick(exact || q);
+        } else if (event.key === "Escape") {
+          menu.style.display = "none";
+          input.blur();
+        }
+      });
+      // Clicks inside the typeahead must not reach the document listener
+      // that closes menus on outside click.
+      typeahead.addEventListener("click", (event) => event.stopPropagation());
+      selectionBarEl.appendChild(typeahead);
+
+      const acceptBtn = document.createElement("button");
+      acceptBtn.type = "button";
+      acceptBtn.textContent = "Accept suggestions (" + withSuggestion.length + ")";
+      acceptBtn.disabled = withSuggestion.length === 0 || review.busy;
+      acceptBtn.title =
+        "Writes each selected transaction its own suggested category; " +
+        "selected rows with no suggestion are left as they are";
+      acceptBtn.addEventListener("click", () => assign(withSuggestion));
+      selectionBarEl.appendChild(acceptBtn);
+
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.className = "link";
+      clear.textContent = "clear selection";
+      clear.addEventListener("click", () => {
+        review.selected.clear();
+        review.query = "";
+        renderReview();
+      });
+      selectionBarEl.appendChild(clear);
+
+      selectionBarEl.style.display = "";
+    }
+
+    // --- group header --------------------------------------------------
+    function renderGroupHeader(group) {
+      const tr = document.createElement("tr");
+      tr.className = "group";
+      const td = document.createElement("td");
+      td.colSpan = 5;
+      const head = document.createElement("div");
+      head.className = "group-head";
+
+      const allIn = group.ids.every((id) => review.selected.has(id));
+      const someIn = !allIn && group.ids.some((id) => review.selected.has(id));
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = allIn;
+      cb.indeterminate = someIn;
+      cb.title = "Select every row in this group";
+      cb.addEventListener("change", () => {
+        if (allIn) for (const id of group.ids) review.selected.delete(id);
+        else for (const id of group.ids) review.selected.add(id);
+        renderReview();
+      });
+      head.appendChild(cb);
+
+      const title = document.createElement("span");
+      title.className = "title";
+      title.textContent = group.title;
+      head.appendChild(title);
+
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      meta.textContent = group.meta;
+      head.appendChild(meta);
+
+      const spacer = document.createElement("span");
+      spacer.className = "spacer";
+      head.appendChild(spacer);
+
+      if (group.canAccept) {
+        // One pair per row, each row's own displayed suggestion.
+        const pairs = acceptPairs(group.txns);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "small";
+        btn.textContent = "accept all " + pairs.length;
+        btn.disabled = review.busy;
+        btn.addEventListener("click", () => assign(pairs));
+        head.appendChild(btn);
+      }
+
+      td.appendChild(head);
+      tr.appendChild(td);
+      return tr;
+    }
+
+    // --- row -------------------------------------------------------------
+    function renderRow(txn, group) {
+      const tr = document.createElement("tr");
+      const isSelected = review.selected.has(txn.id);
+      const isEditing = review.editing !== null && review.editing.id === txn.id;
+      if (isEditing) tr.className = "editing";
+      else if (isSelected) tr.className = "selected";
+
+      const selectCell = document.createElement("td");
+      selectCell.className = "select";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = isSelected;
+      cb.addEventListener("change", () => {
+        if (cb.checked) review.selected.add(txn.id);
+        else review.selected.delete(txn.id);
+        renderReview();
+      });
+      selectCell.appendChild(cb);
+      tr.appendChild(selectCell);
+
+      const dateCell = document.createElement("td");
+      dateCell.textContent = txn.txn_date;
+      tr.appendChild(dateCell);
+
+      const descCell = document.createElement("td");
+      descCell.textContent = txn.description;
+      tr.appendChild(descCell);
+
+      const amountCell = document.createElement("td");
+      amountCell.textContent = fmtAmount(txn.amount);
+      tr.appendChild(amountCell);
+
+      const catCell = document.createElement("td");
+      catCell.className = "category-cell";
+      const s = suggestionFor(txn);
+      const hasCategory = !isOpen(txn);
+
+      if (s) {
+        const sug = document.createElement("span");
+        sug.className = "sug";
+        sug.textContent = s.category;
+        catCell.appendChild(sug);
+        const conf = document.createElement("span");
+        conf.className = "conf " + confClass(s.confidence);
+        conf.textContent = confText(s);
+        catCell.appendChild(conf);
+      } else if (hasCategory) {
+        const cur = document.createElement("span");
+        cur.textContent = txn.category;
+        catCell.appendChild(cur);
+      } else {
+        const needs = document.createElement("span");
+        needs.className = "needs";
+        needs.textContent = "needs a category";
+        catCell.appendChild(needs);
+      }
+
+      const actions = document.createElement("span");
+      actions.className = "actions";
+      if (s) {
+        const accept = document.createElement("button");
+        accept.type = "button";
+        accept.className = "small";
+        accept.textContent = "accept";
+        accept.disabled = review.busy;
+        // Exactly the displayed suggestion, as one pair.
+        accept.addEventListener("click", () =>
+          assign([{ transaction_id: txn.id, category: s.category }]),
+        );
+        actions.appendChild(accept);
+      }
+      const change = document.createElement("button");
+      change.type = "button";
+      change.className = "small";
+      change.textContent = hasCategory || s ? "change" : "assign";
+      change.disabled = review.busy;
+      change.addEventListener("click", (event) => {
+        event.stopPropagation(); // don't let the document listener close it at once
+        review.editing = isEditing
+          ? null
+          : { id: txn.id, groupIds: group.ids.slice(), spread: false, adding: false };
+        renderReview();
+      });
+      actions.appendChild(change);
+      catCell.appendChild(actions);
+
+      if (isEditing) catCell.appendChild(renderEditor(txn));
+
+      tr.appendChild(catCell);
+      return tr;
+    }
+
+    // --- per-row "change" dropdown ---------------------------------------
+    function renderEditor(txn) {
+      const state = review.editing;
+      const editor = document.createElement("div");
+      editor.className = "editor";
+      editor.addEventListener("click", (event) => event.stopPropagation());
+      editor.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          review.editing = null;
+          renderReview();
+        }
+      });
+
+      // The group's full id list was captured when the editor opened, so
+      // "spread" applies to every transaction currently in that group.
+      const others = state.groupIds.filter((id) => id !== txn.id);
+      const targets = () => (state.spread && others.length ? state.groupIds : [txn.id]);
+      const pick = (category) => assign(uniformPairs(targets(), category));
+
+      // "spread to group" -- only when there is a group to spread to.
+      if (others.length > 0) {
+        const spread = document.createElement("label");
+        spread.className = "spread";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = state.spread;
+        cb.addEventListener("change", () => {
+          state.spread = cb.checked;
+        });
+        spread.appendChild(cb);
+        spread.appendChild(
+          document.createTextNode("also apply to the other " + others.length + " in this group"),
+        );
+        editor.appendChild(spread);
+      }
+
+      if (!state.adding) {
+        const list = document.createElement("div");
+        list.className = "list";
+        if (review.catalog.length === 0) {
+          const empty = document.createElement("div");
+          empty.className = "hint";
+          empty.textContent = "No categories yet";
+          list.appendChild(empty);
+        }
+        review.catalog.forEach((c, i) => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = c;
+          if (i === 0) b.dataset.autofocus = "1";
+          b.addEventListener("click", () => pick(c)); // picking saves immediately
+          list.appendChild(b);
+        });
+        editor.appendChild(list);
+
+        const addNew = document.createElement("button");
+        addNew.type = "button";
+        addNew.className = "add-new";
+        addNew.textContent = "add new category";
+        if (review.catalog.length === 0) addNew.dataset.autofocus = "1";
+        addNew.addEventListener("click", () => {
+          state.adding = true;
+          renderReview();
+        });
+        editor.appendChild(addNew);
+      } else {
+        const wrap = document.createElement("div");
+        wrap.className = "new-input";
+        const input = document.createElement("input");
+        input.type = "text";
+        input.placeholder = "New category";
+        input.autocomplete = "off";
+        input.dataset.autofocus = "1";
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            const value = input.value.trim();
+            if (value) pick(value);
+          }
+          // Escape bubbles to the editor's handler above.
+        });
+        wrap.appendChild(input);
+        editor.appendChild(wrap);
+
+        const hint = document.createElement("div");
+        hint.className = "hint";
+        hint.textContent = "⏎ saves · esc cancels";
+        editor.appendChild(hint);
+      }
+
+      return editor;
+    }
+
+    // Clicking anywhere outside an open editor or typeahead menu closes it.
+    document.addEventListener("click", () => {
+      for (const menu of document.querySelectorAll(".menu")) {
+        menu.style.display = "none";
+      }
+      if (review.editing !== null) {
+        review.editing = null;
+        renderReview();
+      }
+    });
+
+    // ------------------------------------------------------------------
+    // Tabs
+    // ------------------------------------------------------------------
+    function setTab(tab, load) {
+      activeTab = tab;
+      const isReview = tab === "review";
+      tabAllEl.classList.toggle("active", !isReview);
+      tabReviewEl.classList.toggle("active", isReview);
+      panelAllEl.style.display = isReview ? "none" : "";
+      panelReviewEl.style.display = isReview ? "" : "none";
+      uncategorizedOnlyLabelEl.style.display = isReview ? "" : "none";
+      if (load) onFilterChange();
+    }
+
+    function loadActiveTab(filters) {
+      if (activeTab === "review") loadReview(filters);
+      else fetchTransactions(filters);
+    }
+
+    // ------------------------------------------------------------------
+    // Filter pickers + initial load
+    // ------------------------------------------------------------------
     function populateCardPicker(cards) {
       if (cards.length === 0) {
         const option = document.createElement("option");
@@ -284,11 +1204,15 @@
       const urlCardType = params.get("card_type") || "";
       const urlStart = params.get("start") || "";
       const urlEnd = params.get("end") || "";
+      const urlTab = params.get("tab") === "review" ? "review" : "all";
+      uncategorizedOnlyEl.checked = params.get("uncategorized") !== "0";
 
       startFilterEl.value = urlStart;
       endFilterEl.value = urlEnd;
+      setTab(urlTab, false);
 
       statusEl.textContent = "Loading…";
+      reviewStatusEl.textContent = "Loading…";
 
       // /cards, /statement-months, and /card-types are independent of each
       // other, so they're fetched together -- but all three must resolve
@@ -333,17 +1257,18 @@
             end: urlEnd,
           };
           updateURL(filters);
-          fetchTransactions(filters);
+          loadActiveTab(filters);
         })
         .catch((error) => {
           statusEl.textContent = "Error loading transactions: " + error.message;
+          reviewStatusEl.textContent = "Error loading transactions: " + error.message;
         });
     }
 
     function onFilterChange() {
       const filters = currentFilters();
       updateURL(filters);
-      fetchTransactions(filters);
+      loadActiveTab(filters);
     }
 
     function onDateInput() {
@@ -356,6 +1281,17 @@
     statementMonthFilterEl.addEventListener("change", onFilterChange);
     startFilterEl.addEventListener("input", onDateInput);
     endFilterEl.addEventListener("input", onDateInput);
+    // "Uncategorized only" is a view toggle, not an API filter: the data is
+    // already loaded, so it only re-groups. The URL is updated so a reload
+    // keeps it.
+    uncategorizedOnlyEl.addEventListener("change", () => {
+      updateURL(currentFilters());
+      pruneSelectionToVisible();
+      review.editing = null;
+      renderReview();
+    });
+    tabAllEl.addEventListener("click", () => setTab("all", true));
+    tabReviewEl.addEventListener("click", () => setTab("review", true));
 
     fetchFiltersThenTransactions();
   </script>

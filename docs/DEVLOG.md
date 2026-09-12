@@ -5469,3 +5469,145 @@ Step 2: the Review & assign screen in the static frontend, consuming all
 three endpoints — batch suggestions on load and filter change, grouped by
 suggested category, with per-row accept/change, group-level accept, and a
 manual multi-select bar with typeahead and "accept suggestions".
+
+## Session 43 — 2026-09-12
+
+### Goal
+The Review & assign screen: a second tab in the static frontend, built
+against the merged Claude Design mockup (2a chrome/filters/grouped table +
+2b's "change" dropdown close-up), consuming the three Session 42 endpoints.
+No new framework or dependency; no frontend test suite invented; no server
+started.
+
+### What happened
+
+**Structure.** `static/index.html` gains a tab strip ("All transactions" /
+"Review & assign") above the existing filters. The filters are shared — the
+same five controls drive whichever tab is active — plus an "Uncategorized
+only" checkbox that is only shown on the review tab. The All-transactions
+rendering is unchanged. The active tab and the checkbox are carried in the
+URL (`tab=review`, `uncategorized=0`) alongside the existing filter params,
+so a reload lands where you were. The existing out-of-order guard
+(`requestSeq`) is shared by both tabs, since only the active one ever loads.
+
+**Loading.** On load and on any filter change the review tab fetches
+`/transactions` for the current filter and `/categories` in parallel, then
+one `POST /transactions/suggestions` for the **open (uncategorized) ids
+only**. Categorized rows never show a suggestion on this screen — they are
+"done", and the mockup treats them the same way — so asking the engine about
+them would be wasted work. Suggestions land in a `Map` keyed by id;
+`suggestionFor(txn)` is the single place that decides what a row displays
+(null for categorized rows and for `match_type: "none"`), and **every accept
+on the screen writes exactly that displayed value** — the client-shown
+suggestion, never a recomputation.
+
+**Grouping.** Open rows are grouped by suggested category — "Suggested:
+<category>", sorted by size descending then name — then "No suggestion" for
+open rows with no match, then (only when "Uncategorized only" is off) an
+"Already categorized" group so done rows can be re-assigned in bulk. When the
+filtered set has no open rows a "Nothing left to review for these filters."
+line appears; when it is empty, "No transactions found." The status line is
+always over the full filtered set: `N transactions · M uncategorized · K
+done`. Group meta is `N txn(s) · ₹total · exact + fuzzy` (distinct match
+methods present), or `· assign manually` for the no-suggestion group.
+
+**Group header.** A checkbox that adds/removes every row in the group from
+the manual selection (indeterminate when only some are in); title; meta; and
+"accept all N" when the group has any suggestion-bearing row. Accept-all
+sends one assign call with one pair per row, each row's own displayed
+suggestion — the same helper (`acceptPairs`) that the row-level accept and
+the selection bar use, so "accept" means one thing everywhere.
+
+**Row.** Select checkbox, date, description, amount, and the category cell:
+suggested category in bold with `match_type · NN%` (coloured by confidence
+band, as in the mockup) if there is one; else the current category; else
+"needs a category". Then "accept" (only when there is a suggestion; one pair,
+the displayed value) and "change" — labelled "assign" when the row has
+neither a category nor a suggestion, following the mockup.
+
+**The "change" dropdown** is a one-click editor anchored to the row's
+category cell, matching 2b: a "spread to group" checkbox reading "also apply
+to the other N in this group", shown only when the row's group has more than
+one member; the catalog from `GET /categories` as a list of buttons — picking
+one saves immediately; "add new category" swaps the list for a text input
+where Enter saves and Esc cancels, with a `⏎ saves · esc cancels` hint.
+There is no save button. Spread decides the target list: the group's full id
+list, captured client-side when the editor opened, or just the row; either
+way one assign call, one pair per id, same category. Esc and any click
+outside the editor close it; the row turns amber while it is open.
+
+**Manual multi-select bar** appears whenever any row is checked, independent
+of group boundaries: `N selected · ₹total`; a typeahead filtered against the
+catalog (up to six matches, plus `+ create "<query>"` when there is no
+case-insensitive exact match — Enter picks the exact match if there is one,
+keeping its casing, else creates what was typed) that assigns one category to
+every selected transaction in one call; "Accept suggestions (N)", which sends
+one call with a pair per selected transaction that has a displayed
+suggestion and leaves the rest untouched (disabled at N = 0); and a "clear
+selection" link.
+
+**After any successful assign** the screen re-fetches transactions,
+suggestions, and the catalog for the current filter and re-renders, so
+groups, the status line, and the dropdown contents all reflect the write.
+Assigned ids are dropped from the selection; the rest of the selection
+survives, pruned to whatever is still visible. A failed write shows the API's
+error above the table and leaves the screen as it was.
+
+**Two decisions the prompt left open.**
+- *No card column.* The mockup shows one, but `/transactions` rows carry
+  `statement_id` and nothing that names the card, and `/cards` does not list
+  statement ids — so there is no way to label a row client-side without a
+  backend change, and this step was scoped frontend-only. The card and
+  bank/card-type filters still scope the set. If the column is wanted it is a
+  one-line addition to the read query and its own small change.
+- *A re-entrancy bug caught on review.* `assign()` originally cleared its
+  in-flight flag in a `.finally()` after the reload; but the reload renders
+  first, and buttons are rendered `disabled` while a write is in flight, so
+  every button would have come back disabled after the first successful
+  write. The flag is now cleared before the reload. Recorded because it is
+  exactly the kind of thing a manual run should confirm.
+
+**Verification.** No frontend test suite exists and none was invented. The
+extracted script was parsed with the system JavaScriptCore (`new Function`
+on the source, no execution) to catch syntax errors; the backend suite was
+re-run — 285 passing, unchanged, since nothing outside `static/` moved. No
+server was started and no live request was made; the behaviour above is
+what the code is written to do and is to be confirmed by hand.
+
+### Outcome
+The frontend has a Review & assign tab that groups the filtered transactions
+by suggested category, lets the user accept a suggestion per row, per group,
+or across an arbitrary selection, change a category from a one-click
+dropdown (optionally spreading to the whole group), and create new categories
+inline or from the selection bar — every write one atomic call, every screen
+refreshed from the server afterwards. Syntax-checked, not yet exercised
+against a live server.
+
+### In plain English
+There is now a second view of the transaction list built for one job:
+getting uncategorised transactions labelled quickly. It shows the same
+filters as before, plus a switch to hide anything already done. Transactions
+are grouped by the label the system suggests for them, so ten similar
+purchases with the same suggestion appear together and can be accepted with
+one click — or, if the suggestion is wrong, corrected once and spread across
+the whole group. Each row can also be handled on its own: accept, or pick a
+different label from a list of ones used before, or type a brand-new one.
+
+The user can also tick any mix of rows, regardless of grouping, and either
+give them all one label or accept whatever the system suggested for each.
+Every one of these actions is a single request to the server that either
+applies completely or not at all, and the screen reloads from the server
+afterwards so what is shown is always what was saved. One thing from the
+design was left out: a column naming the card for each row, because the
+data the screen receives doesn't include it and adding it would have meant a
+backend change outside this step. The screen has been checked for errors in
+the code but has not yet been tried against a running server — that is the
+next thing to do.
+
+### Next steps
+Run the app and walk the screen by hand against imported data: load, filter
+change, per-row accept and change (with and without spread), group accept,
+multi-select typeahead and accept-suggestions, create-new in both places,
+error display on a failed write. Then decide whether the card column is
+wanted (one read-query change) and whether "Already categorized" rows should
+also receive suggestions.
