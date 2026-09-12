@@ -6568,3 +6568,93 @@ Step 2: a Subcategory column in both tables with the suggestion badge
 (words for the fallback, a percentage for a learned match), a per-row
 change dropdown fed by `/subcategories?category=`, and no change to the
 multi-select bar.
+
+## Session 54 — 2026-09-12
+
+### Goal
+Step 2: a Subcategory column in both tables, with a per-row suggestion
+badge, accept, and a change dropdown fed by `GET /subcategories` — and
+nothing added to the manual multi-select bar. Also the frontend's side of
+Session 53's two breaking shape changes.
+
+### What happened
+
+**Adapting to the new shapes.** `review.suggestions` now holds the whole
+Session 53 entry per id. `suggestionFor(txn)` returns its `category` half
+(`{value, confidence, match_type}`), so the four places that read
+`s.category` now read `s.value` — group keys, `acceptPairs`, the badge text,
+and the row-level accept. A new `subSuggestionFor(txn)` returns the
+`subcategory` half for rows that have no subcategory yet (it is `null` from
+the API when the row has no category). Assign entries carry only the field
+being written: `uniformPairs` (category) is joined by `uniformSubPairs`
+(subcategory), so a subcategory write never touches category and vice
+versa.
+
+**Columns.** Review & assign gains a Subcategory column after Category
+(group header `colSpan` 6 → 7). **All transactions gains both Category and
+Subcategory**, read-only, with a light dash for unset — the brief said "after
+Category" for both tables, and that table had no Category column at all, so
+adding Subcategory alone would have had nothing to sit after. Flagged here
+as the one place the build widened past the literal text. Neither column
+takes part in any grouping logic in either mode; `buildGroups()` is
+unchanged apart from the `s.value` rename.
+
+**Per-row subcategory cell.** Current value if set; else the suggestion in
+bold with a badge; else a dash (with a title explaining that a category is
+needed first). The badge distinguishes the two match types as the brief
+requires: `"exact"` shows `exact · NN%` in the existing confidence style;
+`"same_as_category"` shows the words *same as category* in muted italics
+and never a number, because its 1.0 is a default, not a learned match.
+"accept" writes exactly the displayed value as one `{transaction_id,
+subcategory}` entry. The button reads "change" when there is a value or a
+suggestion and "assign" otherwise, mirroring the category cell.
+
+**Change flow, one editor for both fields.** `review.editing` now carries
+`field` (`"category"` | `"subcategory"`) and `options`. `openEditor(txn,
+group, field)` sets the state and renders; for subcategory it then fetches
+`/subcategories?category=<row's category>` (unfiltered when the row has
+none) and fills `options` in — a response is ignored if the editor has
+since been closed or moved to another row/field. `renderEditor()` reads
+`state.field` to pick the noun in its labels ("add new subcategory", "New
+subcategory", "No subcategories under Food yet"), shows "Loading…" while
+`options` is null, and routes the pick to the right pair builder. The
+spread-to-group checkbox, the add-new text entry, Enter/Esc, click-outside,
+and the amber row (now for either editor) are the same code as category's.
+
+**Not done, by instruction.** The manual multi-select bar is unchanged:
+typed-category assign and "Accept suggestions (N)" remain category-only.
+Spread-to-group on the subcategory editor is the bulk-adjacent path.
+
+**Verification.** Script parsed with the system JavaScriptCore; no
+remaining `s.category` reads (grep); backend suite unaffected (347).
+**Reasoned through only — not verified visually.** The browser extension
+was unavailable; no server started, no live request, no frontend test
+suite invented.
+
+### Outcome
+Both tables show the subcategory; on the review screen each row can accept
+a suggested subcategory (with an honest badge for the default case) or pick
+or create one from a dropdown scoped to its category, optionally spreading
+to its group — while the multi-select bar and both grouping modes behave as
+before.
+
+### In plain English
+The finer label added to the data model in the previous step is now
+visible on both screens, next to the category. On the review screen each
+row offers its suggested finer label with an accept button: when the
+suggestion was learned from matching past transactions it shows how
+confident it is, and when it is only the fallback of reusing the category
+name it says "same as category" in plain words instead of a misleading
+percentage. Choosing a different finer label works exactly like changing a
+category — a one-click list scoped to the row's category, an option to type
+a new one, and a tick-box to apply it to the whole group.
+
+The bulk bar at the top was deliberately left category-only for now. As with
+the recent front-end sessions, this was checked by reading the code, not by
+seeing it run.
+
+### Next steps
+Manual walk: the subcategory column on both tabs; accept for an exact and a
+same-as-category suggestion; the dropdown scoped to a category and
+unfiltered; add-new; spread-to-group; the amber row for both editors; and
+that the multi-select bar still writes category only.
