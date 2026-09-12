@@ -7911,6 +7911,21 @@ The frontend wiring: a button on the dashboard, the commentary text with
 its age indicator, and the three states (fresh, cached-with-age,
 unavailable). A first live call to confirm the default model name.
 
+**Addendum — 2026-09-12 (Session 70), model name resolved.** The live
+check was done by hand, outside the app, with a direct `curl` against
+`generateContent` — not by Claude Code, and not from the test suite,
+which still makes no real calls. The model configured via `GEMINI_MODEL`
+at that point, `gemini-2.5-flash`, returned 404: retired for new users
+and keys as of this date. `gemini-3.6-flash` was confirmed working the
+same way, and `.env`'s `GEMINI_MODEL` was updated to it. No code change
+was needed — the `GEMINI_MODEL` override behaved exactly as designed, and
+`storage/commentary.py`'s `DEFAULT_MODEL` (`gemini-1.5-flash`) remains an
+unexercised fallback that the `.env` setting supersedes. One observation
+recorded for later, not acted on: the response carried a
+`thoughtsTokenCount` of 167 against an 11-token output — thinking-token
+overhead that counts toward free-tier quota and is worth keeping in mind
+when the commentary prompt is tuned.
+
 ## Session 69 — 2026-09-12
 
 ### Goal
@@ -8003,3 +8018,45 @@ now in place for a first manual try.
 Make the first live call by hand and confirm the configured model; then the
 outstanding manual browser walk, which now spans Review & assign, the
 dashboard, the drill-down, and this button.
+
+
+## Session 70 — 2026-09-12
+
+### Goal
+Documentation only: close out Session 68's "default model name not
+exercised against the live API" flag, now resolved by a manual test.
+
+### What happened
+Branch confirmed (`feature/analytics-dashboard`). A dated addendum was
+appended to Session 68's *Next steps* — the section that raised the flag —
+without altering that entry's original text, which stands as the record of
+what was known then. The addendum states: `gemini-2.5-flash` (the
+`GEMINI_MODEL` value then in `.env`) returned 404 on a manual `curl`
+against `generateContent`, being retired for new users and keys;
+`gemini-3.6-flash` was confirmed working the same way; `.env` was updated
+and no code change was needed, confirming the override mechanism; and the
+observed `thoughtsTokenCount` overhead (167 thinking tokens against an
+11-token output) is noted as a free-tier-quota consideration for later.
+
+`docs/STATE.md`'s Open flags were checked: Session 68 filed this only in
+its own Next steps, never as a STATE.md flag, so there is nothing there to
+close. (The section's precedent for closed items — strikethrough plus a
+bold "Closed in Session N" — was noted for future use.) No learning summary
+was added: this is a footnote to already-logged work.
+
+### Outcome
+The DEVLOG now records how and when the model question was settled, next
+to where it was raised. No code, test, or STATE.md change.
+
+### In plain English
+A loose end from two sessions ago is now tied off in the record: the
+outside language model the dashboard was first pointed at has since been
+withdrawn for new accounts, a current one was tested by hand and works,
+and only a settings line needed changing — exactly the kind of change the
+design set out to make painless. A small note about how many "thinking"
+tokens the service spends per reply is kept for when usage limits start to
+matter.
+
+### Next steps
+Unchanged: the manual browser walk covering Review & assign, the dashboard,
+the drill-down, and the insight button — now against a working model.
