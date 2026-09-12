@@ -5,7 +5,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from storage.cards import list_cards_with_statements
-from storage.categories import TransactionNotFoundError, assign_category, suggest_category
+from storage.categories import (
+    TransactionNotFoundError,
+    assign_categories,
+    list_categories,
+    suggest_categories,
+    suggest_category,
+)
 from storage.db import get_connection, init_db
 from storage.reads import get_transactions, list_card_types, list_statement_months
 
@@ -91,6 +97,13 @@ def read_card_types(conn=Depends(get_db)):
     return list_card_types(conn)
 
 
+@app.get("/categories")
+def read_categories(conn=Depends(get_db)):
+    # The catalog of categories in use -- there is no predefined list, so
+    # this is what the frontend's dropdown/typeahead is populated from.
+    return list_categories(conn)
+
+
 @app.get("/transactions/{transaction_id}/suggestion")
 def read_category_suggestion(transaction_id: int, conn=Depends(get_db)):
     # Unlike the /transactions filters, an unknown id here is a real 404:
@@ -102,30 +115,58 @@ def read_category_suggestion(transaction_id: int, conn=Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"No such transaction: {transaction_id}")
 
 
-class CategoryAssignment(BaseModel):
+class SuggestionBatch(BaseModel):
     transaction_ids: list[int] = Field(min_length=1)
+
+
+@app.post("/transactions/suggestions")
+def read_category_suggestions(body: SuggestionBatch, conn=Depends(get_db)):
+    # Batch counterpart of the single-id GET: the categorized-transaction
+    # query runs once for the whole list rather than once per id. Any
+    # unknown id is a 404 for the whole request, nothing computed.
+    try:
+        return {"suggestions": suggest_categories(conn, body.transaction_ids)}
+    except TransactionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=f"No such transaction(s): {e.missing_ids}")
+
+
+def _strip_and_require_nonempty(value: str) -> str:
+    # NULL is the only representation of "uncategorized", so an empty or
+    # whitespace-only category is rejected rather than stored. Stripping
+    # also keeps " Food" and "Food" from becoming two distinct categories.
+    value = value.strip()
+    if not value:
+        raise ValueError("category must not be empty")
+    return value
+
+
+class CategoryAssignment(BaseModel):
+    transaction_id: int
     category: str
 
-    @field_validator("category")
-    @classmethod
-    def _strip_and_require_nonempty(cls, value: str) -> str:
-        # NULL is the only representation of "uncategorized", so an empty or
-        # whitespace-only category is rejected rather than stored. Stripping
-        # also keeps " Food" and "Food" from becoming two distinct categories.
-        value = value.strip()
-        if not value:
-            raise ValueError("category must not be empty")
-        return value
+    _clean = field_validator("category")(_strip_and_require_nonempty)
+
+
+class CategoryAssignmentBatch(BaseModel):
+    assignments: list[CategoryAssignment] = Field(min_length=1)
 
 
 @app.post("/transactions/category")
-def write_category(body: CategoryAssignment, conn=Depends(get_db)):
-    # One endpoint for one-or-many: a single id is just a list of length 1.
-    # This is a direct write -- it never consults the suggestion engine.
+def write_category(body: CategoryAssignmentBatch, conn=Depends(get_db)):
+    # A list of (transaction_id, category) pairs so one call can write
+    # different categories to different rows -- "accept suggestions" on a
+    # selection spanning several suggestion groups needs that. A uniform
+    # assignment is just N pairs with the same category; a single id is a
+    # list of length 1. This is a direct write -- it never consults the
+    # suggestion engine.
+    pairs = [(a.transaction_id, a.category) for a in body.assignments]
     try:
-        updated = assign_category(conn, body.transaction_ids, body.category)
+        updated = assign_categories(conn, pairs)
     except TransactionNotFoundError as e:
         # All-or-nothing: if any id is unknown nothing was written, so the
         # whole request is a 404 naming the ids that were missing.
         raise HTTPException(status_code=404, detail=f"No such transaction(s): {e.missing_ids}")
-    return {"updated": updated, "category": body.category}
+    except ValueError as e:
+        # The same id with two different categories in one request.
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"updated": updated}

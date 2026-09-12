@@ -345,16 +345,19 @@ def test_suggestion_unknown_transaction_is_404(client, two_cards):
     assert client.get("/transactions/9999/suggestion").status_code == 404
 
 
+def _pairs(ids, category):
+    """Uniform assignment body: N pairs with the same category."""
+    return {"assignments": [{"transaction_id": i, "category": category} for i in ids]}
+
+
 def test_assign_then_suggest_round_trip(client, two_cards):
     # The fixture's five descriptions are all distinct, so an exact match
     # needs one seeded via the API; the rest exercise the fuzzy tier.
     ids = _ids(client)
     target, other = ids[0], ids[1]
-    response = client.post(
-        "/transactions/category", json={"transaction_ids": [other], "category": "Food"}
-    )
+    response = client.post("/transactions/category", json=_pairs([other], "Food"))
     assert response.status_code == 200
-    assert response.json() == {"updated": 1, "category": "Food"}
+    assert response.json() == {"updated": 1}
 
     body = client.get(f"/transactions/{target}/suggestion").json()
     assert body["category"] == "Food"
@@ -369,46 +372,148 @@ def test_assign_then_suggest_round_trip(client, two_cards):
 
 def test_assign_bulk_overwrites_including_already_categorized(client, two_cards):
     ids = _ids(client)
-    client.post("/transactions/category", json={"transaction_ids": [ids[0]], "category": "Food"})
-    response = client.post(
-        "/transactions/category", json={"transaction_ids": ids[:3], "category": "Travel"}
-    )
+    client.post("/transactions/category", json=_pairs([ids[0]], "Food"))
+    response = client.post("/transactions/category", json=_pairs(ids[:3], "Travel"))
     assert response.status_code == 200
     assert response.json()["updated"] == 3
     listed = {t["id"]: t["category"] for t in client.get("/transactions").json()}
     assert [listed[i] for i in ids] == ["Travel", "Travel", "Travel", None, None]
 
 
-def test_assign_with_missing_id_is_404_and_writes_nothing(client, two_cards):
+def test_assign_mixed_categories_in_one_request(client, two_cards):
     ids = _ids(client)
     response = client.post(
         "/transactions/category",
-        json={"transaction_ids": [ids[0], 9999], "category": "Food"},
+        json={
+            "assignments": [
+                {"transaction_id": ids[0], "category": "Food"},
+                {"transaction_id": ids[1], "category": "Travel"},
+                {"transaction_id": ids[2], "category": "Food"},
+            ]
+        },
     )
+    assert response.status_code == 200
+    assert response.json() == {"updated": 3}
+    listed = {t["id"]: t["category"] for t in client.get("/transactions").json()}
+    assert [listed[i] for i in ids] == ["Food", "Travel", "Food", None, None]
+
+
+def test_assign_with_missing_id_is_404_and_writes_nothing(client, two_cards):
+    ids = _ids(client)
+    response = client.post("/transactions/category", json=_pairs([ids[0], 9999], "Food"))
     assert response.status_code == 404
     assert "9999" in response.json()["detail"]
     listed = {t["id"]: t["category"] for t in client.get("/transactions").json()}
     assert listed[ids[0]] is None
 
 
-def test_assign_strips_category_whitespace(client, two_cards):
+def test_assign_conflicting_pairs_for_one_id_is_422_and_writes_nothing(client, two_cards):
     ids = _ids(client)
     response = client.post(
-        "/transactions/category", json={"transaction_ids": [ids[0]], "category": "  Food  "}
+        "/transactions/category",
+        json={
+            "assignments": [
+                {"transaction_id": ids[0], "category": "Food"},
+                {"transaction_id": ids[0], "category": "Travel"},
+            ]
+        },
     )
+    assert response.status_code == 422
+    listed = {t["id"]: t["category"] for t in client.get("/transactions").json()}
+    assert listed[ids[0]] is None
+
+
+def test_assign_strips_category_whitespace(client, two_cards):
+    ids = _ids(client)
+    response = client.post("/transactions/category", json=_pairs([ids[0]], "  Food  "))
     assert response.status_code == 200
-    assert response.json()["category"] == "Food"
+    listed = {t["id"]: t["category"] for t in client.get("/transactions").json()}
+    assert listed[ids[0]] == "Food"
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"transaction_ids": [], "category": "Food"},
-        {"transaction_ids": [1], "category": ""},
-        {"transaction_ids": [1], "category": "   "},
-        {"transaction_ids": [1]},
-        {"category": "Food"},
+        {"assignments": []},
+        {"assignments": [{"transaction_id": 1, "category": ""}]},
+        {"assignments": [{"transaction_id": 1, "category": "   "}]},
+        {"assignments": [{"transaction_id": 1}]},
+        {"assignments": [{"category": "Food"}]},
+        # The pre-Session-42 flat shape is gone, not tolerated alongside.
+        {"transaction_ids": [1], "category": "Food"},
     ],
 )
 def test_assign_rejects_malformed_payloads(client, two_cards, payload):
     assert client.post("/transactions/category", json=payload).status_code == 422
+
+
+# --- batch suggestions -----------------------------------------------------
+
+
+def test_batch_suggestions_match_single_id_shape_and_order(client, two_cards):
+    ids = _ids(client)
+    client.post("/transactions/category", json=_pairs([ids[4]], "Food"))
+    asked = [ids[2], ids[0], ids[4]]
+    response = client.post("/transactions/suggestions", json={"transaction_ids": asked})
+    assert response.status_code == 200
+    body = response.json()["suggestions"]
+    assert [s["transaction_id"] for s in body] == asked
+    for entry in body:
+        single = client.get(f"/transactions/{entry['transaction_id']}/suggestion").json()
+        assert {k: v for k, v in entry.items() if k != "transaction_id"} == single
+    # The categorized row itself gets no exact self-match; with nothing else
+    # categorized it is a cold start.
+    assert body[2]["match_type"] == "none"
+
+
+def test_batch_suggestions_run_categorized_query_once(client, two_cards, monkeypatch):
+    import storage.categories as categories
+
+    calls = []
+    real = categories._fetch_categorized
+
+    def counting(conn):
+        calls.append(1)
+        return real(conn)
+
+    monkeypatch.setattr(categories, "_fetch_categorized", counting)
+    ids = _ids(client)
+    response = client.post("/transactions/suggestions", json={"transaction_ids": ids})
+    assert response.status_code == 200
+    assert len(response.json()["suggestions"]) == 5
+    assert len(calls) == 1
+
+
+def test_batch_suggestions_unknown_id_is_404(client, two_cards):
+    ids = _ids(client)
+    response = client.post(
+        "/transactions/suggestions", json={"transaction_ids": [ids[0], 9999]}
+    )
+    assert response.status_code == 404
+    assert "9999" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("payload", [{"transaction_ids": []}, {}, {"transaction_ids": "x"}])
+def test_batch_suggestions_rejects_malformed_payloads(client, two_cards, payload):
+    assert client.post("/transactions/suggestions", json=payload).status_code == 422
+
+
+# --- categories catalog ----------------------------------------------------
+
+
+def test_categories_catalog_is_empty_then_sorted_distinct(client, two_cards):
+    assert client.get("/categories").json() == []
+    ids = _ids(client)
+    client.post(
+        "/transactions/category",
+        json={
+            "assignments": [
+                {"transaction_id": ids[0], "category": "Travel"},
+                {"transaction_id": ids[1], "category": "Food"},
+                {"transaction_id": ids[2], "category": "Food"},
+            ]
+        },
+    )
+    response = client.get("/categories")
+    assert response.status_code == 200
+    assert response.json() == ["Food", "Travel"]

@@ -5344,3 +5344,128 @@ fetching suggestions one at a time is actually a performance problem — not
 built now; there is no evidence yet that it is needed. Separately, if
 tie-breaking by true assignment recency ever matters, that is a
 `category_assigned_at` column and its own decision.
+
+## Session 42 — 2026-09-12
+
+### Goal
+Backend addendum ahead of the review/assign screen: reshape the assign
+endpoint to a list of (transaction_id, category) pairs, add a batch
+suggestion endpoint that runs the categorized-transaction query once per
+call rather than once per id, and add a categories catalog endpoint. No
+schema change, no frontend.
+
+### What happened
+
+**Why the assign endpoint changed shape.** Session 41's `POST
+/transactions/category` took `{"transaction_ids": [...], "category": "..."}`
+— one value written to many rows. The review screen (next step) has an
+"accept suggestions" action over a manual multi-select that can span several
+suggestion groups, and each selected row must be written *its own* suggested
+category. That is not expressible as one-value-many-rows without N calls, and
+N calls would break the all-or-nothing contract. The body is now
+`{"assignments": [{"transaction_id": ..., "category": ...}, ...]}`. A uniform
+assignment is N pairs with the same category, so the new shape strictly
+contains the old one; the old shape is **removed, not kept alongside** — a
+request in the flat shape is a 422, and a test pins that. Response is
+`{"updated": n}`; the old `"category"` echo no longer has a single value to
+echo.
+
+**`assign_categories()`** (renamed from `assign_category`, since it no longer
+takes one category) in `storage/categories.py`:
+
+- Pairs are folded into an `id → category` map first. Identical duplicate
+  pairs collapse and count once, as before. **The same id with two different
+  categories raises `ValueError` (→ 422 at the API)** rather than resolving by
+  position — a decision the prompt did not cover. Reasoning: such a request can
+  only come from a client bug, and last-wins would silently hide it; failing
+  loudly costs nothing for correct clients.
+- One `with conn:` block: existence check on every id, then **one `UPDATE …
+  WHERE id IN (…)` per distinct category** rather than per row — so the common
+  cases (accept a whole group, assign one typed value) remain a single
+  statement, while a mixed request is a handful. Any missing id →
+  `TransactionNotFoundError` before any UPDATE, nothing written. Session 17
+  invariant preserved.
+
+**Batch suggestions.** The engine was split into three pieces:
+`_fetch_categorized(conn)` (the one query: every categorized transaction,
+`id DESC`), `_fetch_targets(conn, ids)` (id → description, raising with the
+missing ids if any is unknown), and `_suggest_from(target_id, description,
+categorized)` — the two-tier logic, unchanged, over an already-fetched list.
+The self-exclusion that was `id != ?` in SQL moved into `_suggest_from` as a
+Python filter, because a row set that excludes one target cannot be reused
+for another; the tie-break ordering still comes from the query. Both entry
+points sit on top:
+
+- `suggest_category(conn, id)` — unchanged signature and results; all
+  Session 41 engine tests pass untouched.
+- `suggest_categories(conn, ids)` — new. Fetches targets once, fetches
+  categorized rows **once**, then loops. Returns a list in input order, each
+  entry the single-id dict plus `"transaction_id"`; duplicate ids collapse
+  (first position kept). Any unknown id raises before the engine runs.
+
+`POST /transactions/suggestions` with `{"transaction_ids": [...]}` →
+`{"suggestions": [...]}`; 404 naming the missing ids if any is unknown; 422
+for an empty list. `GET /transactions/{id}/suggestion` is kept as-is.
+
+The once-per-batch property is **asserted, not assumed**: tests at both the
+storage and API layer monkeypatch `_fetch_categorized` with a counting
+wrapper and check exactly one call for a five-id batch. A further test
+monkeypatches it to `pytest.fail` and sends an unknown id, proving the 404
+path never reaches the engine.
+
+**Catalog.** `list_categories(conn)` → `SELECT DISTINCT category … WHERE
+category IS NOT NULL ORDER BY category`, exposed as `GET /categories`. There
+is no predefined category list in the system; this is the only source of
+"categories you've used before" and is what the next step's dropdown and
+typeahead will read. It is empty until the first assignment, and a value
+disappears from it the moment its last row is reassigned — a test pins both.
+
+**Tests.** The old assign tests were rewritten to the pairs shape (not
+duplicated). New: mixed categories in one call, identical-duplicate collapse,
+conflicting-duplicate rejection with nothing written, atomic 404 across a
+mixed request, old flat shape → 422; batch parity with the single-id endpoint
+in input order, once-per-batch call count (storage and API), per-target
+self-exclusion inside a batch, cold start with duplicates, unknown id → 404
+with the engine never invoked, malformed payloads → 422; catalog empty →
+sorted distinct → shrinks on reassignment. Full suite: **285 passing** (267
++ 18), one pre-existing warning.
+
+Two notes for the reader: `_fetch_targets` binds one SQL parameter per id, so
+a batch is bounded by SQLite's parameter limit (32,766 on current builds) —
+far above any filtered set this project sees, but the ceiling exists. And
+`storage/categories.py` still has no notion of *when* a category was
+assigned; the Session 41 tie-break proxy stands.
+
+No database file was opened, no server started, no live requests made.
+
+### Outcome
+One assign call can now write a different category to each of many
+transactions, still atomically. A screen can fetch suggestions for a whole
+filtered list in one request that hits the categorized-transaction table
+once. The set of categories in use is queryable. All verified by the test
+suite only: 285 passing, every pre-Session-42 engine test unchanged.
+
+### In plain English
+The bulk-labelling request was reshaped so that one request can give
+different transactions different labels, all-or-nothing, instead of one label
+to all of them. This was needed because the upcoming review screen lets the
+user tick several transactions with different suggested labels and accept all
+the suggestions at once. The simpler "same label for everything" case still
+works — it's just the same label repeated — so nothing was lost, and the old
+request format was retired rather than kept around as a second way to do the
+same thing. A request that tries to give one transaction two different labels
+is refused outright, because that can only be a mistake and quietly picking
+one would hide it.
+
+Suggestions can now be requested for a whole list of transactions in one go,
+and the system reads its history of past labels once for the entire list
+rather than once per transaction — and a test checks that count directly, so
+it can't quietly regress. There is also a new way to ask "which labels have I
+used so far?", which is what the screen's drop-downs will be filled from,
+since there is no fixed list of labels anywhere.
+
+### Next steps
+Step 2: the Review & assign screen in the static frontend, consuming all
+three endpoints — batch suggestions on load and filter change, grouped by
+suggested category, with per-row accept/change, group-level accept, and a
+manual multi-select bar with typeahead and "accept suggestions".

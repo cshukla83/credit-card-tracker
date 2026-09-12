@@ -4,7 +4,14 @@ from datetime import date
 import pytest
 
 from storage.cards import create_card
-from storage.categories import TransactionNotFoundError, assign_category, suggest_category
+from storage import categories
+from storage.categories import (
+    TransactionNotFoundError,
+    assign_categories,
+    list_categories,
+    suggest_categories,
+    suggest_category,
+)
 from storage.db import get_connection, init_db
 from storage.writes import insert_statement
 
@@ -45,6 +52,11 @@ def _seed(conn, descriptions):
     )
     rows = conn.execute("SELECT id FROM transactions ORDER BY id").fetchall()
     return [row["id"] for row in rows]
+
+
+def _assign(conn, ids, category):
+    """Uniform assignment: N pairs with the same category."""
+    return assign_categories(conn, [(i, category) for i in ids])
 
 
 def _categories(conn, ids):
@@ -155,7 +167,7 @@ def test_category_migration_is_idempotent_and_preserves_existing_rows(tmp_path, 
         conn.close()
 
 
-# --- assign_category -------------------------------------------------------
+# --- assign_categories -----------------------------------------------------
 
 
 def test_assign_single_and_bulk_overwrite_unconditionally(db_path):
@@ -163,21 +175,43 @@ def test_assign_single_and_bulk_overwrite_unconditionally(db_path):
     try:
         a, b, c = _seed(conn, ["A", "B", "C"])
 
-        assert assign_category(conn, [a], "Food") == 1
+        assert assign_categories(conn, [(a, "Food")]) == 1
         assert _categories(conn, [a, b, c]) == ["Food", None, None]
 
         # Bulk, including an already-categorized row: overwritten, not skipped.
-        assert assign_category(conn, [a, b], "Travel") == 2
+        assert assign_categories(conn, [(a, "Travel"), (b, "Travel")]) == 2
         assert _categories(conn, [a, b, c]) == ["Travel", "Travel", None]
     finally:
         conn.close()
 
 
-def test_assign_duplicate_ids_count_once(db_path):
+def test_assign_mixed_categories_in_one_call(db_path):
+    # The reason for the pairs shape: one call, each row its own value.
+    conn = get_connection()
+    try:
+        a, b, c = _seed(conn, ["A", "B", "C"])
+        assert assign_categories(conn, [(a, "Food"), (b, "Travel"), (c, "Food")]) == 3
+        assert _categories(conn, [a, b, c]) == ["Food", "Travel", "Food"]
+    finally:
+        conn.close()
+
+
+def test_assign_identical_duplicate_pairs_count_once(db_path):
     conn = get_connection()
     try:
         (a,) = _seed(conn, ["A"])
-        assert assign_category(conn, [a, a, a], "Food") == 1
+        assert assign_categories(conn, [(a, "Food"), (a, "Food"), (a, "Food")]) == 1
+    finally:
+        conn.close()
+
+
+def test_assign_conflicting_duplicate_pairs_are_rejected_and_write_nothing(db_path):
+    conn = get_connection()
+    try:
+        a, b = _seed(conn, ["A", "B"])
+        with pytest.raises(ValueError):
+            assign_categories(conn, [(a, "Food"), (b, "Travel"), (a, "Travel")])
+        assert _categories(conn, [a, b]) == [None, None]
     finally:
         conn.close()
 
@@ -187,7 +221,8 @@ def test_assign_with_any_missing_id_writes_nothing(db_path):
     try:
         a, b = _seed(conn, ["A", "B"])
         with pytest.raises(TransactionNotFoundError) as exc_info:
-            assign_category(conn, [a, b, 9999], "Food")
+            # Mixed categories: the existence check must cover every group, not just one.
+            assign_categories(conn, [(a, "Food"), (b, "Travel"), (9999, "Food")])
         assert exc_info.value.missing_ids == [9999]
         # Atomic: the two valid ids were not updated either.
         assert _categories(conn, [a, b]) == [None, None]
@@ -195,14 +230,14 @@ def test_assign_with_any_missing_id_writes_nothing(db_path):
         conn.close()
 
 
-def test_assign_rejects_empty_category_and_empty_id_list(db_path):
+def test_assign_rejects_empty_category_and_empty_pair_list(db_path):
     conn = get_connection()
     try:
         (a,) = _seed(conn, ["A"])
         with pytest.raises(ValueError):
-            assign_category(conn, [a], "")
+            assign_categories(conn, [(a, "")])
         with pytest.raises(ValueError):
-            assign_category(conn, [], "Food")
+            assign_categories(conn, [])
         assert _categories(conn, [a]) == [None]
     finally:
         conn.close()
@@ -237,7 +272,7 @@ def test_exact_tier_is_case_insensitive_and_unanimous_is_confidence_one(db_path)
     conn = get_connection()
     try:
         target, m1, m2 = _seed(conn, ["Coffee Shop", "COFFEE SHOP", "coffee shop"])
-        assign_category(conn, [m1, m2], "Food")
+        _assign(conn, [m1, m2], "Food")
         assert suggest_category(conn, target) == {
             "category": "Food",
             "confidence": 1.0,
@@ -253,7 +288,7 @@ def test_exact_tier_does_no_other_normalization(db_path):
     conn = get_connection()
     try:
         target, spaced, digit = _seed(conn, ["SHOP 1", "SHOP 1 ", "SHOP 2"])
-        assign_category(conn, [spaced, digit], "Food")
+        _assign(conn, [spaced, digit], "Food")
         assert suggest_category(conn, target)["match_type"] == "fuzzy"
     finally:
         conn.close()
@@ -263,8 +298,8 @@ def test_exact_tier_never_matches_the_transaction_against_itself(db_path):
     conn = get_connection()
     try:
         target, other = _seed(conn, ["SHOP", "SOMETHING ELSE"])
-        assign_category(conn, [target], "Food")
-        assign_category(conn, [other], "Travel")
+        _assign(conn, [target], "Food")
+        _assign(conn, [other], "Travel")
         # The only exact match for "SHOP" is the target itself, which is
         # excluded -- so this must fall through to fuzzy and find "Travel".
         result = suggest_category(conn, target)
@@ -278,8 +313,8 @@ def test_exact_tier_majority_wins_with_share_as_confidence(db_path):
     conn = get_connection()
     try:
         target, f1, f2, t1 = _seed(conn, ["SHOP", "SHOP", "SHOP", "SHOP"])
-        assign_category(conn, [f1, f2], "Food")
-        assign_category(conn, [t1], "Travel")
+        _assign(conn, [f1, f2], "Food")
+        _assign(conn, [t1], "Travel")
         result = suggest_category(conn, target)
         assert result["category"] == "Food"
         assert result["confidence"] == pytest.approx(2 / 3)
@@ -294,15 +329,15 @@ def test_exact_tier_tie_breaks_to_highest_id(db_path):
     conn = get_connection()
     try:
         target, older, newer = _seed(conn, ["SHOP", "SHOP", "SHOP"])
-        assign_category(conn, [older], "Travel")
-        assign_category(conn, [newer], "Food")
+        _assign(conn, [older], "Travel")
+        _assign(conn, [newer], "Food")
         result = suggest_category(conn, target)
         assert result["category"] == "Food"
         assert result["confidence"] == pytest.approx(0.5)
 
         # Flip the assignments: the tie must follow the id, not the category name.
-        assign_category(conn, [older], "Food")
-        assign_category(conn, [newer], "Travel")
+        _assign(conn, [older], "Food")
+        _assign(conn, [newer], "Travel")
         assert suggest_category(conn, target)["category"] == "Travel"
     finally:
         conn.close()
@@ -312,8 +347,8 @@ def test_fuzzy_tier_picks_highest_ratio_and_reports_it(db_path):
     conn = get_connection()
     try:
         target, close, far = _seed(conn, ["COFFEE SHOP 12", "COFFEE SHOP 34", "AIRLINE TICKETS"])
-        assign_category(conn, [close], "Food")
-        assign_category(conn, [far], "Travel")
+        _assign(conn, [close], "Food")
+        _assign(conn, [far], "Travel")
         result = suggest_category(conn, target)
         assert result["match_type"] == "fuzzy"
         assert result["category"] == "Food"
@@ -326,7 +361,7 @@ def test_fuzzy_tier_has_no_floor(db_path):
     conn = get_connection()
     try:
         target, only = _seed(conn, ["ZZZZZZZZ", "AAAAAAAA"])
-        assign_category(conn, [only], "Travel")
+        _assign(conn, [only], "Travel")
         result = suggest_category(conn, target)
         assert result["match_type"] == "fuzzy"
         assert result["category"] == "Travel"
@@ -343,7 +378,105 @@ def test_fuzzy_tier_is_global_across_cards(db_path):
         insert_statement(conn, card_a, date(2026, 1, 1), date(2026, 1, 31), [_txn(1, "SHOP X")])
         insert_statement(conn, card_b, date(2026, 1, 1), date(2026, 1, 31), [_txn(1, "SHOP Y")])
         a_id, b_id = [r["id"] for r in conn.execute("SELECT id FROM transactions ORDER BY id")]
-        assign_category(conn, [b_id], "Food")
+        _assign(conn, [b_id], "Food")
         assert suggest_category(conn, a_id)["category"] == "Food"
+    finally:
+        conn.close()
+
+
+# --- suggest_categories (batch) --------------------------------------------
+
+
+def test_batch_matches_single_id_results_in_input_order(db_path):
+    conn = get_connection()
+    try:
+        t1, t2, t3, m = _seed(conn, ["SHOP", "AIRLINE", "ZZZZ", "shop"])
+        _assign(conn, [m], "Food")
+        ids = [t3, t1, t2]
+        batch = suggest_categories(conn, ids)
+        assert [b["transaction_id"] for b in batch] == ids
+        for entry in batch:
+            expected = suggest_category(conn, entry["transaction_id"])
+            assert {k: v for k, v in entry.items() if k != "transaction_id"} == expected
+        assert batch[1]["match_type"] == "exact"
+    finally:
+        conn.close()
+
+
+def test_batch_runs_the_categorized_query_once(db_path, monkeypatch):
+    conn = get_connection()
+    try:
+        ids = _seed(conn, ["A", "B", "C", "D", "E"])
+        _assign(conn, ids[-1:], "Food")
+
+        calls = []
+        real = categories._fetch_categorized
+
+        def counting(c):
+            calls.append(1)
+            return real(c)
+
+        monkeypatch.setattr(categories, "_fetch_categorized", counting)
+        result = suggest_categories(conn, ids)
+        assert len(result) == len(ids)
+        assert len(calls) == 1
+    finally:
+        conn.close()
+
+
+def test_batch_excludes_each_target_from_its_own_candidates(db_path):
+    # Two categorized rows batched together: each must see only the other.
+    conn = get_connection()
+    try:
+        a, b = _seed(conn, ["SHOP", "SOMETHING ELSE"])
+        _assign(conn, [a], "Food")
+        _assign(conn, [b], "Travel")
+        by_id = {e["transaction_id"]: e for e in suggest_categories(conn, [a, b])}
+        assert by_id[a]["category"] == "Travel"
+        assert by_id[b]["category"] == "Food"
+    finally:
+        conn.close()
+
+
+def test_batch_cold_start_and_duplicates(db_path):
+    conn = get_connection()
+    try:
+        a, b = _seed(conn, ["A", "B"])
+        result = suggest_categories(conn, [a, a, b])
+        assert [e["transaction_id"] for e in result] == [a, b]
+        assert all(e["match_type"] == "none" for e in result)
+    finally:
+        conn.close()
+
+
+def test_batch_with_any_missing_id_raises_and_computes_nothing(db_path, monkeypatch):
+    conn = get_connection()
+    try:
+        (a,) = _seed(conn, ["A"])
+        monkeypatch.setattr(
+            categories, "_fetch_categorized", lambda c: pytest.fail("engine ran")
+        )
+        with pytest.raises(TransactionNotFoundError) as exc_info:
+            suggest_categories(conn, [a, 9999])
+        assert exc_info.value.missing_ids == [9999]
+        with pytest.raises(ValueError):
+            suggest_categories(conn, [])
+    finally:
+        conn.close()
+
+
+# --- list_categories -------------------------------------------------------
+
+
+def test_list_categories_is_sorted_distinct_and_empty_before_any_assignment(db_path):
+    conn = get_connection()
+    try:
+        a, b, c, d = _seed(conn, ["A", "B", "C", "D"])
+        assert list_categories(conn) == []
+        assign_categories(conn, [(a, "Travel"), (b, "Food"), (c, "Food")])
+        assert list_categories(conn) == ["Food", "Travel"]
+        # Reassigning the only "Travel" row drops it from the catalog.
+        assign_categories(conn, [(a, "Food")])
+        assert list_categories(conn) == ["Food"]
     finally:
         conn.close()
