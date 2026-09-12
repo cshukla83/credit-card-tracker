@@ -5611,3 +5611,23 @@ multi-select typeahead and accept-suggestions, create-new in both places,
 error display on a failed write. Then decide whether the card column is
 wanted (one read-query change) and whether "Already categorized" rows should
 also receive suggestions.
+
+## Data note — 2026-09-12 (not a build session)
+
+`data/tracker.db` is now pre-populated with all 18 real sample statements,
+under an explicit, scoped exception to the "don't touch tracker.db" rule so
+the Review & assign screen can be walked by hand. Counts only:
+
+- Cards: the pre-existing HDFC Diners card was reused; ICICI Coral, SBI
+  Titan, and IndusInd Legend were created via `scripts.create_card`
+  (bank/card_type mirror the parser dispatch and test fixtures; no
+  nicknames).
+- Statements: 6 HDFC, 4 ICICI, 4 SBI, 4 IndusInd — 18 total. Two HDFC
+  statements were already present and were skipped by the import script's
+  own dedup; 16 were imported.
+- Transactions: 336 total, 0 categorized. All 18 statements reconcile
+  against their own summary totals (the `*_real_statements` test modules).
+- `init_db()` migrated the live DB's `category` column in place on the
+  first import — it predated Session 41.
+
+No code changed.
