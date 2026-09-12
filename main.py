@@ -4,6 +4,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from storage.aggregate import PeriodError, aggregate_spend, resolve_period
 from storage.cards import list_cards_with_statements
 from storage.categories import (
     InvalidPaymentFlagError,
@@ -98,6 +99,38 @@ def read_transactions(
 # minus the one each of them *is* -- so a frontend can ask "which cards have
 # data in this month/range" or "which months exist for this card" and
 # narrow every picker by the others without a picker ever narrowing itself.
+@app.get("/transactions/aggregate")
+def read_aggregate(
+    granularity: str | None = None,
+    mode: str | None = None,
+    count: int | None = None,
+    month: str | None = None,
+    quarter: str | None = None,
+    year: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    bank: str | None = None,
+    card_id: int | None = None,
+    card_type: str | None = None,
+    conn=Depends(get_db),
+):
+    # Spend by category / subcategory over a period (Session 65). The
+    # period is resolved server-side and echoed back as concrete dates, so a
+    # client never re-derives them. Invalid period specs are 422 with the
+    # reason; filters are the shared read-path set and, as on /transactions,
+    # an unknown bank / card is an empty result, not an error.
+    try:
+        start_date, end_date = resolve_period(
+            granularity, mode=mode, count=count, month=month, quarter=quarter,
+            year=year, start=start, end=end,
+        )
+    except PeriodError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return aggregate_spend(
+        conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type
+    )
+
+
 @app.get("/cards")
 def read_cards(
     statement_month: str | None = None,

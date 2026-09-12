@@ -7518,3 +7518,106 @@ been designed or decided.
 ### Next steps
 Unchanged from Session 63: the Module 3 aggregation endpoint. The three
 items above wait for their own scoping conversations.
+
+## Session 65 — 2026-09-12
+
+### Goal
+Step 3b, backend only: `GET /transactions/aggregate`, spend by category and
+subcategory over a period resolved from granularity/mode parameters, netting
+refunds against debits and excluding card payments, filterable by the
+shared read-path set. No dashboard UI, no LLM commentary.
+
+### What happened
+
+**Two halves in a new module, `storage/aggregate.py`.**
+
+*`resolve_period()`* is a pure function — `today` is injectable, and the
+endpoint reaches it through a one-line `_today()` indirection so tests pin
+the date without patching `datetime`. It turns the API's parameters into
+one inclusive `(start, end)`:
+
+- `custom`: `start` and `end` (`YYYY-MM-DD`) required, `start <= end`;
+  `mode` or `count` present → rejected as not applicable.
+- `week`: `mode=relative` only; `absolute` is rejected with "relative only".
+- `month` / `quarter` / `year`: `mode` required. *relative*: `count >= 1`,
+  window ends today and starts today moved back `count` **calendar units**
+  — `month, count=3` on 15 May is 15 Feb–15 May, not the last three
+  complete months; `week` is `7 × count` days. *absolute*: `month=YYYY-MM`,
+  `quarter=YYYY-Qn`, `year=YYYY` → the full calendar period, with the
+  month/quarter end taken from `calendar.monthrange` so February and leap
+  years are right.
+- Month arithmetic is hand-rolled (`_shift_months`, no `dateutil` in the
+  project): the day is clamped to the target month's length, so 31 Mar back
+  one month is the last day of February, and a 29 Feb back one year lands
+  on 28 Feb. Pinned by tests.
+- Every rejection raises `PeriodError` with a message naming what was
+  wrong; the endpoint maps it to **422** with that message as `detail`.
+  FastAPI's own type validation covers `count=three`.
+
+*`aggregate_spend(conn, start, end, bank, card_id, card_type)`* builds its
+JOIN/WHERE with the shared `filter_sql` — dates and filters through the
+same helper the listing endpoints use — and appends the scope rule as SQL:
+`txn_type = 'debit' OR (txn_type = 'credit' AND is_payment = 0)`. Payments
+(`is_payment = 1`) are therefore absent from the result entirely, even if
+they carry labels (the ledger fixture gives the payment row the cascade's
+labels and asserts no "Credit Card Payment" category appears). One
+`GROUP BY category, subcategory` returns `SUM(debit ? amount : -amount)`
+and `COUNT(*)`; Python folds those into per-category totals and sorted
+subcategory lists. `NULL` → "Uncategorized" is applied in Python after
+grouping on the real values, at both levels, so a row with a subcategory
+but no category lands as that subcategory under the "Uncategorized"
+category — the DATA_MODEL edge case, tested. Amounts may be negative and
+are not clamped (a category netting to −30 is asserted); rounding to two
+places happens once, at the edge, after summing. Categories and
+subcategories are sorted by amount descending; `total` is the sum of
+category amounts.
+
+**Endpoint.** `GET /transactions/aggregate` takes the period params plus
+`bank`, `card_id`, `card_type`, resolves the period, and returns exactly
+`{period: {start, end}, total, categories: [{category, amount,
+transaction_count, subcategories: [{subcategory, amount,
+transaction_count}]}]}`. `period` is always the resolved concrete dates,
+whichever mode produced them. An unknown bank or card is an empty result
+with the period echoed, not an error — consistent with `/transactions`.
+Route order needed no care: `/transactions/aggregate` has two segments and
+the suggestion route has three.
+
+**Tests** — `tests/test_aggregate.py`, 63: relative windows for every
+granularity including a year-boundary quarter and the two clamping cases;
+absolute month edges (28-day, leap, 31-day), all four quarters, year,
+custom (including a one-day range); nineteen `PeriodError` rejections by
+message fragment; the ledger fixture's netting / grouping / exclusion /
+ordering / period echo; net-negative not clamped; inclusive edges on both
+ends; the empty period shape; `filter_sql` narrowing by bank, card,
+card_type, their combination, and an unknown bank; and at the endpoint,
+one case per granularity × mode (eight) checking the echoed period and the
+exact key sets at all three levels, relative-month against direct
+aggregation, absolute month and quarter boundaries, the week/absolute 422,
+eleven invalid specs → 422, and filters with unknown values. Full suite:
+**460 passing** (397 + 63).
+
+No server, no live database; `docs/DATA_MODEL.md` untouched (read path
+only).
+
+### Outcome
+The dashboard's data source exists: one call resolves any of the locked
+period forms to concrete dates and returns net spend per category and
+subcategory over it, refunds subtracted, card payments excluded, filtered
+exactly like the rest of the app.
+
+### In plain English
+The system can now answer "where did the money go?" for any span of time
+— the last two weeks, the last three months counted back from today, a
+named calendar month, quarter or year, or any two dates — and reports the
+span it actually used so the screen never has to work it out itself.
+Spending is totalled by category and, within each, by finer label; refunds
+are subtracted from what was spent; and bill payments to the card are left
+out completely, since they are not spending. Anything unlabelled is
+grouped under "Uncategorized" rather than dropped. A category can come out
+negative if refunds outweighed purchases in that span, and that is shown
+as it is. The optional bank and card filters mean the same thing here as
+everywhere else in the app, because they share the same code.
+
+### Next steps
+The dashboard UI over this endpoint (Module 3 frontend), then its LLM
+commentary once that module's open questions are answered.
