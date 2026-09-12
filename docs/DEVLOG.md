@@ -6268,3 +6268,105 @@ tested, not a bug.
 Step 2: a "Group by similarity" mode on the Review & assign screen with a
 percentage input, rendering one collapsible group per cluster and a status
 line making the omitted, below-threshold rows legible.
+
+## Session 51 — 2026-09-12
+
+### Goal
+Step 2: a "Group by similarity" mode on the Review & assign screen, driven
+by the Session 50 clustering endpoint, alongside the existing "Group by
+suggested category" default — changing only how rows are grouped (and, in
+similarity mode, which rows are shown), never the filters, the selection,
+or what actions a row or the multi-select bar offers.
+
+### What happened
+
+**Mode bar.** A row above the status line: "Group by" with two radios,
+*suggested category* (default) and *similarity*, and — visible only in
+similarity mode — a number input labelled "at least [70] % similar"
+(`min=0 max=100 step=1`). Mode and threshold live in `review.mode` /
+`review.threshold`, in memory only; they are not in the URL. The brief did
+not ask for persistence and a reload returning to the default mode is the
+least surprising outcome for a view toggle.
+
+**Data flow.** `fetchClusters(transactions)` posts *every* transaction in
+view — categorized or not — to `/transactions/clusters` in the table's own
+order, which is the anchor order the endpoint honours. Two entry points:
+
+- `loadReview()` (filter change, assign, tab switch) now also fetches
+  clusters when in similarity mode, inside the same `Promise.all` and under
+  the same `requestSeq` guard as the rest of the load.
+- `reloadClusters()` handles mode-into-similarity and threshold changes:
+  it re-clusters the transactions already loaded rather than re-fetching
+  everything, under its **own** `clusterSeq`. It must not bump
+  `requestSeq`, because that would silently discard an in-flight table
+  load; and it needs a guard of its own so a slow response for an older
+  threshold cannot land after a newer one. The threshold input is debounced
+  (the existing 300 ms), clamped to 0–100, and ignored when unchanged.
+
+**Grouping.** `buildGroups()` branches on mode. In similarity mode it emits
+one group per returned cluster, `kind: "cluster"`, titled `Similar to
+"<anchor description>"`, members in matched order, keyed for collapse by
+`cluster:<anchor id>` (titles can repeat; ids can't). Meta is count, total,
+and how many of the members are uncategorized. **No accept-all on a
+cluster** — `canAccept` is forced false for the kind — because a cluster
+has no single suggested category; each row's own suggestion, accept, and
+change controls are exactly the existing ones, since `renderRow()` was not
+touched. The group checkbox adds/removes the whole cluster from the manual
+selection, as for any group, and the multi-select bar (typed assign,
+"Accept suggestions (N)", clear) is the same code.
+
+**Making the omitted rows legible.** Rows in no cluster are simply not
+rendered in this mode. A mode note under the status line says
+`14 of 52 shown — 38 with no match at 70% or above`; when nothing clusters,
+the empty state reads "No two descriptions are 70% similar or more. Lower
+the threshold to find looser matches." The regular status line (total /
+uncategorized / done) is unchanged and still describes the whole filtered
+set.
+
+**What deliberately does not change.**
+- *Filters.* Untouched by a mode switch. "Uncategorized only" is disabled
+  (greyed, value kept) in similarity mode because membership there ignores
+  category state; switching back restores exactly the previous view.
+- *Selection.* `pruneSelectionToVisible()` is mode-aware: in similarity
+  mode it prunes to the *filtered set*, not to the rows above threshold, so
+  neither a mode switch nor a threshold change removes anything from the
+  selection. Consequence worth knowing: the selection bar can report more
+  rows than are currently visible; that is the brief's "selection state
+  doesn't change" taken literally, and the count is still true.
+- *Switching back.* Returns to the existing `loadReview()` — suggestions
+  re-fetched, every filtered row shown, exactly the Session 43 behaviour.
+
+**Verification.** Script parsed with the system JavaScriptCore. Backend
+suite unaffected (323). **Reasoned through only — not verified visually.**
+The browser extension was unavailable again; no server started, no live
+request, no frontend test suite invented.
+
+### Outcome
+The review screen can regroup the filtered transactions by description
+similarity at a chosen percentage, one collapsible group per cluster with
+the same per-row and multi-select actions as before, with the rows below
+threshold accounted for in a status note rather than silently absent.
+Switching back restores the default grouping unchanged.
+
+### In plain English
+The review screen has a second way of arranging transactions: instead of
+grouping them by the label the system suggests, it can group them by how
+alike their descriptions look, at a similarity level you set with a
+percentage box. Each group can be folded, ticked as a whole, and worked
+through with the same accept, change, and bulk-assign controls as before;
+what changed is only the arrangement. Transactions that don't resemble
+anything else closely enough are left off the screen in this mode, and a
+line under the counts says how many that is — so they read as "below the
+bar", not "lost". Switching back shows everything again exactly as before.
+
+Your filters and anything you've ticked stay put when you switch modes or
+move the percentage. As with the last several front-end sessions, this was
+checked by reading the code rather than by seeing it run, so a manual look
+is the next step.
+
+### Next steps
+Manual walk of similarity mode against the seeded data: the threshold at
+several values, the mode note's counts, collapse and group-select on a
+cluster, per-row accept and change inside a cluster, a bulk assign from a
+mixed selection, and the switch back. Decide then whether mode/threshold
+belong in the URL.

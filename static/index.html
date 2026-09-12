@@ -152,6 +152,44 @@
     font-size: 0.92rem;
     margin-bottom: 1rem;
   }
+  .mode-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 1.1rem;
+    margin-bottom: 0.9rem;
+    font-size: 0.9rem;
+  }
+  .mode-bar .mode-label {
+    color: var(--muted);
+  }
+  .mode-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    cursor: pointer;
+  }
+  .mode-option input[type="radio"] {
+    accent-color: var(--accent);
+    margin: 0;
+  }
+  .mode-option.threshold {
+    color: var(--muted);
+  }
+  .mode-option.threshold input {
+    width: 4.2rem;
+    padding: 0.25rem 0.4rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-sm);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .mode-note {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin: -0.4rem 0 0.9rem;
+  }
   .nothing-left {
     background: var(--surface);
     border: 1px dashed var(--rule-strong);
@@ -580,7 +618,24 @@
 
   <!-- Review & assign -->
   <div id="panel-review" style="display: none;">
+    <div id="mode-bar" class="mode-bar">
+      <span class="mode-label">Group by</span>
+      <label class="mode-option">
+        <input type="radio" name="review-mode" value="suggested" checked>
+        suggested category
+      </label>
+      <label class="mode-option">
+        <input type="radio" name="review-mode" value="similarity">
+        similarity
+      </label>
+      <label class="mode-option threshold" id="threshold-label" style="display: none;">
+        at least
+        <input type="number" id="threshold-input" min="0" max="100" step="1" value="70">
+        % similar
+      </label>
+    </div>
     <div id="review-status">Loading…</div>
+    <div id="review-mode-note" class="mode-note" style="display: none;"></div>
     <div id="review-error" class="error" style="display: none;"></div>
     <div id="selection-bar" class="selection-bar" style="display: none;"></div>
     <div id="nothing-left" class="nothing-left" style="display: none;"></div>
@@ -620,6 +675,10 @@
     const panelReviewEl = document.getElementById("panel-review");
 
     const reviewStatusEl = document.getElementById("review-status");
+    const reviewModeNoteEl = document.getElementById("review-mode-note");
+    const modeRadios = Array.from(document.querySelectorAll('input[name="review-mode"]'));
+    const thresholdLabelEl = document.getElementById("threshold-label");
+    const thresholdInputEl = document.getElementById("threshold-input");
     const reviewErrorEl = document.getElementById("review-error");
     const selectionBarEl = document.getElementById("selection-bar");
     const nothingLeftEl = document.getElementById("nothing-left");
@@ -824,7 +883,10 @@
       query: "",              // selection-bar typeahead text
       editing: null,          // {id, groupIds, spread, adding} while a row's "change" is open
       busy: false,            // an assign call is in flight
-      collapsed: new Set(),   // group titles collapsed this page session (in-memory only)
+      collapsed: new Set(),   // group keys collapsed this page session (in-memory only)
+      mode: "suggested",      // "suggested" (default) or "similarity"; in-memory only
+      threshold: 70,          // similarity mode: 0-100, percentage of the ratio
+      clusters: [],           // similarity mode: [[id, ...], ...] from POST /transactions/clusters
     };
 
     function isOpen(txn) {
@@ -865,6 +927,30 @@
       const open = review.transactions.filter(isOpen);
       const done = review.transactions.filter((t) => !isOpen(t));
 
+      if (review.mode === "similarity") {
+        // One group per cluster the endpoint returned, in its order, each
+        // member in the order it was matched (anchor first). Rows in no
+        // cluster are not shown at all in this mode -- renderReview's
+        // mode note says how many, so they read as "below threshold", not
+        // "missing". Category state is irrelevant to membership here.
+        const byId = new Map(review.transactions.map((t) => [t.id, t]));
+        const groups = [];
+        for (const ids of review.clusters) {
+          const txns = ids.map((id) => byId.get(id)).filter(Boolean);
+          if (txns.length < 2) continue;
+          const anchor = txns[0];
+          groups.push(
+            makeGroup(
+              "cluster",
+              "Similar to \u201c" + anchor.description + "\u201d",
+              txns,
+              "cluster:" + anchor.id,
+            ),
+          );
+        }
+        return { groups, openCount: open.length, doneCount: done.length };
+      }
+
       const byCategory = new Map();
       const noSuggestion = [];
       for (const t of open) {
@@ -893,7 +979,7 @@
       return { groups, openCount: open.length, doneCount: done.length };
     }
 
-    function makeGroup(kind, title, txns) {
+    function makeGroup(kind, title, txns, key) {
       const ids = txns.map((t) => t.id);
       const total = txns.reduce((n, t) => n + Number(t.amount), 0);
       const methods = Array.from(
@@ -902,12 +988,26 @@
       let meta = txnLabel(txns.length) + " · " + fmtAmount(total);
       if (kind === "done") {
         meta = txnLabel(txns.length) + " · select any of these to re-assign in bulk";
+      } else if (kind === "cluster") {
+        // A cluster has no single suggested category to accept, so no
+        // methods line and (below) no accept-all; the per-row controls
+        // still carry each row's own suggestion.
+        const openCount = txns.filter(isOpen).length;
+        meta += " · " + openCount + " uncategorized";
       } else if (methods.length) {
         meta += " · " + methods.join(" + ");
       } else {
         meta += " · assign manually";
       }
-      return { kind, title, txns, ids, meta, canAccept: methods.length > 0 };
+      return {
+        kind,
+        title,
+        key: key || title,
+        txns,
+        ids,
+        meta,
+        canAccept: kind !== "cluster" && methods.length > 0,
+      };
     }
 
     function visibleIds() {
@@ -918,7 +1018,13 @@
     }
 
     function pruneSelectionToVisible() {
-      const shown = visibleIds();
+      // In similarity mode the selection is kept for every row in the
+      // filtered set, not just the rows above threshold: a threshold or
+      // mode change must not change selection state (Session 51 brief).
+      const shown =
+        review.mode === "similarity"
+          ? new Set(review.transactions.map((t) => t.id))
+          : visibleIds();
       for (const id of Array.from(review.selected)) {
         if (!shown.has(id)) review.selected.delete(id);
       }
@@ -971,12 +1077,51 @@
       return ids.map((id) => ({ transaction_id: id, category }));
     }
 
+    // Every transaction in view -- categorized or not -- goes to the
+    // clustering endpoint, in the table's own order (which is the anchor
+    // order the endpoint honours). Empty input short-circuits to [].
+    function fetchClusters(transactions) {
+      const ids = transactions.map((t) => t.id);
+      if (ids.length === 0) return Promise.resolve([]);
+      return postJSON("/transactions/clusters", {
+        transaction_ids: ids,
+        threshold: review.threshold,
+      }).then((body) => body.clusters);
+    }
+
+    // Threshold and mode changes re-cluster the transactions already
+    // loaded rather than re-fetching everything. Own sequence counter: a
+    // slow cluster response for an older threshold must not land after a
+    // newer one, and this must not bump requestSeq (which would discard an
+    // in-flight table load).
+    let clusterSeq = 0;
+
+    function reloadClusters() {
+      const seq = ++clusterSeq;
+      reviewModeNoteEl.textContent = "Grouping\u2026";
+      reviewModeNoteEl.style.display = "";
+      return fetchClusters(review.transactions)
+        .then((clusters) => {
+          if (seq !== clusterSeq) return;
+          review.clusters = clusters;
+          review.editing = null;
+          renderReview();
+        })
+        .catch((error) => {
+          if (seq !== clusterSeq) return;
+          setError("Error grouping by similarity: " + error.message);
+        });
+    }
+
     function loadReview(filters) {
       const seq = ++requestSeq;
       reviewStatusEl.textContent = "Loading…";
 
       const transactionsP = fetchJSON(transactionsURL(filters));
       const catalogP = fetchJSON("/categories");
+      const clustersP = transactionsP.then((transactions) =>
+        review.mode === "similarity" ? fetchClusters(transactions) : review.clusters,
+      );
       // Suggestions are only asked for open (uncategorized) rows: those are
       // the only ones the screen shows a suggestion for, and it's one batch
       // call however many there are.
@@ -986,8 +1131,8 @@
         return postJSON("/transactions/suggestions", { transaction_ids: openIds });
       });
 
-      return Promise.all([transactionsP, suggestionsP, catalogP])
-        .then(([transactions, suggestionBody, catalog]) => {
+      return Promise.all([transactionsP, suggestionsP, catalogP, clustersP])
+        .then(([transactions, suggestionBody, catalog, clusters]) => {
           if (seq !== requestSeq) return;
           if (!hasDateFilter(filters)) applyDateBounds(transactions);
           review.transactions = transactions;
@@ -995,6 +1140,7 @@
             suggestionBody.suggestions.map((s) => [s.transaction_id, s]),
           );
           review.catalog = catalog;
+          review.clusters = clusters;
           review.editing = null;
           // Selection survives a reload but only for rows still on screen.
           pruneSelectionToVisible();
@@ -1015,6 +1161,15 @@
 
       reviewBodyEl.textContent = "";
       nothingLeftEl.style.display = "none";
+      reviewModeNoteEl.style.display = "none";
+
+      const similarity = review.mode === "similarity";
+      thresholdLabelEl.style.display = similarity ? "" : "none";
+      // "Uncategorized only" does not apply to similarity groups (every row
+      // in view is clustered regardless of category state); it keeps its
+      // value, so switching back restores exactly the previous view.
+      uncategorizedOnlyEl.disabled = similarity;
+      uncategorizedOnlyLabelEl.style.opacity = similarity ? "0.5" : "";
 
       if (total === 0) {
         reviewStatusEl.textContent = "No transactions found.";
@@ -1028,7 +1183,22 @@
 
       renderSelectionBar();
 
-      if (openCount === 0) {
+      if (similarity) {
+        const shown = groups.reduce((n, g) => n + g.ids.length, 0);
+        const hidden = total - shown;
+        reviewModeNoteEl.textContent =
+          shown + " of " + total + " shown" +
+          (hidden > 0
+            ? " \u2014 " + hidden + " with no match at " + review.threshold + "% or above"
+            : "");
+        reviewModeNoteEl.style.display = "";
+        if (groups.length === 0) {
+          nothingLeftEl.textContent =
+            "No two descriptions are " + review.threshold + "% similar or more. " +
+            "Lower the threshold to find looser matches.";
+          nothingLeftEl.style.display = "";
+        }
+      } else if (openCount === 0) {
         nothingLeftEl.textContent = "Nothing left to review for these filters.";
         nothingLeftEl.style.display = "";
       }
@@ -1043,7 +1213,7 @@
         // Collapsed groups keep their header (and its checkbox/accept-all);
         // only the rows are withheld. Keyed by title, which is the group's
         // identity across re-renders.
-        if (review.collapsed.has(group.title)) continue;
+        if (review.collapsed.has(group.key)) continue;
         for (const txn of group.txns) {
           reviewBodyEl.appendChild(renderRow(txn, group));
         }
@@ -1170,7 +1340,7 @@
     // --- group header --------------------------------------------------
     function renderGroupHeader(group) {
       const tr = document.createElement("tr");
-      const isCollapsed = review.collapsed.has(group.title);
+      const isCollapsed = review.collapsed.has(group.key);
       tr.className = "group" + (isCollapsed ? " collapsed" : "");
       const td = document.createElement("td");
       td.colSpan = 6;
@@ -1183,8 +1353,8 @@
       toggle.setAttribute("aria-expanded", String(!isCollapsed));
       toggle.setAttribute("aria-label", (isCollapsed ? "Expand " : "Collapse ") + group.title);
       toggle.addEventListener("click", () => {
-        if (isCollapsed) review.collapsed.delete(group.title);
-        else review.collapsed.add(group.title);
+        if (isCollapsed) review.collapsed.delete(group.key);
+        else review.collapsed.add(group.key);
         renderReview();
       });
       head.appendChild(toggle);
@@ -1695,6 +1865,39 @@
       review.editing = null;
       renderReview();
     });
+    // Grouping mode: switching changes only how rows are grouped (and, in
+    // similarity mode, which are shown) -- filters and selection are left
+    // alone. Into similarity: cluster what is already loaded. Back to
+    // suggested: the full reload the screen always did, suggestions
+    // included, which shows every filtered row again.
+    for (const radio of modeRadios) {
+      radio.addEventListener("change", () => {
+        if (!radio.checked) return;
+        review.mode = radio.value;
+        review.editing = null;
+        if (review.mode === "similarity") {
+          renderReview(); // show the threshold input and note straight away
+          reloadClusters();
+        } else {
+          loadReview(currentFilters());
+        }
+      });
+    }
+
+    let thresholdTimer = null;
+    thresholdInputEl.addEventListener("input", () => {
+      clearTimeout(thresholdTimer);
+      thresholdTimer = setTimeout(() => {
+        const raw = Number(thresholdInputEl.value);
+        if (!Number.isFinite(raw)) return;
+        const value = Math.min(100, Math.max(0, Math.round(raw)));
+        if (String(value) !== thresholdInputEl.value) thresholdInputEl.value = String(value);
+        if (value === review.threshold) return;
+        review.threshold = value;
+        if (review.mode === "similarity") reloadClusters();
+      }, DEBOUNCE_MS);
+    });
+
     tabAllEl.addEventListener("click", () => setTab("all", true));
     tabReviewEl.addEventListener("click", () => setTab("review", true));
 
