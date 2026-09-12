@@ -7719,3 +7719,82 @@ by reading the code, not by seeing it run.
 Module 3's LLM commentary, once its open questions (key storage, rate-limit
 behaviour) are settled in their own scoping conversation. A manual look at
 the dashboard is part of the outstanding browser walk.
+
+## Session 67 — 2026-09-12
+
+### Goal
+Category drill-down on the Dashboard chart: click a category bar to swap
+the chart to that category's subcategories, filter the table to the same
+category, and offer a way back — all from the aggregate response already
+in hand. Frontend only, on Session 66's tab; no backend change.
+
+### What happened
+
+**One payload, two views.** `renderDashboard()` now stores the response
+and hands off to `renderDashboardView()`, which draws either the category
+view or, when `dash.drill` names a category, that category's
+`subcategories` array — mapped to the same `{label, amount,
+transaction_count}` items the chart function takes. Neither drilling in nor
+drilling out fetches anything. Bar order at both levels is the API's
+(amount-descending), not re-sorted, per Session 66's rule.
+
+**Chart.** `renderDashboardChart(items, {clickable, emptyText})` is now
+level-agnostic. It still destroys the previous `Chart` instance before
+building the next, so repeated drill-in/drill-out never stacks canvases.
+In the category view `clickable` wires Chart.js's `onClick` to
+`drillInto(label)` and the tooltip gains "click to drill in"; the cursor
+becomes a pointer over a bar. In the drilled view bars are inert. A
+genuinely empty subcategories array (which the contract should never
+produce) renders the "No subcategory data for <category>." note instead of
+a chart rather than failing.
+
+**Back control.** A `← Back to categories` link with the drilled
+category's name as a title sits above the chart, shown only while drilled;
+it calls `drillOut()`, which returns to the category view from the same
+payload.
+
+**Table sync without losing state.** While drilled, the table renders only
+the drilled category's row, forced open with its subcategory rows and its
+chevron disabled. `dash.expanded` — the per-row open/closed set — is not
+modified by drilling, so drilling out restores the full table with every
+row exactly as the user had left it.
+
+**URL.** `d_category=<name>` joins the `d_` namespace: written when
+drilled, omitted otherwise, read on load — a URL carrying it renders
+already drilled in once the response arrives, no click needed.
+
+**Drill state against new data.** Every fresh response (any filter or
+period change) is checked: if the drilled category is present, the view
+stays drilled with the new numbers; if it is absent, `dash.drill` is
+cleared, the URL param dropped, and the category view shown — never a
+stale or empty drill.
+
+**Verification.** Script parsed with the system JavaScriptCore.
+**Reasoned through only — not verified visually**: the browser extension
+was not available. As Session 66 already flagged for the chart itself,
+this means Chart.js's rendering, its click hit-testing, and the drill
+swap have not been seen here; they are traced against Chart.js 4's
+documented `onClick(event, elements)` contract. Backend suite unaffected
+(460).
+
+### Outcome
+The dashboard chart drills from categories to one category's
+subcategories and back, keeping the table in step and the user's row
+states intact, with the drilled category round-tripping through the URL
+and self-correcting when new data no longer contains it.
+
+### In plain English
+On the dashboard, clicking a bar now opens that category up: the chart
+switches to show its finer labels, the list underneath narrows to just
+that category with its detail open, and a "back to categories" link
+returns to the full picture — all instantly, since the detail was already
+loaded with the page. The choice is remembered in the address bar, so a
+saved link opens already zoomed in. If the filters or period change and
+that category no longer appears in the new figures, the view quietly
+returns to the overview instead of showing something stale. As with the
+rest of the dashboard, this has been checked by reading the code, not by
+seeing it run.
+
+### Next steps
+Unchanged: Module 3 commentary once scoped; the outstanding manual browser
+walk now also covers the dashboard and this drill-down.

@@ -278,6 +278,19 @@
   .dash-total-text.negative {
     color: var(--credit);
   }
+  .dash-drill {
+    display: flex;
+    align-items: baseline;
+    gap: 1rem;
+    margin-bottom: 0.6rem;
+    font-size: 0.92rem;
+  }
+  .dash-drill-title {
+    font-weight: 600;
+  }
+  .dash-chart-wrap canvas.clickable {
+    cursor: pointer;
+  }
   .dash-chart-wrap {
     background: var(--surface);
     border: 1px solid var(--rule);
@@ -1005,6 +1018,10 @@
       </div>
     </div>
 
+    <div id="dash-drill" class="dash-drill" style="display: none;">
+      <button type="button" id="dash-back" class="link">&larr; Back to categories</button>
+      <span id="dash-drill-title" class="dash-drill-title"></span>
+    </div>
     <div id="dash-chart-wrap" class="dash-chart-wrap" style="display: none;">
       <canvas id="dash-chart" aria-label="Spend by category" role="img"></canvas>
     </div>
@@ -2618,6 +2635,9 @@
     const dashPeriodTextEl = document.getElementById("dash-period-text");
     const dashTotalTextEl = document.getElementById("dash-total-text");
     const dashChartWrapEl = document.getElementById("dash-chart-wrap");
+    const dashDrillEl = document.getElementById("dash-drill");
+    const dashBackEl = document.getElementById("dash-back");
+    const dashDrillTitleEl = document.getElementById("dash-drill-title");
     const dashChartEl = document.getElementById("dash-chart");
     const dashChartNoteEl = document.getElementById("dash-chart-note");
     const dashTableEl = document.getElementById("dash-table");
@@ -2641,6 +2661,7 @@
     const dash = {
       ...DASH_DEFAULTS,
       expanded: new Set(), // category names whose subcategories are open (in-memory)
+      drill: null,          // category name the chart is drilled into, or null (Session 67)
       chart: null,          // the live Chart.js instance, if any
       data: null,
     };
@@ -2650,6 +2671,7 @@
     // --- URL (d_ namespace) ---
     function dashboardURLParams() {
       const out = {};
+      if (dash.drill) out.d_category = dash.drill;
       if (dash.granularity !== DASH_DEFAULTS.granularity) out.d_granularity = dash.granularity;
       if (dash.granularity === "custom") {
         if (dash.start) out.d_start = dash.start;
@@ -2692,6 +2714,8 @@
       if (st) dash.start = st;
       if (en) dash.end = en;
       if (dash.granularity === "week") dash.mode = "relative"; // week is relative-only
+      const drill = params.get("d_category");
+      if (drill) dash.drill = drill; // validated against the response when it arrives
       syncPeriodControls();
     }
 
@@ -2806,18 +2830,79 @@
       dashTotalTextEl.classList.toggle("negative", data.total < 0);
       dashSummaryEl.style.display = "";
 
-      renderDashboardChart(data.categories);
-      renderDashboardTable(data.categories);
+      // Drill state is checked against every fresh response: if the drilled
+      // category is still present, stay drilled with the new numbers; if it
+      // is gone (filters or period moved), fall back to the category view
+      // and drop the URL param rather than show a stale or empty drill.
+      if (dash.drill && !data.categories.some((c) => c.category === dash.drill)) {
+        dash.drill = null;
+        updateURL(currentFilters());
+      }
+      renderDashboardView();
     }
 
-    function renderDashboardChart(categories) {
+    // Both views come from the one payload already in hand (dash.data);
+    // drilling in or out never refetches.
+    function renderDashboardView() {
+      const categories = dash.data.categories;
+      const drilled = dash.drill
+        ? categories.find((c) => c.category === dash.drill) || null
+        : null;
+      if (drilled) {
+        dashDrillTitleEl.textContent = drilled.category + " \u00b7 subcategories";
+        dashDrillEl.style.display = "";
+        renderDashboardChart(
+          drilled.subcategories.map((s) => ({
+            label: s.subcategory,
+            amount: s.amount,
+            transaction_count: s.transaction_count,
+          })),
+          { clickable: false, emptyText: "No subcategory data for " + drilled.category + "." },
+        );
+      } else {
+        dashDrillEl.style.display = "none";
+        renderDashboardChart(
+          categories.map((c) => ({
+            label: c.category,
+            amount: c.amount,
+            transaction_count: c.transaction_count,
+          })),
+          { clickable: true, emptyText: "No spend in this period." },
+        );
+      }
+      renderDashboardTable(categories);
+    }
+
+    function drillInto(category) {
+      if (dash.drill === category) return;
+      dash.drill = category;
+      updateURL(currentFilters());
+      renderDashboardView();
+    }
+
+    function drillOut() {
+      if (!dash.drill) return;
+      dash.drill = null;
+      updateURL(currentFilters());
+      renderDashboardView();
+    }
+
+    dashBackEl.addEventListener("click", drillOut);
+
+    // Draws one bar per item ({label, amount, transaction_count}) in the
+    // order given -- the API's order at either level, never re-sorted. The
+    // previous instance is always destroyed first, so drilling in and out
+    // repeatedly never stacks canvases. `clickable` wires a bar click to
+    // drillInto() for the category view only.
+    function renderDashboardChart(items, { clickable, emptyText }) {
       if (dash.chart) {
         dash.chart.destroy();
         dash.chart = null;
       }
-      if (categories.length === 0) {
+      dashChartEl.classList.toggle("clickable", Boolean(clickable));
+      if (items.length === 0) {
         dashChartWrapEl.style.display = "none";
-        dashChartNoteEl.textContent = "No spend in this period.";
+        dashChartNoteEl.textContent = emptyText;
         dashChartNoteEl.style.display = "";
         return;
       }
@@ -2830,13 +2915,12 @@
       }
       dashChartNoteEl.style.display = "none";
       dashChartWrapEl.style.display = "";
-      // One bar per category, in the API's order (already amount-descending).
-      const labels = categories.map((c) => c.category);
-      const values = categories.map((c) => c.amount);
+      const labels = items.map((c) => c.label);
+      const values = items.map((c) => c.amount);
       const rootStyle = getComputedStyle(document.documentElement);
       const accent = rootStyle.getPropertyValue("--accent").trim() || "#0f6b6b";
       const credit = rootStyle.getPropertyValue("--credit").trim() || "#1a7f4b";
-      dashChartWrapEl.style.height = Math.max(160, 36 * categories.length + 60) + "px";
+      dashChartWrapEl.style.height = Math.max(160, 36 * items.length + 60) + "px";
       dash.chart = new Chart(dashChartEl, {
         type: "bar",
         data: {
@@ -2853,13 +2937,22 @@
           responsive: true,
           maintainAspectRatio: false,
           animation: false,
+          onClick: (_event, elements) => {
+            if (!clickable || !elements.length) return;
+            drillInto(items[elements[0].index].label);
+          },
+          onHover: (event, elements) => {
+            if (!clickable) return;
+            event.native.target.style.cursor = elements.length ? "pointer" : "";
+          },
           plugins: {
             legend: { display: false },
             tooltip: {
               callbacks: {
                 label: (ctx) => {
-                  const c = categories[ctx.dataIndex];
-                  return fmtAmount(c.amount) + " \u00b7 " + txnLabel(c.transaction_count);
+                  const c = items[ctx.dataIndex];
+                  return fmtAmount(c.amount) + " \u00b7 " + txnLabel(c.transaction_count) +
+                    (clickable ? " \u00b7 click to drill in" : "");
                 },
               },
             },
@@ -2877,12 +2970,16 @@
 
     function renderDashboardTable(categories) {
       dashBodyEl.textContent = "";
-      if (categories.length === 0) {
+      // Drilled in: only that category's row, shown open. dash.expanded is
+      // not touched, so drilling back out restores every row's own state.
+      const drilled = dash.drill;
+      const shown = drilled ? categories.filter((c) => c.category === drilled) : categories;
+      if (shown.length === 0) {
         dashTableEl.style.display = "none";
         return;
       }
-      for (const c of categories) {
-        const isOpen = dash.expanded.has(c.category);
+      for (const c of shown) {
+        const isOpen = drilled ? true : dash.expanded.has(c.category);
         const tr = document.createElement("tr");
         tr.className = "dash-cat" + (isOpen ? " expanded" : "");
 
@@ -2896,6 +2993,7 @@
           "aria-label",
           (isOpen ? "Hide" : "Show") + " subcategories of " + c.category,
         );
+        toggle.disabled = Boolean(drilled); // the drilled row stays open
         toggle.addEventListener("click", () => {
           if (isOpen) dash.expanded.delete(c.category);
           else dash.expanded.add(c.category);
