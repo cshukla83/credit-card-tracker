@@ -38,7 +38,7 @@ it is not part of the application model and is never referenced by code.
 ### How the schema is applied
 
 `storage.db.init_db()` runs the three `CREATE TABLE IF NOT EXISTS`
-statements, then three column migrations of identical shape, each of which
+statements, then four column migrations of identical shape, each of which
 checks `PRAGMA table_xinfo(<table>)` for the column and runs
 `ALTER TABLE ... ADD COLUMN` only if it is absent:
 
@@ -51,8 +51,10 @@ checks `PRAGMA table_xinfo(<table>)` for the column and runs
   for consistency.
 - `_ensure_subcategory_column()` → `transactions.subcategory` (Session
   53). Same idiom as `category`.
+- `_ensure_merchant_column()` → `transactions.merchant` (Session 55).
+  Same idiom again.
 
-All three `ALTER TABLE` statements live in `storage/schema.py` next to the
+All four `ALTER TABLE` statements live in `storage/schema.py` next to the
 `CREATE TABLE` they must stay identical to.
 
 Every connection from `storage.db.get_connection()` sets
@@ -181,6 +183,7 @@ One line item from a statement, as extracted by the bank-specific parser.
 | `reward_points` | `REAL`        | nullable                                                           |
 | `category`      | `TEXT`        | nullable — `NULL` means uncategorized                              |
 | `subcategory`   | `TEXT`        | nullable — `NULL` means no subcategory                             |
+| `merchant`      | `TEXT`        | nullable — `NULL` means no merchant label                          |
 
 **Table constraints**
 
@@ -260,6 +263,20 @@ One line item from a statement, as extracted by the bank-specific parser.
   returns nothing for a row until its `category` is set; it has no
   fuzzy tier and falls back to the row's own `category` value
   (`match_type "same_as_category"`).
+
+- **`merchant`** (Session 55) is a user-assigned, free-text merchant
+  label — a cleaned-up name for the raw `description`. Same storage
+  rules as the other two labels: nullable, `NULL` is the only "not set",
+  never an empty string, Title-Cased on write, no `CHECK`, no lookup
+  table (`GET /merchants` is the distinct non-null values, unscoped).
+  Independent of `category`: it can be set with or without one. Its
+  suggestion engine reuses category's exact and fuzzy tiers over rows
+  with a non-null merchant — globally, not scoped by category — and,
+  unlike category, always yields a value: with nothing to learn from it
+  proposes the row's own raw `description` (`match_type
+  "from_description"`, confidence `null`). The one labelled-rows query
+  behind all three engines selects rows with a non-null `category` **or**
+  `merchant`.
 
 ---
 
@@ -362,6 +379,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     reward_points REAL,
     category TEXT,
     subcategory TEXT,
+    merchant TEXT,
     FOREIGN KEY(statement_id) REFERENCES statements(id) ON DELETE CASCADE
 );
 ```

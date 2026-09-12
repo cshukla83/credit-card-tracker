@@ -6658,3 +6658,97 @@ Manual walk: the subcategory column on both tabs; accept for an exact and a
 same-as-category suggestion; the dropdown scoped to a category and
 unfiltered; add-new; spread-to-group; the amber row for both editors; and
 that the multi-select bar still writes category only.
+
+## Session 55 — 2026-09-12
+
+### Goal
+Step 1 of a two-step build: a nullable `transactions.merchant` column, a
+merchant suggestion engine that reuses category's tiers plus a fallback
+category doesn't have, and — for the third session running — a breaking
+extension of the suggestion and assign endpoint shapes. Step 2 is the
+frontend column.
+
+### What happened
+
+**Schema.** `merchant TEXT`, nullable; `_ensure_merchant_column()` is the
+fourth copy of the `table_xinfo`-guarded migration. Fresh-DB and legacy-DB
+migration tests assert it; `docs/DATA_MODEL.md` updated in this commit
+(migration list, table, column note, `CREATE TABLE` reference).
+`GET /transactions` rows gain `merchant` via `SELECT transactions.*`.
+
+**Normalization.** `normalize_category()` now covers all three labels via
+the same validator — including a `from_description` fallback accepted
+as-is, which is why the engine returns the *raw* description and the API
+Title-Cases it on the way in.
+
+**Reusing the tiers rather than writing them a third time.** The category
+engine's Tier 1 and Tier 2 bodies were lifted out into `_exact_tier(needle,
+candidates, field)` and `_fuzzy_tier(needle, candidates, field)`,
+parameterised only by which column is voted on. `_suggest_category_from`
+is now three lines over them and every Session 41 engine test passes
+untouched. `_suggest_merchant_from` runs the same two helpers over the
+`merchant` field, with candidates = other rows carrying a merchant —
+**global, not scoped by category** (subcategory is the deliberately scoped
+one) — and adds **Tier 3**: when neither tier finds anything, including a
+true cold start with no merchant anywhere, it proposes the row's own raw
+`description`, `match_type "from_description"`, **confidence `null`**. That
+is a default, not a learned match, so no percentage is reported and the
+frontend will label it in words, exactly as it does subcategory's
+`same_as_category`.
+
+**One query, still.** `_fetch_categorized` became `_fetch_labeled`:
+`WHERE category IS NOT NULL OR merchant IS NOT NULL`, selecting all three
+labels. Each engine filters the rows it can learn from in Python (category/
+subcategory need `category`; merchant needs `merchant`), so the batch path
+still runs exactly one labelled-rows query for all three suggestions — the
+Session 42 call-count tests were renamed for the new function and pass, and
+a new one asserts it with merchant in play.
+
+**Breaking change — the third in three sessions.** The suggestion response
+gains a `merchant` part: `{"category": {...}, "subcategory": {...} | null,
+"merchant": {"value", "confidence", "match_type"}}`, never null. The assign
+entry gains `merchant?` under the Session 53 rules: at least one of the
+three fields required (422 otherwise), only present fields written,
+same-id entries setting different fields merge, conflicting values for one
+field 422. Storage's tuples widened to `(id, category, subcategory,
+merchant)`. Every existing test that touched either shape was updated —
+mechanically for the tuples, explicitly for the shapes. `GET /merchants`
+returns the sorted distinct values, unscoped.
+
+**Tests.** Storage: merchant-only / +category / +subcategory / all-three
+assignment with a category-only write leaving merchant alone and a
+conflicting-merchant rejection; cold start (with categories present but no
+merchants) → `from_description`; exact majority + tie-break both ways;
+fuzzy across categories with the confidence equal to `fuzzy_similarity`;
+self-exclusion; batch with one query; `list_merchants`. API: four field-
+combination cases with normalisation, conflicting merchants 422, single and
+batch showing exact / fuzzy / fallback, catalog ignoring a `category` param,
+cold-start shape, key sets. Full suite: **361 passing** (347 + 14).
+
+### Outcome
+Every transaction can carry a cleaned merchant name; the API always
+suggests one — learned from exact or similar descriptions when it can,
+else the description itself, honestly labelled; any mix of the three labels
+can be written in one atomic call; and the merchant catalog is queryable.
+Two endpoint shapes changed incompatibly again, deliberately, and are
+pinned by tests. Verified by the suite only.
+
+### In plain English
+Transactions can now carry a tidy merchant name alongside the raw bank
+description. The suggestion for it works like the category suggestion —
+look for an identical description first, then the most similar one, among
+transactions that already have a merchant name — with one addition: if
+there is nothing to learn from yet, it offers the raw description itself as
+a starting point, clearly marked as a placeholder rather than a match. The
+matching code was shared with the category engine rather than copied, so
+the two cannot drift apart.
+
+As in the previous two sessions, the two request/response formats that
+carry labels grew to include the new one — a deliberate breaking change,
+flagged as such — and all three labels can be set in any combination in a
+single request.
+
+### Next steps
+Step 2: a Merchant column left of Category on both tables, with category-
+parity badge/accept/change, a merchant typeahead in the multi-select bar,
+and "Accept suggestions" applying merchant suggestions too.

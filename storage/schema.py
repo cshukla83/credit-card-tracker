@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     reward_points REAL,
     category TEXT,
     subcategory TEXT,
+    merchant TEXT,
     FOREIGN KEY(statement_id) REFERENCES statements(id) ON DELETE CASCADE
 )
 """
@@ -74,4 +75,11 @@ ADD COLUMN category TEXT
 ADD_SUBCATEGORY_COLUMN = """
 ALTER TABLE transactions
 ADD COLUMN subcategory TEXT
+"""
+
+# Same rules again: NULL means "no merchant", never an empty string, identical
+# to the CREATE TABLE column above.
+ADD_MERCHANT_COLUMN = """
+ALTER TABLE transactions
+ADD COLUMN merchant TEXT
 """

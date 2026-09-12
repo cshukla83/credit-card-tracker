@@ -10,6 +10,7 @@ from storage.categories import (
     assign_categories,
     cluster_transactions,
     list_categories,
+    list_merchants,
     list_subcategories,
     suggest_categories,
     suggest_category,
@@ -163,6 +164,13 @@ def read_categories(conn=Depends(get_db)):
     return list_categories(conn)
 
 
+@app.get("/merchants")
+def read_merchants(conn=Depends(get_db)):
+    # Sorted distinct merchants in use; unscoped, since merchant matching is
+    # global. Feeds the merchant dropdown and the multi-select typeahead.
+    return list_merchants(conn)
+
+
 @app.get("/subcategories")
 def read_subcategories(category: str | None = None, conn=Depends(get_db)):
     # Sorted distinct subcategories in use; ?category= narrows to rows with
@@ -173,8 +181,10 @@ def read_subcategories(category: str | None = None, conn=Depends(get_db)):
 @app.get("/transactions/{transaction_id}/suggestion")
 def read_category_suggestion(transaction_id: int, conn=Depends(get_db)):
     # Returns {"category": {value, confidence, match_type},
-    #          "subcategory": {value, confidence, match_type} | null}
-    # (Session 53 shape; the flat single-suggestion shape is gone).
+    #          "subcategory": {value, confidence, match_type} | null,
+    #          "merchant": {value, confidence, match_type}}
+    # (Session 55 shape; merchant is never null -- its Tier 3 fallback
+    # always yields a value, with confidence null for "from_description").
     # Unlike the /transactions filters, an unknown id here is a real 404:
     # there is no "exists but has nothing to suggest" ambiguity -- that case
     # is a 200 with match_type "none".
@@ -219,7 +229,7 @@ def read_clusters(body: ClusterRequest, conn=Depends(get_db)):
 
 
 def normalize_category(value: str) -> str:
-    """The one place a category or subcategory value is shaped before storage.
+    """The one place a category, subcategory, or merchant value is shaped before storage.
 
     strip() then str.title(). NULL is the only representation of
     "uncategorized", so an empty or whitespace-only category is rejected
@@ -246,8 +256,9 @@ class CategoryAssignment(BaseModel):
     transaction_id: int
     category: str | None = None
     subcategory: str | None = None
+    merchant: str | None = None
 
-    @field_validator("category", "subcategory")
+    @field_validator("category", "subcategory", "merchant")
     @classmethod
     def _normalize(cls, value: "str | None") -> "str | None":
         # None means "leave this column alone"; a present value gets the
@@ -256,8 +267,8 @@ class CategoryAssignment(BaseModel):
 
     @model_validator(mode="after")
     def _require_a_field(self):
-        if self.category is None and self.subcategory is None:
-            raise ValueError("each assignment needs category or subcategory (or both)")
+        if self.category is None and self.subcategory is None and self.merchant is None:
+            raise ValueError("each assignment needs at least one of category, subcategory, merchant")
         return self
 
 
@@ -275,7 +286,9 @@ def write_category(body: CategoryAssignmentBatch, conn=Depends(get_db)):
     # suggestion engine.
     # Each entry writes only the field(s) it carries; the other column on
     # that row is left as it is (Session 53).
-    pairs = [(a.transaction_id, a.category, a.subcategory) for a in body.assignments]
+    pairs = [
+        (a.transaction_id, a.category, a.subcategory, a.merchant) for a in body.assignments
+    ]
     try:
         updated = assign_categories(conn, pairs)
     except TransactionNotFoundError as e:

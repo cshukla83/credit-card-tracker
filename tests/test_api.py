@@ -89,6 +89,7 @@ def test_no_filters_returns_all_transactions(client, two_cards):
         "reward_points",
         "category",
         "subcategory",
+        "merchant",
     }
 
 
@@ -339,10 +340,12 @@ def test_suggestion_cold_start_is_200_with_none(client, two_cards):
     target = _ids(client)[0]
     response = client.get(f"/transactions/{target}/suggestion")
     assert response.status_code == 200
-    # Session 53 shape: two halves. Category unset -> subcategory is null.
+    # Session 55 shape: three parts. Category unset -> subcategory is null;
+    # merchant is never null -- cold start falls back to the description.
     assert response.json() == {
         "category": {"value": None, "confidence": 0.0, "match_type": "none"},
         "subcategory": None,
+        "merchant": {"value": "CARD A TXN 1", "confidence": None, "match_type": "from_description"},
     }
 
 
@@ -538,13 +541,13 @@ def test_batch_suggestions_run_categorized_query_once(client, two_cards, monkeyp
     import storage.categories as categories
 
     calls = []
-    real = categories._fetch_categorized
+    real = categories._fetch_labeled
 
     def counting(conn):
         calls.append(1)
         return real(conn)
 
-    monkeypatch.setattr(categories, "_fetch_categorized", counting)
+    monkeypatch.setattr(categories, "_fetch_labeled", counting)
     ids = _ids(client)
     response = client.post("/transactions/suggestions", json={"transaction_ids": ids})
     assert response.status_code == 200
@@ -950,7 +953,7 @@ def test_suggestion_endpoints_report_subcategory_exact_and_fallback(client, db_p
     }
     assert by_id[other]["subcategory"] is None
     for entry in batch:
-        assert set(entry.keys()) == {"transaction_id", "category", "subcategory"}
+        assert set(entry.keys()) == {"transaction_id", "category", "subcategory", "merchant"}
         assert set(entry["category"].keys()) == {"value", "confidence", "match_type"}
 
 
@@ -972,3 +975,93 @@ def test_subcategories_catalog_unfiltered_and_filtered(client, two_cards):
     assert client.get("/subcategories", params={"category": "Food"}).json() == ["Cafe", "Tea"]
     assert client.get("/subcategories", params={"category": "Travel"}).json() == ["Flights"]
     assert client.get("/subcategories", params={"category": "Nothing"}).json() == []
+
+
+# --- merchant (Session 55) ---------------------------------------------------
+
+
+def _field(client, name):
+    return {t["id"]: t[name] for t in client.get("/transactions").json()}
+
+
+@pytest.mark.parametrize(
+    "assignment, expected",
+    [
+        ({"merchant": "corner shop"}, {"category": None, "subcategory": None, "merchant": "Corner Shop"}),
+        ({"merchant": "corner shop", "category": "food"},
+         {"category": "Food", "subcategory": None, "merchant": "Corner Shop"}),
+        ({"merchant": "corner shop", "subcategory": "snacks"},
+         {"category": None, "subcategory": "Snacks", "merchant": "Corner Shop"}),
+        ({"merchant": "corner shop", "category": "food", "subcategory": "snacks"},
+         {"category": "Food", "subcategory": "Snacks", "merchant": "Corner Shop"}),
+    ],
+)
+def test_assign_merchant_field_combinations(client, two_cards, assignment, expected):
+    ids = _ids(client)
+    response = client.post(
+        "/transactions/category", json={"assignments": [{"transaction_id": ids[0], **assignment}]}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"updated": 1}
+    for name, value in expected.items():
+        assert _field(client, name)[ids[0]] == value
+
+
+def test_assign_conflicting_merchants_is_422(client, two_cards):
+    ids = _ids(client)
+    response = client.post(
+        "/transactions/category",
+        json={"assignments": [
+            {"transaction_id": ids[0], "merchant": "A"},
+            {"transaction_id": ids[0], "merchant": "B"},
+        ]},
+    )
+    assert response.status_code == 422
+    assert _field(client, "merchant")[ids[0]] is None
+
+
+def test_suggestion_endpoints_report_merchant_tiers(client, db_path):
+    conn = get_connection()
+    try:
+        card = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+        insert_statement(
+            conn, card, date(2026, 1, 1), date(2026, 1, 31),
+            [_txn(1, "SHOP"), _txn(2, "shop"), _txn(3, "SHOP 2")],
+        )
+        target, peer, near = [r["id"] for r in conn.execute("SELECT id FROM transactions ORDER BY id")]
+    finally:
+        conn.close()
+    client.post("/transactions/category", json={"assignments": [{"transaction_id": peer, "merchant": "Alpha"}]})
+
+    single = client.get(f"/transactions/{target}/suggestion").json()
+    assert single["merchant"] == {"value": "Alpha", "confidence": 1.0, "match_type": "exact"}
+
+    batch = client.post(
+        "/transactions/suggestions", json={"transaction_ids": [target, peer, near]}
+    ).json()["suggestions"]
+    by_id = {e["transaction_id"]: e for e in batch}
+    assert by_id[target]["merchant"] == single["merchant"]
+    assert by_id[near]["merchant"]["match_type"] == "fuzzy"
+    assert by_id[near]["merchant"]["value"] == "Alpha"
+    # The only merchant-bearing row, excluded from its own candidates.
+    assert by_id[peer]["merchant"] == {
+        "value": "shop", "confidence": None, "match_type": "from_description",
+    }
+    for entry in batch:
+        assert set(entry["merchant"].keys()) == {"value", "confidence", "match_type"}
+
+
+def test_merchants_catalog_is_sorted_distinct_and_unscoped(client, two_cards):
+    ids = _ids(client)
+    assert client.get("/merchants").json() == []
+    client.post(
+        "/transactions/category",
+        json={"assignments": [
+            {"transaction_id": ids[0], "category": "Food", "merchant": "zeta"},
+            {"transaction_id": ids[1], "category": "Travel", "merchant": "alpha"},
+            {"transaction_id": ids[2], "merchant": "Alpha"},
+        ]},
+    )
+    assert client.get("/merchants").json() == ["Alpha", "Zeta"]
+    # No category scoping: the param is simply not part of this endpoint.
+    assert client.get("/merchants", params={"category": "Food"}).json() == ["Alpha", "Zeta"]

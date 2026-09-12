@@ -32,22 +32,25 @@ def _no_suggestion() -> dict:
     return {"value": None, "confidence": 0.0, "match_type": "none"}
 
 
-def _fetch_categorized(conn: sqlite3.Connection) -> "list[sqlite3.Row]":
-    """Every categorized transaction, id-descending.
+def _fetch_labeled(conn: sqlite3.Connection) -> "list[sqlite3.Row]":
+    """Every transaction carrying a category or a merchant, id-descending.
 
-    This is the one query behind both suggestion entry points. The batch
-    path runs it once and reuses the rows for every id in the request;
-    the self-exclusion that used to be `id != ?` in SQL is now done in
-    `_suggest_from()` so the same row set can serve many targets.
+    This is the one query behind both suggestion entry points and all three
+    suggestion engines. The batch path runs it once and reuses the rows for
+    every id in the request; each engine filters the rows it can learn from
+    (category/subcategory: `category IS NOT NULL`; merchant: `merchant IS
+    NOT NULL`) in Python, and excludes the target itself there too, so the
+    same row set serves many targets. (Named `_fetch_categorized` until
+    Session 55 widened it to merchant-bearing rows.)
 
     Comparisons happen in Python rather than SQL because SQLite's
     LOWER()/NOCASE are ASCII-only while str.casefold() is Unicode-aware,
-    and Tier 2 has to happen in Python anyway -- so one code path with one
-    definition of "case-insensitive".
+    and the fuzzy tier has to happen in Python anyway -- so one code path
+    with one definition of "case-insensitive".
     """
     return conn.execute(
-        "SELECT id, description, category, subcategory FROM transactions "
-        "WHERE category IS NOT NULL ORDER BY id DESC"
+        "SELECT id, description, category, subcategory, merchant FROM transactions "
+        "WHERE category IS NOT NULL OR merchant IS NOT NULL ORDER BY id DESC"
     ).fetchall()
 
 
@@ -65,79 +68,103 @@ def _fetch_targets(conn: sqlite3.Connection, transaction_ids: "list[int]") -> "d
     return found
 
 
+def _exact_tier(needle: str, candidates: "list[sqlite3.Row]", field: str) -> "dict | None":
+    """Tier 1: case-insensitive description equality; majority vote on `field`.
+
+    No other normalization (whitespace, digits, punctuation are compared
+    as-is); a decision, not an oversight -- see DEVLOG Session 41. If the
+    matches span several values, the most frequent wins; confidence is that
+    value's share of the exact matches (1.0 when they all agree), so a 50/50
+    split reports 0.5 rather than a misleading 1.0.
+
+    Candidates arrive id-descending, so the first hit per value is that
+    value's most recent one; Counter.most_common() preserves first-seen
+    order among equal counts, which makes the highest-id tie-break fall out
+    of the ordering rather than needing a second sort key.
+    """
+    exact = [row for row in candidates if row["description"].casefold() == needle]
+    if not exact:
+        return None
+    counts = Counter(row[field] for row in exact)
+    value, count = counts.most_common(1)[0]
+    return {"value": value, "confidence": count / len(exact), "match_type": "exact"}
+
+
+def _fuzzy_tier(needle: str, candidates: "list[sqlite3.Row]", field: str) -> dict:
+    """Tier 2: best fuzzy_similarity() over every candidate description.
+
+    The single best match wins and its ratio is the confidence. There is
+    deliberately no floor: a low-scoring match is still returned, with its
+    low confidence, for the caller to judge. max() returns the first maximal
+    element and candidates are id-descending, so an exact ratio tie resolves
+    to the highest id. `needle` is already casefolded; fuzzy_similarity
+    casefolds again, which is idempotent, so the scores are exactly what the
+    Session 41 inline version gave.
+    """
+    best = max(candidates, key=lambda row: fuzzy_similarity(needle, row["description"]))
+    ratio = fuzzy_similarity(needle, best["description"])
+    return {"value": best[field], "confidence": ratio, "match_type": "fuzzy"}
+
+
 def _suggest_category_from(
-    target_id: int, description: str, categorized: "list[sqlite3.Row]"
+    target_id: int, description: str, labeled: "list[sqlite3.Row]"
 ) -> dict:
-    """The two-tier category engine, over an already-fetched candidate list.
+    """The two-tier category engine, over the already-fetched labelled rows.
 
     Returns {"value": str | None, "confidence": float, "match_type": str}
     where match_type is "exact", "fuzzy", or "none". (The key was "category"
     until Session 53 reshaped the response to carry a subcategory too.)
 
-    `categorized` must be id-descending (as `_fetch_categorized` returns
-    it) -- the tie-break relies on that order. The target itself is
-    skipped here, so a transaction that already has a category does not
-    simply suggest its own value back.
+    Candidates are the OTHER rows with a category -- the target itself is
+    skipped, so a transaction that already has a category does not simply
+    suggest its own value back. `labeled` must be id-descending (as
+    `_fetch_labeled` returns it) -- the tie-break relies on that order.
 
-    Tier 1 (exact): case-insensitive equality on description. No other
-    normalization (whitespace, digits, punctuation are compared as-is); this
-    is a decision, not an oversight -- see DEVLOG Session 41. If the matches
-    span several categories, the most frequent wins; confidence is that
-    category's share of the exact matches (1.0 when they all agree), so a
-    50/50 split reports 0.5 rather than a misleading 1.0.
-
-    Tier 2 (fuzzy, only when Tier 1 finds nothing): difflib.SequenceMatcher
-    ratio() against every other categorized description, case-folded on
-    both sides so a case difference does not depress the score when Tier 1
-    already treats case as irrelevant. The single best match wins and its
-    ratio is the confidence. There is deliberately no floor: a low-scoring
-    match is still returned, with its low confidence, for the caller to
-    judge.
-
-    Tie-break (both tiers): the candidate with the highest transaction id.
-    The prompt that specified this engine asked for "most recently
+    Tier 1 is `_exact_tier`, Tier 2 (only when Tier 1 finds nothing) is
+    `_fuzzy_tier`, both on the `category` field; the merchant engine shares
+    them. Tie-break (both tiers): the candidate with the highest transaction
+    id. The prompt that specified this engine asked for "most recently
     assigned", but the schema records no assignment time, so the highest id
     -- most recently *imported* -- is the proxy. Documented in DATA_MODEL.md.
 
     Cold start (no other categorized transaction exists): match_type "none".
     """
-    candidates = [row for row in categorized if row["id"] != target_id]
+    candidates = [row for row in labeled if row["id"] != target_id and row["category"] is not None]
     if not candidates:
         return _no_suggestion()
-
     needle = description.casefold()
+    return _exact_tier(needle, candidates, "category") or _fuzzy_tier(needle, candidates, "category")
 
-    # Tier 1. Candidates arrive id-descending, so the first hit per category
-    # is that category's most recent one; Counter.most_common() preserves
-    # first-seen order among equal counts, which makes the tie-break fall
-    # out of the ordering rather than needing a second sort key.
-    exact = [row for row in candidates if row["description"].casefold() == needle]
-    if exact:
-        counts = Counter(row["category"] for row in exact)
-        category, count = counts.most_common(1)[0]
-        return {
-            "value": category,
-            "confidence": count / len(exact),
-            "match_type": "exact",
-        }
 
-    # Tier 2. max() returns the first maximal element, and candidates are
-    # id-descending, so an exact ratio tie again resolves to the highest id.
-    # `needle` is already casefolded; fuzzy_similarity casefolds again, which
-    # is idempotent, so the scores are exactly what the inline version gave.
-    best = max(
-        candidates,
-        key=lambda row: fuzzy_similarity(needle, row["description"]),
-    )
-    ratio = fuzzy_similarity(needle, best["description"])
-    return {"value": best["category"], "confidence": ratio, "match_type": "fuzzy"}
+def _suggest_merchant_from(
+    target_id: int, description: str, labeled: "list[sqlite3.Row]"
+) -> dict:
+    """Merchant engine: category's two tiers on the `merchant` field, plus a
+    fallback tier category does not have. Never returns "none".
+
+    Candidates are the OTHER rows with a merchant -- global, not scoped by
+    category (unlike subcategory). Tier 1 exact and Tier 2 fuzzy are the
+    shared helpers. Tier 3 (nothing matched -- including a true cold start
+    with no merchant-bearing row anywhere) suggests the transaction's own
+    raw description, match_type "from_description", confidence None: a
+    default, not a learned match, so no percentage is reported and the
+    frontend labels it in words. Normalization (Title Case) happens at the
+    API when the value is written, not here.
+    """
+    candidates = [row for row in labeled if row["id"] != target_id and row["merchant"] is not None]
+    if candidates:
+        needle = description.casefold()
+        return _exact_tier(needle, candidates, "merchant") or _fuzzy_tier(
+            needle, candidates, "merchant"
+        )
+    return {"value": description, "confidence": None, "match_type": "from_description"}
 
 
 def _suggest_subcategory_from(
     target_id: int,
     description: str,
     category: "str | None",
-    categorized: "list[sqlite3.Row]",
+    labeled: "list[sqlite3.Row]",
 ) -> "dict | None":
     """Subcategory suggestion -- deliberately simpler than category's. No fuzzy tier.
 
@@ -160,7 +187,7 @@ def _suggest_subcategory_from(
     wanted = category.casefold()
     peers = [
         row
-        for row in categorized
+        for row in labeled
         if row["id"] != target_id
         and row["subcategory"] is not None
         and row["category"].casefold() == wanted
@@ -173,35 +200,37 @@ def _suggest_subcategory_from(
     return {"value": category, "confidence": 1.0, "match_type": "same_as_category"}
 
 
-def _suggest_from(target: sqlite3.Row, categorized: "list[sqlite3.Row]") -> dict:
-    """Both suggestions for one target row, in the response shape:
-    {"category": {...}, "subcategory": {...} | None}."""
+def _suggest_from(target: sqlite3.Row, labeled: "list[sqlite3.Row]") -> dict:
+    """All three suggestions for one target row, in the response shape:
+    {"category": {...}, "subcategory": {...} | None, "merchant": {...}}."""
     return {
-        "category": _suggest_category_from(target["id"], target["description"], categorized),
+        "category": _suggest_category_from(target["id"], target["description"], labeled),
         "subcategory": _suggest_subcategory_from(
-            target["id"], target["description"], target["category"], categorized
+            target["id"], target["description"], target["category"], labeled
         ),
+        "merchant": _suggest_merchant_from(target["id"], target["description"], labeled),
     }
 
 
 def suggest_category(conn: sqlite3.Connection, transaction_id: int) -> dict:
-    """Suggest a category and subcategory for one transaction.
+    """Suggest a category, subcategory, and merchant for one transaction.
 
     Category search is global over every OTHER categorized transaction --
     all cards, all statements; see `_suggest_category_from`. Subcategory
     follows `_suggest_subcategory_from`. Returns
     {"category": {value, confidence, match_type},
-     "subcategory": {value, confidence, match_type} | None}.
+     "subcategory": {value, confidence, match_type} | None,
+     "merchant": {value, confidence, match_type}}.
     """
     targets = _fetch_targets(conn, [transaction_id])
-    return _suggest_from(targets[transaction_id], _fetch_categorized(conn))
+    return _suggest_from(targets[transaction_id], _fetch_labeled(conn))
 
 
 def suggest_categories(conn: sqlite3.Connection, transaction_ids: "list[int]") -> "list[dict]":
     """Suggestions for each listed transaction, in input order.
 
     Returns one dict per distinct id, each the single-id shape plus a
-    "transaction_id" key. The categorized-transaction query runs exactly
+    "transaction_id" key. The labelled-transaction query runs exactly
     once for the whole batch, however many ids are given; that is the point
     of this function over N calls to `suggest_category`.
 
@@ -213,8 +242,8 @@ def suggest_categories(conn: sqlite3.Connection, transaction_ids: "list[int]") -
     if not ids:
         raise ValueError("transaction_ids must not be empty")
     targets = _fetch_targets(conn, ids)
-    categorized = _fetch_categorized(conn)
-    return [{"transaction_id": i, **_suggest_from(targets[i], categorized)} for i in ids]
+    labeled = _fetch_labeled(conn)
+    return [{"transaction_id": i, **_suggest_from(targets[i], labeled)} for i in ids]
 
 
 def cluster_by_similarity(
@@ -285,9 +314,9 @@ def cluster_transactions(
 
 def assign_categories(
     conn: sqlite3.Connection,
-    assignments: "list[tuple[int, str | None, str | None]]",
+    assignments: "list[tuple[int, str | None, str | None, str | None]]",
 ) -> int:
-    """Write each (transaction_id, category, subcategory) triple, in one transaction.
+    """Write each (transaction_id, category, subcategory, merchant) entry, in one transaction.
 
     A None field means "leave that column as it is"; only the fields present
     are written, unconditionally overwriting whatever was there (Session 53
@@ -319,15 +348,18 @@ def assign_categories(
 
     # id -> {"category": ..., "subcategory": ...} for the fields present.
     by_id: "dict[int, dict[str, str]]" = {}
-    for transaction_id, category, subcategory in assignments:
+    for transaction_id, category, subcategory, merchant in assignments:
         fields = {}
         if category is not None:
             fields["category"] = category
         if subcategory is not None:
             fields["subcategory"] = subcategory
+        if merchant is not None:
+            fields["merchant"] = merchant
         if not fields:
             raise ValueError(
-                f"transaction {transaction_id}: at least one of category or subcategory is required"
+                f"transaction {transaction_id}: at least one of category, subcategory, "
+                "or merchant is required"
             )
         for column, value in fields.items():
             if not value:
@@ -404,3 +436,12 @@ def list_subcategories(conn: sqlite3.Connection, category: "str | None" = None) 
         params.append(category)
     rows = conn.execute(sql + " ORDER BY subcategory", params).fetchall()
     return [row["subcategory"] for row in rows]
+
+
+def list_merchants(conn: sqlite3.Connection) -> "list[str]":
+    """Sorted distinct merchant values in use. Unscoped: merchant matching is
+    global, so there is no category filter here (unlike list_subcategories)."""
+    rows = conn.execute(
+        "SELECT DISTINCT merchant FROM transactions WHERE merchant IS NOT NULL ORDER BY merchant"
+    ).fetchall()
+    return [row["merchant"] for row in rows]
