@@ -1144,23 +1144,34 @@
       }
     }
 
-    // One assign call, a list of {transaction_id, category} pairs. After a
+    // One assign call, a list of per-field-optional entries. After a
     // successful write everything is re-fetched for the current filter, so
-    // groups, the status line, and the catalog reflect the write.
-    function assign(pairs) {
+    // groups, the status line, and the catalogs reflect the write.
+    //
+    // Selection: by default the written ids are dropped from the manual
+    // selection (a row you just labelled is done with). The bar's two bulk
+    // accepts pass keepSelection so the same selection is still there for
+    // the *other* button afterwards -- and the reload then skips its
+    // prune-to-visible, because under "Uncategorized only" the rows just
+    // categorized leave the visible groups yet must stay selectable for a
+    // following merchant accept (Session 57).
+    function assign(pairs, options) {
+      const keepSelection = Boolean(options && options.keepSelection);
       if (review.busy || pairs.length === 0) return Promise.resolve();
       review.busy = true;
       setError("");
       return postJSON("/transactions/category", { assignments: pairs })
         .then(() => {
-          for (const p of pairs) review.selected.delete(p.transaction_id);
+          if (!keepSelection) {
+            for (const p of pairs) review.selected.delete(p.transaction_id);
+          }
           review.editing = null;
           review.query = "";
           review.merchantQuery = "";
           // busy is cleared *before* the reload renders, otherwise every
           // button would be rebuilt disabled and stay that way.
           review.busy = false;
-          return loadReview(currentFilters());
+          return loadReview(currentFilters(), { skipPrune: keepSelection });
         })
         .catch((error) => {
           review.busy = false;
@@ -1168,20 +1179,33 @@
         });
     }
 
-    // Each row its own displayed suggestion(s); rows with none are skipped.
-    // Group and row-level accept are category-only (a group *is* a category
-    // suggestion). The multi-select bar passes withMerchant so one entry per
-    // row carries both its category and its merchant suggestion -- the
-    // client-shown values, never a recompute.
-    function acceptPairs(txns, withMerchant) {
+    // Each row its own displayed category suggestion; rows without one are
+    // skipped. Used by group "accept all", the row-level accept, and the
+    // bar's "Accept category suggestions" -- the client-shown value, never a
+    // recompute. Category only: merchant has its own bulk path below.
+    function acceptPairs(txns) {
       const pairs = [];
       for (const t of txns) {
-        const entry = { transaction_id: t.id };
         const s = suggestionFor(t);
-        if (s) entry.category = s.value;
-        const m = withMerchant ? merchantSuggestionFor(t) : null;
-        if (m) entry.merchant = m.value;
-        if (s || m) pairs.push(entry);
+        if (s) pairs.push({ transaction_id: t.id, category: s.value });
+      }
+      return pairs;
+    }
+
+    // The bar's "Accept merchant suggestions": one merchant-only entry per
+    // selected row whose displayed merchant suggestion was *learned* (exact
+    // or fuzzy). Tier 3 "from_description" rows are excluded here entirely
+    // -- not counted, not written -- because every merchant-less row has
+    // one, so a bulk accept would otherwise stamp raw descriptions across
+    // the whole selection in one click (Session 57). Those rows keep their
+    // per-row accept button, which is a deliberate one-at-a-time act.
+    function acceptMerchantPairs(txns) {
+      const pairs = [];
+      for (const t of txns) {
+        const m = merchantSuggestionFor(t);
+        if (m && m.match_type !== "from_description") {
+          pairs.push({ transaction_id: t.id, merchant: m.value });
+        }
       }
       return pairs;
     }
@@ -1236,7 +1260,8 @@
         });
     }
 
-    function loadReview(filters) {
+    function loadReview(filters, options) {
+      const skipPrune = Boolean(options && options.skipPrune);
       const seq = ++requestSeq;
       reviewStatusEl.textContent = "Loading…";
 
@@ -1267,8 +1292,10 @@
           review.merchants = merchants;
           review.clusters = clusters;
           review.editing = null;
-          // Selection survives a reload but only for rows still on screen.
-          pruneSelectionToVisible();
+          // Selection survives a reload but only for rows still on screen --
+          // except right after a bulk accept, which keeps it whole so the
+          // other bulk button can act on the same rows (see assign()).
+          if (!skipPrune) pruneSelectionToVisible();
           renderReview();
         })
         .catch((error) => {
@@ -1433,7 +1460,8 @@
       }
       const selectedIds = selectedTxns.map((t) => t.id);
       const amount = selectedTxns.reduce((n, t) => n + Number(t.amount), 0);
-      const withSuggestion = acceptPairs(selectedTxns, true);
+      const categoryPairs = acceptPairs(selectedTxns);
+      const merchantPairs = acceptMerchantPairs(selectedTxns);
 
       const label = document.createElement("span");
       label.className = "label";
@@ -1464,15 +1492,36 @@
         }),
       );
 
-      const acceptBtn = document.createElement("button");
-      acceptBtn.type = "button";
-      acceptBtn.textContent = "Accept suggestions (" + withSuggestion.length + ")";
-      acceptBtn.disabled = withSuggestion.length === 0 || review.busy;
-      acceptBtn.title =
-        "Writes each selected transaction its own suggested category and merchant " +
-        "(as displayed); selected rows with neither are left as they are";
-      acceptBtn.addEventListener("click", () => assign(withSuggestion));
-      selectionBarEl.appendChild(acceptBtn);
+      // Two independent bulk accepts, each its own assign call, each N
+      // counting only rows with an applicable suggestion for that field.
+      // Either order, or both: each passes keepSelection so the selection
+      // is intact for the other afterwards; the N on each recounts against
+      // the reloaded rows (a row whose category was just accepted no longer
+      // has a category suggestion, so it drops out of that N -- as it should).
+      const acceptCategoryBtn = document.createElement("button");
+      acceptCategoryBtn.type = "button";
+      acceptCategoryBtn.textContent = "Accept category suggestions (" + categoryPairs.length + ")";
+      acceptCategoryBtn.disabled = categoryPairs.length === 0 || review.busy;
+      acceptCategoryBtn.title =
+        "Writes each selected transaction its own suggested category (as displayed); " +
+        "rows with no category suggestion are left as they are";
+      acceptCategoryBtn.addEventListener("click", () =>
+        assign(categoryPairs, { keepSelection: true }),
+      );
+      selectionBarEl.appendChild(acceptCategoryBtn);
+
+      const acceptMerchantBtn = document.createElement("button");
+      acceptMerchantBtn.type = "button";
+      acceptMerchantBtn.textContent = "Accept merchant suggestions (" + merchantPairs.length + ")";
+      acceptMerchantBtn.disabled = merchantPairs.length === 0 || review.busy;
+      acceptMerchantBtn.title =
+        "Writes each selected transaction its own learned merchant suggestion (exact or " +
+        "fuzzy, as displayed); \u201cfrom description\u201d rows are skipped here and " +
+        "can be accepted one at a time";
+      acceptMerchantBtn.addEventListener("click", () =>
+        assign(merchantPairs, { keepSelection: true }),
+      );
+      selectionBarEl.appendChild(acceptMerchantBtn);
 
       const clear = document.createElement("button");
       clear.type = "button";

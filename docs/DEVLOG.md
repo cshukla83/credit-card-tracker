@@ -6844,3 +6844,84 @@ badges; accept and change (with spread); the merchant typeahead and create;
 "Accept suggestions" over a mixed selection, watching what the
 from-description rows receive; and that grouping is unaffected. Then decide
 whether bulk accept should skip `from_description`.
+
+## Session 57 — 2026-09-12
+
+### Goal
+Follow-on fix to Session 56: split the multi-select bar's single "Accept
+suggestions (N)" into independent category and merchant bulk accepts, and
+exclude Tier 3 `from_description` merchant suggestions from the bulk path
+entirely. Frontend only — the assign endpoint already takes per-field-
+optional entries.
+
+### What happened
+
+**Why.** Session 56's combined button applied each selected row's displayed
+category *and* merchant suggestion in one write. Because the merchant
+engine's Tier 3 always yields a suggestion (the raw description) for any
+row without a merchant, one click could silently stamp raw descriptions as
+merchants across an entire selection. Session 56's entry flagged this as
+"possibly too eager"; this session decides it was.
+
+**Two buttons, two helpers.** `acceptPairs(txns)` is back to category-only
+— it now serves group "accept all", the row-level accept, and the bar's
+**"Accept category suggestions (N)"**, one `{transaction_id, category}`
+entry per selected row with a displayed category suggestion. A new
+`acceptMerchantPairs(txns)` serves **"Accept merchant suggestions (N)"**:
+one `{transaction_id, merchant}` entry per selected row whose displayed
+merchant suggestion is `exact` or `fuzzy`. `from_description` rows are
+skipped — not counted in N, not written. They keep their per-row accept
+button, which is a deliberate one-at-a-time act with the *from description*
+badge in view. Each N counts only rows applicable to its own field; each
+button is disabled at zero; each click is its own assign call.
+
+**Making "both, in sequence" actually work — a trace caught it.** Two
+existing behaviours would have broken requirement 4: `assign()` drops the
+written ids from the manual selection after a successful write, and the
+reload that follows prunes the selection to the rows still visible — and
+under the default "Uncategorized only" view, rows that just received a
+category leave the visible groups. So "accept categories, then accept
+merchants" would have found nothing selected for the second click.
+`assign()` therefore takes `{keepSelection}`, passed only by the two bulk
+buttons: the selection is left intact and `loadReview()` is told to skip
+its prune once (`{skipPrune}`). Every other accept/change path keeps the
+Session 43 behaviour (written ids dropped, selection pruned). After a bulk
+category accept the bar may thus report rows that are no longer visible;
+that is the price of the second button still having them, and "clear
+selection" is one click away. The N on each button recounts against the
+reloaded rows, so a row whose category was just accepted correctly drops
+out of the category button's count while remaining eligible for the
+merchant one.
+
+**Verification.** Script parsed with the system JavaScriptCore; backend
+suite unaffected (361). **Reasoned through only — not verified visually.**
+The browser extension was unavailable; no server started, no live request,
+no frontend test suite invented.
+
+### Outcome
+Bulk acceptance is now two explicit, independently countable actions;
+merchant bulk applies only learned matches; raw-description merchants can
+only be accepted one row at a time; and the two buttons compose in either
+order on one selection.
+
+### In plain English
+The single "accept suggestions" button in the bulk bar became two: one for
+categories, one for merchant names, each showing how many of the ticked rows
+it would actually change. The merchant one now applies only suggestions
+that were learned from similar past transactions; the placeholder
+suggestion that merely echoes the raw bank text is left out of bulk
+acceptance altogether, because one click could otherwise have written that
+raw text onto many rows at once. Those rows can still be accepted
+individually, where the "from description" label is right there.
+
+Making the two buttons usable one after the other on the same selection
+needed a small change to how the screen behaves after a bulk save: the
+ticked rows stay ticked, even if some have just moved out of view, so the
+second button still has them. Checked by reading the code, not by seeing
+it run.
+
+### Next steps
+Manual walk: a mixed selection — count both N's, press category then
+merchant and merchant then category, confirm from-description rows are
+untouched by bulk and still acceptable per row, and that "clear selection"
+tidies up afterwards.
