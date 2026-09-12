@@ -1494,6 +1494,23 @@
       select.value = current;
     }
 
+    // Every card the page has seen, by id, from whichever /cards response
+    // came last -- so a picked card's bank can be looked up without another
+    // request. Under "All banks" the list spans every bank.
+    const cardsById = new Map();
+
+    function rememberCards(cards) {
+      for (const c of cards) cardsById.set(String(c.id), c);
+    }
+
+    // The one rule for Bank vs Card disagreement, used on URL load and on a
+    // live card pick alike: a card belongs to exactly one bank, so the
+    // card's bank wins whenever the two differ -- including when Bank is
+    // "All banks". Session 48.
+    function resolveBank(bank, card) {
+      return card && card.bank !== bank ? card.bank : bank;
+    }
+
     // Out-of-order guard for the option fetches, separate from the table's
     // requestSeq: both run on every filter change, and a slow options
     // response for an older filter set must not repopulate the pickers
@@ -1525,6 +1542,7 @@
       return Promise.all([banksP, cardsP, monthsP, boundsP])
         .then(([cardTypes, cards, months, undated]) => {
           if (seq !== optionsSeq) return; // a newer filter set has since been issued
+          rememberCards(cards);
           const banks = Array.from(new Set(cardTypes.map((p) => p.bank)));
           setOptions(
             bankFilterEl,
@@ -1582,11 +1600,11 @@
         .then(([cards, statementMonths]) => {
           const card = cards.find((c) => String(c.id) === urlCardId);
           const knownBanks = new Set(cards.map((c) => c.bank));
-          // "All banks" + a specific card is a valid state, so a card in the
-          // URL does not imply its bank; the bank is taken from the URL, and
-          // only overridden by the card's when the two disagree.
-          const urlBankKnown = knownBanks.has(urlBank) ? urlBank : "";
-          const bank = card && urlBankKnown && card.bank !== urlBankKnown ? card.bank : urlBankKnown;
+          rememberCards(cards);
+          // Same rule as a live card pick (resolveBank): the card's bank
+          // wins whenever it differs from the URL's bank, "All banks"
+          // included -- so a reload lands where a live pick would have.
+          const bank = resolveBank(knownBanks.has(urlBank) ? urlBank : "", card);
           const filters = {
             bank,
             cardId: card ? String(card.id) : "",
@@ -1628,6 +1646,30 @@
       loadActiveTab(filters);
     }
 
+    function onCardChange() {
+      // Picking a card whose bank differs from Bank (typically: Bank is
+      // "All banks") sets Bank to that card's bank, then goes through the
+      // ordinary filter-change path -- the same URL update, options
+      // recompute, and table load a manual bank pick would trigger. It does
+      // NOT go through onBankChange, which resets Card: the just-picked
+      // card is the whole point. Card keeps its value; recomputeOptions
+      // then re-lists the cards scoped to the new bank, which include it.
+      const card = cardsById.get(cardFilterEl.value);
+      const bank = resolveBank(bankFilterEl.value, card);
+      if (bank !== bankFilterEl.value) {
+        // Make sure the option exists before selecting it; the next
+        // recompute rebuilds the list properly.
+        if (!Array.from(bankFilterEl.options).some((o) => o.value === bank)) {
+          const option = document.createElement("option");
+          option.value = bank;
+          option.textContent = bank;
+          bankFilterEl.appendChild(option);
+        }
+        bankFilterEl.value = bank;
+      }
+      onFilterChange();
+    }
+
     function onBankChange() {
       // Card is a child of Bank: a new bank always means "all cards" of it.
       cardFilterEl.value = "";
@@ -1640,7 +1682,7 @@
     }
 
     bankFilterEl.addEventListener("change", onBankChange);
-    cardFilterEl.addEventListener("change", onFilterChange);
+    cardFilterEl.addEventListener("change", onCardChange);
     statementMonthFilterEl.addEventListener("change", onFilterChange);
     startFilterEl.addEventListener("input", onDateInput);
     endFilterEl.addEventListener("input", onDateInput);

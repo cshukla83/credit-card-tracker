@@ -6024,3 +6024,81 @@ comes back exactly as it was left.
 Include this state in the manual walk: "All banks" with a specific card,
 its URL round-trip, and the card list narrowing by month and dates with no
 bank chosen.
+
+## Session 48 — 2026-09-12
+
+### Goal
+Follow-on to Session 47's "All banks" cascade fix: when a card is picked
+whose bank differs from the selected Bank (typically Bank is "All banks"),
+set Bank to that card's bank automatically, through the same path a manual
+bank pick takes — without resetting or disabling the just-picked Card.
+
+### What happened
+
+**One rule, two callers.** Session 47's `initFromURL()` expressed "the
+card's bank wins on disagreement" inline, and only when the URL named a bank.
+That rule is now `resolveBank(bank, card)` — *the card's bank wins whenever
+it differs, "All banks" included* — and both paths use it:
+
+- **URL load:** `bank = resolveBank(urlBank-if-known, card)`. This tightens
+  Session 47's behaviour deliberately: a URL with `card_id` and no `bank`
+  now loads as "that card's bank + that card", because that is exactly the
+  state a live pick would produce. A reload lands where the user would have
+  been left, rather than in a state the live UI can no longer reach.
+- **Live card pick:** a new `onCardChange()` handler looks the card up,
+  resolves the bank, sets the Bank select if it differs (adding the option
+  if the list somehow lacks it — the next recompute rebuilds the list
+  anyway), and then calls the ordinary `onFilterChange()`. That is the same
+  URL update, options recompute, and table load a manual bank pick triggers;
+  there is no separate code path.
+
+**Looking the card up without a request.** The Card `<select>` carries
+ids, not banks, so the page keeps `cardsById`, a `Map` filled by
+`rememberCards()` from every `/cards` response — the unfiltered one on load
+and each narrowed one from `recomputeOptions()`. Under "All banks" the
+narrowed list spans every bank, so any card the user can pick has been seen.
+
+**Why not `onBankChange()`.** That handler resets Card to "All cards"
+because, for a *user's* bank change, the old card cannot belong to the new
+bank. Here the card is the cause of the bank change, so it must survive.
+`onCardChange()` therefore sets the Bank value directly and goes to
+`onFilterChange()`; the reset never runs.
+
+**Session 47 regression check, by trace.** After the Bank value is set,
+`currentFilters()` reads the new bank *and* the kept `cardId`; the URL gets
+both; `recomputeOptions()` fetches `/cards` with the new bank and every
+other filter except Card's own, which returns that bank's cards including
+the picked one, so `setOptions()` keeps the selection; nothing in the path
+touches `disabled` (Session 47 removed every such line, and a grep confirms
+none returned). Bank's options, computed without Bank or Card, still list
+every bank with data, so the user can switch banks afterwards as before.
+
+**Verification.** Script parsed with the system JavaScriptCore. **Reasoned
+through only — not verified visually.** The browser extension was
+unavailable, as in Sessions 43–47; no server started, no live request, no
+frontend test suite invented.
+
+### Outcome
+Picking a card under "All banks" (or under the wrong bank) snaps Bank to the
+card's bank, narrows the other pickers accordingly, updates the URL, and
+loads the table — with the card still selected. URL load and live pick share
+the rule, so a reload reproduces the live state.
+
+### In plain English
+Picking a card now also picks its bank. If the bank dropdown was on "All
+banks" — or on a different bank — it switches to the card's real bank the
+moment the card is chosen, and everything else (the month list, the date
+bounds, the saved link, the table) updates exactly as if the bank had been
+picked by hand first. The card you chose stays chosen; the previous fix
+that keeps the card list usable is untouched, and the code was traced to
+confirm the card is never reset or greyed out along the way.
+
+The same rule now applies when a saved link is opened: a link naming a card
+opens with that card's bank selected, matching what the live page does. As
+with the recent front-end sessions, this was checked by reading the code,
+not by seeing it run, so a manual look is still the next step.
+
+### Next steps
+Manual walk: "All banks" → pick a card → confirm Bank snaps, Card stays,
+months/dates narrow, URL carries both; reload that URL; then change Bank and
+confirm Card resets as before.
