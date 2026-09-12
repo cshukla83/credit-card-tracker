@@ -492,7 +492,7 @@
   td.unset, td.category-cell .unset {
     color: var(--rule-strong);
   }
-  td.subcategory-cell {
+  td.subcategory-cell, td.merchant-cell {
     min-width: 16rem;
   }
   td.category-cell .needs {
@@ -639,6 +639,7 @@
           <th>description</th>
           <th class="type">type</th>
           <th class="num amount">amount</th>
+          <th>merchant</th>
           <th>category</th>
           <th>subcategory</th>
         </tr>
@@ -678,6 +679,7 @@
           <th>description</th>
           <th class="type">type</th>
           <th class="num amount">amount</th>
+          <th>merchant</th>
           <th>category</th>
           <th>subcategory</th>
         </tr>
@@ -877,7 +879,7 @@
         row.appendChild(amountCell);
 
         // Read-only labels here; the Review & assign tab is where they change.
-        for (const value of [txn.category, txn.subcategory]) {
+        for (const value of [txn.merchant, txn.category, txn.subcategory]) {
           const cell = document.createElement("td");
           if (value === null || value === undefined) {
             cell.className = "unset";
@@ -923,8 +925,10 @@
       transactions: [],
       suggestions: new Map(), // transaction_id -> {category, confidence, match_type}
       catalog: [],            // GET /categories, sorted
+      merchants: [],          // GET /merchants, sorted (dropdown + typeahead)
+      merchantQuery: "",      // selection-bar merchant typeahead text
       selected: new Set(),    // manual multi-select, independent of groups
-      query: "",              // selection-bar typeahead text
+      query: "",              // selection-bar category typeahead text
       editing: null,          // {id, groupIds, spread, adding} while a row's "change" is open
       busy: false,            // an assign call is in flight
       // Explicit collapse/expand choices this page session, by group key
@@ -962,6 +966,20 @@
       const s = entry && entry.category;
       if (!s || s.match_type === "none") return null;
       return s; // {value, confidence, match_type}
+    }
+
+    function hasMerchant(txn) {
+      return txn.merchant !== null && txn.merchant !== undefined;
+    }
+
+    // The merchant suggestion the screen displays, or null once the row has
+    // a merchant. The engine never returns null here (Tier 3 falls back to
+    // the description), so "no suggestion" only means "already set".
+    function merchantSuggestionFor(txn) {
+      if (hasMerchant(txn)) return null;
+      const entry = review.suggestions.get(txn.id);
+      const s = entry && entry.merchant;
+      return s || null; // {value, confidence, match_type: "exact" | "fuzzy" | "from_description"}
     }
 
     function hasSubcategory(txn) {
@@ -1138,6 +1156,7 @@
           for (const p of pairs) review.selected.delete(p.transaction_id);
           review.editing = null;
           review.query = "";
+          review.merchantQuery = "";
           // busy is cleared *before* the reload renders, otherwise every
           // button would be rebuilt disabled and stay that way.
           review.busy = false;
@@ -1149,12 +1168,20 @@
         });
     }
 
-    function acceptPairs(txns) {
-      // Each row its own displayed suggestion; rows without one are skipped.
+    // Each row its own displayed suggestion(s); rows with none are skipped.
+    // Group and row-level accept are category-only (a group *is* a category
+    // suggestion). The multi-select bar passes withMerchant so one entry per
+    // row carries both its category and its merchant suggestion -- the
+    // client-shown values, never a recompute.
+    function acceptPairs(txns, withMerchant) {
       const pairs = [];
       for (const t of txns) {
+        const entry = { transaction_id: t.id };
         const s = suggestionFor(t);
-        if (s) pairs.push({ transaction_id: t.id, category: s.value });
+        if (s) entry.category = s.value;
+        const m = withMerchant ? merchantSuggestionFor(t) : null;
+        if (m) entry.merchant = m.value;
+        if (s || m) pairs.push(entry);
       }
       return pairs;
     }
@@ -1167,6 +1194,10 @@
 
     function uniformSubPairs(ids, subcategory) {
       return ids.map((id) => ({ transaction_id: id, subcategory }));
+    }
+
+    function uniformMerchantPairs(ids, merchant) {
+      return ids.map((id) => ({ transaction_id: id, merchant }));
     }
 
     // Every transaction in view -- categorized or not -- goes to the
@@ -1211,6 +1242,7 @@
 
       const transactionsP = fetchJSON(transactionsURL(filters));
       const catalogP = fetchJSON("/categories");
+      const merchantsP = fetchJSON("/merchants");
       const clustersP = transactionsP.then((transactions) =>
         review.mode === "similarity" ? fetchClusters(transactions) : review.clusters,
       );
@@ -1223,8 +1255,8 @@
         return postJSON("/transactions/suggestions", { transaction_ids: openIds });
       });
 
-      return Promise.all([transactionsP, suggestionsP, catalogP, clustersP])
-        .then(([transactions, suggestionBody, catalog, clusters]) => {
+      return Promise.all([transactionsP, suggestionsP, catalogP, merchantsP, clustersP])
+        .then(([transactions, suggestionBody, catalog, merchants, clusters]) => {
           if (seq !== requestSeq) return;
           if (!hasDateFilter(filters)) applyDateBounds(transactions);
           review.transactions = transactions;
@@ -1232,6 +1264,7 @@
             suggestionBody.suggestions.map((s) => [s.transaction_id, s]),
           );
           review.catalog = catalog;
+          review.merchants = merchants;
           review.clusters = clusters;
           review.editing = null;
           // Selection survives a reload but only for rows still on screen.
@@ -1320,6 +1353,77 @@
     }
 
     // --- selection bar -------------------------------------------------
+    // A filter-as-you-type input with a menu of up to six matches and a
+    // "+ create" entry when nothing matches exactly. Enter picks the exact
+    // match if there is one (keeping its casing), otherwise creates what was
+    // typed; Escape closes. Query state lives on `review` (via get/setQuery)
+    // so it survives the re-render a pick triggers.
+    function buildTypeahead({ placeholder, options, getQuery, setQuery, emptyText, onPick }) {
+      const typeahead = document.createElement("div");
+      typeahead.className = "typeahead";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = placeholder;
+      input.value = getQuery();
+      input.autocomplete = "off";
+      const menu = document.createElement("div");
+      menu.className = "menu";
+      menu.style.display = "none";
+      typeahead.appendChild(input);
+      typeahead.appendChild(menu);
+
+      const renderMenu = () => {
+        menu.textContent = "";
+        const q = getQuery().trim();
+        const qLower = q.toLowerCase();
+        const all = options();
+        const matches = all.filter((c) => c.toLowerCase().includes(qLower)).slice(0, 6);
+        const exact = all.some((c) => c.toLowerCase() === qLower);
+        if (q && !exact) {
+          const create = document.createElement("button");
+          create.type = "button";
+          create.className = "create";
+          create.textContent = "+ create \u201c" + q + "\u201d";
+          create.addEventListener("click", () => onPick(q));
+          menu.appendChild(create);
+        }
+        for (const c of matches) {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.textContent = c;
+          b.addEventListener("click", () => onPick(c));
+          menu.appendChild(b);
+        }
+        if (!menu.childNodes.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = emptyText;
+          menu.appendChild(empty);
+        }
+        menu.style.display = "";
+      };
+      input.addEventListener("focus", renderMenu);
+      input.addEventListener("input", () => {
+        setQuery(input.value);
+        renderMenu();
+      });
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          const q = getQuery().trim();
+          if (!q) return;
+          const exact = options().find((c) => c.toLowerCase() === q.toLowerCase());
+          onPick(exact || q);
+        } else if (event.key === "Escape") {
+          menu.style.display = "none";
+          input.blur();
+        }
+      });
+      // Clicks inside the typeahead must not reach the document listener
+      // that closes menus on outside click.
+      typeahead.addEventListener("click", (event) => event.stopPropagation());
+      return typeahead;
+    }
+
     function renderSelectionBar() {
       selectionBarEl.textContent = "";
       const selectedTxns = review.transactions.filter((t) => review.selected.has(t.id));
@@ -1329,89 +1433,44 @@
       }
       const selectedIds = selectedTxns.map((t) => t.id);
       const amount = selectedTxns.reduce((n, t) => n + Number(t.amount), 0);
-      const withSuggestion = acceptPairs(selectedTxns);
+      const withSuggestion = acceptPairs(selectedTxns, true);
 
       const label = document.createElement("span");
       label.className = "label";
       label.textContent = selectedIds.length + " selected · " + fmtAmount(amount);
       selectionBarEl.appendChild(label);
 
-      // Typeahead: one typed category to every selected transaction.
-      const typeahead = document.createElement("div");
-      typeahead.className = "typeahead";
-      const input = document.createElement("input");
-      input.type = "text";
-      input.placeholder = "Assign category…";
-      input.value = review.query;
-      input.autocomplete = "off";
-      const menu = document.createElement("div");
-      menu.className = "menu";
-      menu.style.display = "none";
-      typeahead.appendChild(input);
-      typeahead.appendChild(menu);
-
-      const pick = (category) => assign(uniformPairs(selectedIds, category));
-      const renderMenu = () => {
-        menu.textContent = "";
-        const q = review.query.trim();
-        const qLower = q.toLowerCase();
-        const matches = review.catalog
-          .filter((c) => c.toLowerCase().includes(qLower))
-          .slice(0, 6);
-        const exact = review.catalog.some((c) => c.toLowerCase() === qLower);
-        if (q && !exact) {
-          const create = document.createElement("button");
-          create.type = "button";
-          create.className = "create";
-          create.textContent = "+ create “" + q + "”";
-          create.addEventListener("click", () => pick(q));
-          menu.appendChild(create);
-        }
-        for (const c of matches) {
-          const b = document.createElement("button");
-          b.type = "button";
-          b.textContent = c;
-          b.addEventListener("click", () => pick(c));
-          menu.appendChild(b);
-        }
-        if (!menu.childNodes.length) {
-          const empty = document.createElement("div");
-          empty.className = "empty";
-          empty.textContent = "Type a category name";
-          menu.appendChild(empty);
-        }
-        menu.style.display = "";
-      };
-      input.addEventListener("focus", renderMenu);
-      input.addEventListener("input", () => {
-        review.query = input.value;
-        renderMenu();
-      });
-      input.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          const q = review.query.trim();
-          if (!q) return;
-          // Enter picks the exact catalog match if there is one (keeping its
-          // casing), otherwise creates what was typed.
-          const exact = review.catalog.find((c) => c.toLowerCase() === q.toLowerCase());
-          pick(exact || q);
-        } else if (event.key === "Escape") {
-          menu.style.display = "none";
-          input.blur();
-        }
-      });
-      // Clicks inside the typeahead must not reach the document listener
-      // that closes menus on outside click.
-      typeahead.addEventListener("click", (event) => event.stopPropagation());
-      selectionBarEl.appendChild(typeahead);
+      // Two typeaheads, one per bulk-assignable label: category (since
+      // Session 43) and merchant (Session 56). Subcategory is deliberately
+      // not here. Each writes one typed value to every selected transaction.
+      selectionBarEl.appendChild(
+        buildTypeahead({
+          placeholder: "Assign category\u2026",
+          options: () => review.catalog,
+          getQuery: () => review.query,
+          setQuery: (v) => { review.query = v; },
+          emptyText: "Type a category name",
+          onPick: (value) => assign(uniformPairs(selectedIds, value)),
+        }),
+      );
+      selectionBarEl.appendChild(
+        buildTypeahead({
+          placeholder: "Assign merchant\u2026",
+          options: () => review.merchants,
+          getQuery: () => review.merchantQuery,
+          setQuery: (v) => { review.merchantQuery = v; },
+          emptyText: "Type a merchant name",
+          onPick: (value) => assign(uniformMerchantPairs(selectedIds, value)),
+        }),
+      );
 
       const acceptBtn = document.createElement("button");
       acceptBtn.type = "button";
       acceptBtn.textContent = "Accept suggestions (" + withSuggestion.length + ")";
       acceptBtn.disabled = withSuggestion.length === 0 || review.busy;
       acceptBtn.title =
-        "Writes each selected transaction its own suggested category; " +
-        "selected rows with no suggestion are left as they are";
+        "Writes each selected transaction its own suggested category and merchant " +
+        "(as displayed); selected rows with neither are left as they are";
       acceptBtn.addEventListener("click", () => assign(withSuggestion));
       selectionBarEl.appendChild(acceptBtn);
 
@@ -1422,6 +1481,7 @@
       clear.addEventListener("click", () => {
         review.selected.clear();
         review.query = "";
+        review.merchantQuery = "";
         renderReview();
       });
       selectionBarEl.appendChild(clear);
@@ -1435,7 +1495,7 @@
       const isCollapsed = isGroupCollapsed(group);
       tr.className = "group" + (isCollapsed ? " collapsed" : "");
       const td = document.createElement("td");
-      td.colSpan = 7;
+      td.colSpan = 8;
       const head = document.createElement("div");
       head.className = "group-head";
 
@@ -1502,7 +1562,7 @@
       const editingField =
         review.editing !== null && review.editing.id === txn.id ? review.editing.field : null;
       const isEditing = editingField === "category";
-      if (editingField !== null) tr.className = "editing"; // either editor open
+      if (editingField !== null) tr.className = "editing"; // any editor open
       else if (isSelected) tr.className = "selected";
 
       const selectCell = document.createElement("td");
@@ -1533,6 +1593,8 @@
       amountCell.className = "num amount " + txn.txn_type;
       amountCell.textContent = fmtAmount(txn.amount);
       tr.appendChild(amountCell);
+
+      tr.appendChild(renderMerchantCell(txn, group, editingField === "merchant"));
 
       const catCell = document.createElement("td");
       catCell.className = "category-cell";
@@ -1614,6 +1676,72 @@
       tr.appendChild(catCell);
       tr.appendChild(renderSubcategoryCell(txn, group, editingField === "subcategory"));
       return tr;
+    }
+
+    // --- merchant cell ---------------------------------------------------
+    // Category parity: current value if set; else the suggestion (bold) with
+    // a percentage badge for a learned exact/fuzzy match, or the plain words
+    // "from description" for the Tier 3 default; accept writes exactly the
+    // displayed value as one {transaction_id, merchant} entry; change opens
+    // the shared editor on the merchant field.
+    function renderMerchantCell(txn, group, isEditing) {
+      const cell = document.createElement("td");
+      cell.className = "category-cell merchant-cell";
+      const m = merchantSuggestionFor(txn);
+
+      if (hasMerchant(txn)) {
+        const cur = document.createElement("span");
+        cur.textContent = txn.merchant;
+        cell.appendChild(cur);
+      } else if (m) {
+        const sug = document.createElement("span");
+        sug.className = "sug";
+        sug.textContent = m.value;
+        cell.appendChild(sug);
+        const badge = document.createElement("span");
+        if (m.match_type === "from_description") {
+          badge.className = "conf default";
+          badge.textContent = "from description";
+          badge.title = "No other row with a merchant resembles this description yet";
+        } else {
+          badge.className = "conf " + confClass(m.confidence);
+          badge.textContent = confText(m);
+        }
+        cell.appendChild(badge);
+      }
+
+      const actions = document.createElement("span");
+      actions.className = "actions";
+      if (m) {
+        const accept = document.createElement("button");
+        accept.type = "button";
+        accept.className = "small";
+        accept.textContent = "accept";
+        accept.disabled = review.busy;
+        accept.addEventListener("click", () =>
+          assign([{ transaction_id: txn.id, merchant: m.value }]),
+        );
+        actions.appendChild(accept);
+      }
+      const change = document.createElement("button");
+      change.type = "button";
+      change.className = "small";
+      change.textContent = "change";
+      change.disabled = review.busy;
+      change.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (isEditing) {
+          review.editing = null;
+          renderReview();
+        } else {
+          openEditor(txn, group, "merchant");
+        }
+      });
+      actions.appendChild(change);
+      cell.appendChild(actions);
+
+      if (isEditing) cell.appendChild(renderEditor(txn));
+      return cell;
     }
 
     // --- subcategory cell ------------------------------------------------
@@ -1699,7 +1827,10 @@
         groupIds: group.ids.slice(),
         spread: false,
         adding: false,
-        options: field === "category" ? review.catalog : null, // null = loading
+        options:
+          field === "category" ? review.catalog
+          : field === "merchant" ? review.merchants
+          : null, // subcategory: null = loading, fetched below
       };
       review.editing = state;
       renderReview();
@@ -1738,9 +1869,10 @@
       const others = state.groupIds.filter((id) => id !== txn.id);
       const targets = () => (state.spread && others.length ? state.groupIds : [txn.id]);
       const isSub = state.field === "subcategory";
-      const noun = isSub ? "subcategory" : "category";
-      const pick = (value) =>
-        assign(isSub ? uniformSubPairs(targets(), value) : uniformPairs(targets(), value));
+      const isMerchant = state.field === "merchant";
+      const noun = state.field;
+      const builder = isSub ? uniformSubPairs : isMerchant ? uniformMerchantPairs : uniformPairs;
+      const pick = (value) => assign(builder(targets(), value));
       const options = state.options; // null while a subcategory list is loading
 
       // "spread to group" -- only when there is a group to spread to.

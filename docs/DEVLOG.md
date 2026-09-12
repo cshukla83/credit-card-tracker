@@ -6752,3 +6752,95 @@ single request.
 Step 2: a Merchant column left of Category on both tables, with category-
 parity badge/accept/change, a merchant typeahead in the multi-select bar,
 and "Accept suggestions" applying merchant suggestions too.
+
+## Session 56 — 2026-09-12
+
+### Goal
+Step 2: a Merchant column left of Category on both tables, with full
+category-parity per-row treatment, a merchant typeahead in the multi-select
+bar, and "Accept suggestions" applying each selected row's displayed
+merchant suggestion alongside its category one. No grouping changes.
+
+### What happened
+
+**Columns.** Merchant sits immediately left of Category on both tables:
+read-only on All transactions (joining last session's Category/
+Subcategory, which stay where they are), interactive on Review & assign.
+Group header `colSpan` 7 → 8. Neither grouping mode reads the column;
+`buildGroups()` is untouched.
+
+**Per-row merchant cell, category parity.** `renderMerchantCell()` mirrors
+the category cell: current value if set; otherwise the suggestion in bold
+with a badge — `exact · NN%` / `fuzzy · NN%` in the existing confidence
+style, or the plain words *from description* (muted italics, no number)
+for the Tier 3 default, matching how subcategory's `same_as_category` is
+shown. "accept" writes exactly the displayed value as one `{transaction_id,
+merchant}` entry. "change" opens the shared editor on the `merchant` field.
+Because the engine always returns a merchant suggestion, the cell never
+shows a dash: it is either the current value or a suggestion.
+
+**Editor.** `review.merchants` is fetched with the catalog on every
+`loadReview()` (`GET /merchants`, unscoped), so the merchant dropdown is
+synchronous like category's; the subcategory branch remains the on-open
+fetch. `renderEditor()` picks the pair builder by `state.field`
+(`uniformMerchantPairs` joins the other two) and uses the field name as
+its noun ("add new merchant", "New merchant"). Spread-to-group, add-new,
+Enter/Esc, click-outside, and the amber row are the same code.
+
+**Multi-select bar.** The category typeahead's construction was lifted
+into `buildTypeahead({placeholder, options, getQuery, setQuery, emptyText,
+onPick})` and instantiated twice: category (against `review.catalog`,
+query in `review.query`) and merchant (against `review.merchants`, query
+in `review.merchantQuery`), each with the same six-match menu, `+ create
+"…"` entry, Enter-picks-exact-else-creates, and Escape. Subcategory is
+still deliberately absent.
+
+**"Accept suggestions (N)" now carries merchant.** `acceptPairs(txns,
+withMerchant)` builds one entry per row holding whichever of the row's
+displayed category and merchant suggestions exist; N counts rows with at
+least one. Group-level "accept all" and the row-level category accept call
+it without `withMerchant` — a group *is* a category suggestion, and those
+buttons say what they do. **One consequence worth stating plainly:**
+because Tier 3 always produces a displayed merchant suggestion for any row
+without a merchant, a bulk accept over such rows will write the raw
+description as the merchant for every one of them. That is the brief's
+client-displayed-value principle applied literally, and the badge next to
+each of those rows says *from description* before the user presses the
+button; if that turns out to be too eager in practice, excluding
+`from_description` from the bulk path is a one-line change and its own
+decision.
+
+**Verification.** Script parsed with the system JavaScriptCore; backend
+suite unaffected (361). **Reasoned through only — not verified visually.**
+The browser extension was unavailable; no server started, no live request,
+no frontend test suite invented.
+
+### Outcome
+Both tables show the merchant; on the review screen each row can accept
+or change it with the same controls as category, the bar can bulk-assign a
+typed merchant, and one "Accept suggestions" press applies both displayed
+suggestions per selected row. Grouping is unchanged.
+
+### In plain English
+The tidy merchant name added in the previous step now appears on both
+screens, just left of the category. On the review screen it behaves
+exactly like the category: a suggestion with an accept button — showing a
+confidence figure when it was learned from similar transactions, or the
+words "from description" when it is only the raw bank text offered as a
+starting point — plus a one-click list to pick or type a different name,
+optionally for the whole group.
+
+The bulk bar gained a second box for typing a merchant name onto every
+ticked row, and its "Accept suggestions" button now applies both the
+suggested category and the suggested merchant to each ticked row. Since a
+merchant suggestion always exists, that button will also stamp the raw
+description onto rows that have nothing better — the badge says so before
+you press it, and it's easy to tighten later if it proves too eager.
+Checked by reading the code, not by seeing it run.
+
+### Next steps
+Manual walk: merchant column on both tabs; exact / fuzzy / from-description
+badges; accept and change (with spread); the merchant typeahead and create;
+"Accept suggestions" over a mixed selection, watching what the
+from-description rows receive; and that grouping is unaffected. Then decide
+whether bulk accept should skip `from_description`.
