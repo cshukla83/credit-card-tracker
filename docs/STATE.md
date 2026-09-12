@@ -160,6 +160,13 @@ totals, and every one of them is covered by a committed integration test.
   holding.
 - A `StarletteDeprecationWarning` (`httpx` with `starlette.testclient`)
   surfaced during Session 23's test run — unresolved, low-priority.
+- Two visual-design items were raised during Session 44's frontend
+  refresh and deliberately deferred: a stronger visual treatment for the
+  Review & assign status line (it is currently a plain muted text line
+  above the table), and a distinct typeface beyond the system font stack.
+  Neither was built because the brief scoped that session to the system
+  font stack and to styling within the existing layout. Both are open for
+  a future, separately scoped frontend session; neither blocks anything.
 
 ## Next arc
 
