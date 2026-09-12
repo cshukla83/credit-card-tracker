@@ -93,3 +93,17 @@ ADD_IS_PAYMENT_COLUMN = """
 ALTER TABLE transactions
 ADD COLUMN is_payment INTEGER NOT NULL DEFAULT 0
 """
+
+# LLM commentary cache (Session 68). One row per distinct *resolved* view --
+# the signature is built from the resolved period dates and normalised
+# filters, never the raw granularity/mode params -- holding only the latest
+# successful commentary for that view (writes UPSERT). A plain
+# CREATE TABLE IF NOT EXISTS: a new table needs no column migration.
+CREATE_COMMENTARY_CACHE_TABLE = """
+CREATE TABLE IF NOT EXISTS commentary_cache (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_signature TEXT NOT NULL UNIQUE,
+    commentary TEXT NOT NULL,
+    generated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""

@@ -6,6 +6,12 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from storage.aggregate import PeriodError, aggregate_spend, resolve_period
 from storage.cards import list_cards_with_statements
+from storage.commentary import (
+    CommentaryNotConfiguredError,
+    CommentaryUnavailableError,
+    generate_commentary,
+    query_signature,
+)
 from storage.categories import (
     InvalidPaymentFlagError,
     TransactionNotFoundError,
@@ -129,6 +135,46 @@ def read_aggregate(
     return aggregate_spend(
         conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type
     )
+
+
+@app.post("/analytics/commentary")
+def write_commentary(
+    granularity: str | None = None,
+    mode: str | None = None,
+    count: int | None = None,
+    month: str | None = None,
+    quarter: str | None = None,
+    year: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    bank: str | None = None,
+    card_id: int | None = None,
+    card_type: str | None = None,
+    conn=Depends(get_db),
+):
+    # LLM commentary for the dashboard (Session 68). Same period and filter
+    # params as /transactions/aggregate; a plain action, invoked on explicit
+    # user request, never polled. Period resolved once, aggregate computed
+    # once, and only the narrowed category-level payload leaves the machine.
+    # Missing key -> 500 (configuration, not transient); model failure with
+    # a cached row -> that row, cached: true; without one -> 503.
+    try:
+        start_date, end_date = resolve_period(
+            granularity, mode=mode, count=count, month=month, quarter=quarter,
+            year=year, start=start, end=end,
+        )
+    except PeriodError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    aggregate = aggregate_spend(
+        conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type
+    )
+    signature = query_signature(start_date, end_date, bank=bank, card_id=card_id, card_type=card_type)
+    try:
+        return generate_commentary(conn, aggregate, signature)
+    except CommentaryNotConfiguredError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except CommentaryUnavailableError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @app.get("/cards")

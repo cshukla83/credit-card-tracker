@@ -3,8 +3,8 @@
 The SQLite schema as it is actually defined in code, generated from ground
 truth rather than from other documents.
 
-**Source of truth:** `storage/schema.py` (the three `CREATE TABLE`
-statements plus the one `ALTER TABLE` migration) and `storage/db.py` (how
+**Source of truth:** `storage/schema.py` (the four `CREATE TABLE`
+statements plus the `ALTER TABLE` migrations) and `storage/db.py` (how
 they are applied). Everything below was checked against those files and
 then confirmed by building a throwaway in-memory database from
 `storage/schema.py` and introspecting it with `PRAGMA table_xinfo`,
@@ -31,13 +31,15 @@ cards  1 ──< N  statements  1 ──< N  transactions
 - Deleting a card cascades to its statements and, through them, to their
   transactions. Deleting a statement cascades to its transactions.
 
-There are no other application tables. SQLite also maintains an internal
+One further, standalone table — `commentary_cache` (Session 68) — holds
+the latest LLM commentary per dashboard view; it has no foreign keys and
+sits outside the chain. See its section below. SQLite also maintains an internal
 `sqlite_sequence` table because every `id` column uses `AUTOINCREMENT`;
 it is not part of the application model and is never referenced by code.
 
 ### How the schema is applied
 
-`storage.db.init_db()` runs the three `CREATE TABLE IF NOT EXISTS`
+`storage.db.init_db()` runs the four `CREATE TABLE IF NOT EXISTS`
 statements, then five column migrations of identical shape, each of which
 checks `PRAGMA table_xinfo(<table>)` for the column and runs
 `ALTER TABLE ... ADD COLUMN` only if it is absent:
@@ -298,6 +300,36 @@ One line item from a statement, as extracted by the bank-specific parser.
   payment label and `merchant` to the card's `bank` (verbatim, not
   Title-Cased); `1 → 0` sets all three back to `NULL`. Import sets only
   the flag, never the labels.
+
+---
+
+## Table: `commentary_cache`
+
+The latest LLM-generated commentary for one dashboard view (Session 68).
+Standalone: no foreign keys, not part of the cards → statements →
+transactions chain, and never joined to it.
+
+| Column            | Declared type | Constraints                                  |
+|-------------------|---------------|----------------------------------------------|
+| `id`              | `INTEGER`     | `PRIMARY KEY AUTOINCREMENT`                  |
+| `query_signature` | `TEXT`        | `NOT NULL UNIQUE`                            |
+| `commentary`      | `TEXT`        | `NOT NULL`                                   |
+| `generated_at`    | `TIMESTAMP`   | `NOT NULL DEFAULT CURRENT_TIMESTAMP` (UTC)   |
+
+- **`query_signature`** identifies a *resolved* view: the period's
+  start and end dates (after `resolve_period()`), plus the `bank`,
+  `card_id`, and `card_type` filters, each normalised (stripped; an
+  absent filter written as a fixed sentinel). It is deliberately not
+  built from the raw granularity/mode/count parameters, so two requests
+  that resolve to the same dates share one row. Built by
+  `storage.commentary.query_signature()`.
+- Writes are UPSERTs on `query_signature`: only the most recent
+  successful commentary per view is kept, and `generated_at` is reset on
+  each replacement. `UNIQUE` gives this table its one auto-index.
+- Created by a plain `CREATE TABLE IF NOT EXISTS` in `init_db()`; being a
+  new table, it needs no `table_xinfo`-guarded migration.
+- Rows are written only after a successful model call; a failed call
+  reads this table but never writes it.
 
 ---
 

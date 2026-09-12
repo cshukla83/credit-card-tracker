@@ -7798,3 +7798,115 @@ seeing it run.
 ### Next steps
 Unchanged: Module 3 commentary once scoped; the outstanding manual browser
 walk now also covers the dashboard and this drill-down.
+
+## Session 68 — 2026-09-12
+
+### Goal
+Module 3's last piece, backend only: `POST /analytics/commentary` — LLM
+commentary on the dashboard's category totals via Gemini, with a
+signature-keyed cache that serves the last good result when the model
+call fails. No frontend wiring.
+
+### What happened
+
+**Key handling.** `GEMINI_API_KEY` is read from the environment at call
+time (`.env` via `python-dotenv`, the same convention as the bank
+password keys). Unset → `CommentaryNotConfiguredError` ("Gemini API key
+not configured") **before anything else** — the cache is not consulted,
+because a missing key is configuration, not a transient failure. The
+endpoint maps it to 500 with that message, distinct from the 503 below.
+No key was added to `.env` in this session; none was needed, since no real
+call is made.
+
+**Table.** `commentary_cache(id, query_signature TEXT NOT NULL UNIQUE,
+commentary TEXT NOT NULL, generated_at TIMESTAMP NOT NULL DEFAULT
+CURRENT_TIMESTAMP)`, a plain `CREATE TABLE IF NOT EXISTS` in
+`storage/schema.py` run by `init_db()` — a new table needs no guarded
+column migration. `docs/DATA_MODEL.md` updated: source-of-truth line,
+overview (standalone, outside the FK chain), a new table section.
+
+**Signature from the resolved view, not the request.**
+`query_signature(start, end, bank, card_id, card_type)` joins the resolved
+ISO dates and the three filters — stripped, JSON-quoted for the two text
+ones, an absent filter as a fixed sentinel — so any granularity/mode
+combination that resolves to the same range shares one entry. Tests pin
+that a month, a quarter, and a rolling week each equal the custom range
+with the same dates, and that whitespace and absence normalise.
+
+**Narrow payload, by construction.** `narrow_payload(aggregate)` builds
+the model input key by key — `period.start`, `period.end`, `total`, and
+`{category, amount}` per category — rather than copying and pruning, so a
+subcategories array, a transaction-level field, or a future key on the
+aggregate shape cannot ride along. Two tests pin it: one feeds a
+deliberately over-rich aggregate (subcategories, merchant, description,
+nested transactions, an unknown key) and asserts the exact output and the
+absence of every marker in its serialised form; the other runs the real
+`aggregate_spend()` over seeded rows and asserts on exactly what the
+mocked model call received. This is the vision document's one named
+exception to "no real data leaves the machine", kept as narrow as it
+promised.
+
+**The call.** `_call_gemini(api_key, payload)` is one small function —
+`httpx` (already a dependency), `generateContent` on a model taken from
+`GEMINI_MODEL` with a default, a 20-second timeout, `raise_for_status`,
+and a strict parse of `candidates[0].content.parts[0].text` that raises on
+any unexpected shape or empty text. Tests replace it wholesale; **the
+suite never touches the network**, and the default model name has not
+been exercised against the live API from this codebase — a first live run
+should confirm it, and `GEMINI_MODEL` exists so that needs no code change.
+
+**Flow and fallbacks.** `generate_commentary(conn, aggregate, signature)`:
+success → UPSERT (`ON CONFLICT(query_signature) DO UPDATE`, resetting
+`generated_at`) and return `{commentary, generated_at, cached: false}`
+with the row's own timestamp read back; **any** failure — rate limit,
+network, timeout, malformed response, all alike — → the cached row for the
+signature if present, returned as `cached: true` **with the row's own
+`generated_at`** so the frontend can show a true age; no cached row →
+`CommentaryUnavailableError` → 503 "Commentary unavailable and nothing
+cached yet for this view". A failure never writes.
+
+**Endpoint.** `POST /analytics/commentary` takes the same period and
+filter query params as `GET /transactions/aggregate`, resolves the period
+with Session 65's `resolve_period()` (422 on a bad spec, before any model
+call — tested), runs Session 65's `aggregate_spend()` once, builds the
+signature, and calls the flow. A plain request/response action for the
+frontend to invoke on explicit user request; nothing about it invites
+polling.
+
+**Tests** — `tests/test_commentary.py`, 16: signature determinism and
+normalisation; equal signatures across differently-specified equal ranges;
+the over-rich-aggregate narrowing; the real-aggregate-to-mock payload
+check; upsert replaces (count stays 1, timestamp refreshed) and a second
+signature adds a row; missing key raises without touching a present cache
+row; success upserts and returns fresh; three failure types with a cached
+row return it with its own timestamp; failure without cache raises and
+writes nothing; endpoint success end to end including that a second,
+differently-specified request for the same dates replaces rather than
+duplicates; 500 with the explicit message; 503 then cached-200 after
+seeding; 422 before any call; filters change the signature. Full suite:
+**476 passing** (460 + 16).
+
+### Outcome
+The dashboard has a commentary source: one explicit call resolves the
+view, sends only category-level totals to the model, caches the latest
+good answer per resolved view, and degrades to that cached answer — age
+visible — when the model can't be reached, failing loudly and distinctly
+when it was never configured.
+
+### In plain English
+The dashboard can now ask an outside language model for a few sentences
+of commentary on a period's spending. What is sent is kept deliberately
+small — the period, the total, and the amount per category — never the
+finer labels and never anything about individual transactions, and a test
+guarantees that shape can't quietly widen. The reply is saved per view, so
+if the service is slow, rate-limited, or down, the last good commentary
+for that same view is shown instead, marked as older with its real
+timestamp; if there is nothing saved yet, the screen is told plainly that
+commentary isn't available. If the service was never set up with a key,
+that is reported as a setup problem, not as a temporary outage. No real
+calls were made in building this.
+
+### Next steps
+The frontend wiring: a button on the dashboard, the commentary text with
+its age indicator, and the three states (fresh, cached-with-age,
+unavailable). A first live call to confirm the default model name.

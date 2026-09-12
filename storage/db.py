@@ -11,6 +11,7 @@ from storage.schema import (
     ADD_SUBCATEGORY_COLUMN,
     ADD_STATEMENT_MONTH_COLUMN,
     CREATE_CARDS_TABLE,
+    CREATE_COMMENTARY_CACHE_TABLE,
     CREATE_STATEMENTS_TABLE,
     CREATE_TRANSACTIONS_TABLE,
 )
@@ -51,6 +52,7 @@ def init_db() -> None:
         conn.execute(CREATE_CARDS_TABLE)
         conn.execute(CREATE_STATEMENTS_TABLE)
         conn.execute(CREATE_TRANSACTIONS_TABLE)
+        conn.execute(CREATE_COMMENTARY_CACHE_TABLE)
         _ensure_statement_month_column(conn)
         _ensure_category_column(conn)
         _ensure_subcategory_column(conn)
