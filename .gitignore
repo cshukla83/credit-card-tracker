@@ -16,3 +16,6 @@ dist/
 
 # Generated from docs/PRD.md by scripts/generate_prd_docx.py
 docs/PRD.docx
+
+# Claude Design mockups (local reference only)
+UI design/
