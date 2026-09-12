@@ -8060,3 +8060,43 @@ matter.
 ### Next steps
 Unchanged: the manual browser walk covering Review & assign, the dashboard,
 the drill-down, and the insight button — now against a working model.
+
+## Session 71 — 2026-09-12
+
+### Goal
+Merge `feature/analytics-dashboard` into `main`. Git operations and test
+verification only; no code changes.
+
+### What happened
+1. `git branch --show-current` → `feature/analytics-dashboard`; working
+   tree clean.
+2. Full suite on the feature branch: **476 passing**, matching Session
+   68's count (Sessions 69 and 70 were frontend- and docs-only).
+3. `git checkout main` (at `79df9e5`, Session 60), then
+   `git merge --ff-only feature/analytics-dashboard`: a clean
+   fast-forward — `main` had not diverged — to `77b6b6e` (Session 70). No
+   merge commit was created. The branch carried Sessions 61–70: the
+   `is_payment` flag and cascade, the bank/card_id row fields, the
+   aggregation endpoint, the Dashboard tab with drill-down, the commentary
+   endpoint and cache, the insight button, and their docs.
+4. Full suite on `main` post-merge: **476 passing**.
+5. `git branch -d feature/analytics-dashboard` (was `77b6b6e`), following
+   the Session 59→60 precedent: merged, verified on `main`, then deleted.
+   `main` is now the only local branch.
+6. This entry, committed on `main`.
+
+### Outcome
+`main` is at the analytics-arc tip with 476 tests passing; the feature
+branch is gone. Nothing in the code moved.
+
+### In plain English
+The analytics work of the last ten sessions was folded into the main line
+of the project. The checks were run before and after to confirm the same
+476 pass on both sides, the join was a straight extension of the main line
+with no reconciliation needed, and the side branch was removed now that
+everything on it lives in main.
+
+### Next steps
+Next work starts from `main` on a new branch. The outstanding manual
+browser walk (Review & assign, dashboard, drill-down, insight button) is
+still the gate before Modules 2 and 3 are called verified.
