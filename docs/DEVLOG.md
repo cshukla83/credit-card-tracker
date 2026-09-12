@@ -5741,3 +5741,97 @@ Open the app and check the refresh by eye at desktop and narrow widths:
 pills, hover, collapse chevrons, the dropdown clearing the table edge, and
 focus rings. Then continue the manual walk of the Review & assign flow
 against the seeded data from the data note above.
+
+## Session 45 — 2026-09-12
+
+### Goal
+Make the three listing endpoints — `GET /cards`, `GET /statement-months`,
+`GET /card-types` — narrowable by the same filters `GET /transactions`
+accepts, so the frontend can compute "what is selectable given the other
+filters" for bidirectional narrowing. Step 1 of a two-step build; Step 2 is
+the frontend cascade.
+
+### What happened
+
+**Finding.** The three listing functions took no filters at all:
+`list_cards_with_statements(conn)`, `list_statement_months(conn)`,
+`list_card_types(conn)`. The endpoints had no query params. So this step was
+real work, not a no-op.
+
+**One helper, four callers.** Rather than copy `get_transactions()`'s
+conditional-JOIN block three more times, the filter logic moved into
+`storage.reads.filter_sql(anchor, *, card_id, statement_month, bank,
+card_type, start_date, end_date, always_join=())`, which returns
+`(joins_sql, where_sql, params)` for a query anchored on any of the three
+tables. The tables form a chain — `cards ─ statements ─ transactions` — and
+each filter lives on exactly one of them (`card_id`/`statement_month` on
+statements, `bank`/`card_type` on cards, dates on transactions). The helper
+collects the set of tables the active filters need, then walks outward from
+the anchor in each direction adding one JOIN per step until the farthest
+needed table is reached, so intermediate tables come along and nothing else
+does. This is the STATE.md JOIN-only-when-needed discipline, now stated once
+and asserted directly by a test on the helper's output (empty joins for no
+filters; `statements` but not `cards` for `card_id` from transactions;
+`transactions` but not `cards` for a date range from statements; join order
+correct from cards outward).
+
+`get_transactions()` was rewritten on top of it with identical behaviour —
+every pre-existing read test passed untouched. `always_join=("statements",)`
+expresses the two card listings' standing rule "cards with at least one
+statement" without special-casing.
+
+**Semantics chosen.** A listing is narrowed to entities that have *at least
+one transaction* matching the filter set — a card "has data in this range"
+if any transaction of any of its statements falls in the range; a statement
+month is listed for a range if any statement in that month has a transaction
+in it. `DISTINCT` (cards, card-types) and `GROUP BY` (months) collapse the
+extra fan-out the transactions JOIN introduces. Each listing accepts every
+filter *except the one it is*: no `card_id` on `/cards`, no `statement_month`
+on `/statement-months`, no `card_type` on `/card-types` — a filter must never
+be able to narrow itself, which is what Step 2's "exclude the filter's own
+selection" rule needs from the API. `/card-types` does accept `bank`, so a
+frontend can list the card types within one bank.
+
+**Endpoint validation.** The `start`/`end` parsing and the start-after-end
+check moved into `_parse_date_range()` and are applied to all four read
+endpoints, so a malformed date is a 400 naming the param on `/cards` exactly
+as it is on `/transactions`. The other filters keep their "200 + empty list"
+behaviour for unknown values, for the reason already recorded in Session 23.
+
+**Tests.** Eight new: cards narrowed by month, by bank, by card type, by
+date range (including the single-row-per-card check under fan-out);
+statement months narrowed by card, bank, range, and an unknown card; card
+types narrowed by card, month, bank, range; the three listings' date
+validation (parametrised); and the direct `filter_sql` JOIN-shape test. A
+`two_cards_two_months` fixture extends `two_cards` with a second month on
+one card so month narrowing has something to distinguish. Full suite: **293
+passing** (285 + 8).
+
+`docs/DATA_MODEL.md` was not touched: no schema, index, or column changed,
+and its statements about the read path (which JOINs walk which FK) remain
+true of the new helper.
+
+### Outcome
+Every read endpoint accepts the same filter vocabulary, minus the one
+dimension each listing represents, applied by one shared helper that joins
+only what the active filters need. Verified by the test suite only.
+
+### In plain English
+Until now the three "what's available" lists — cards, statement months,
+bank/card types — always returned everything, regardless of any other
+filter. They can now be narrowed by the same criteria as the transaction
+list itself: which cards have activity in a date range, which months exist
+for a particular card, and so on. Each list can be narrowed by every
+criterion except its own, so a choice in one dropdown can never hide the
+other options in that same dropdown.
+
+Instead of writing the narrowing logic three more times, it was pulled into
+one shared piece that all four lookups use, and a test checks that it only
+pulls in the extra tables a given combination of filters actually needs.
+This is what the next step — dropdowns that update each other — will be
+built on.
+
+### Next steps
+Step 2: replace the card and bank/card-type pickers with a Bank → Card
+cascade, and recompute every picker's options from these endpoints whenever
+any filter changes, under the same fetch-sequencing guard the table uses.

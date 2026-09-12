@@ -517,3 +517,125 @@ def test_categories_catalog_is_empty_then_sorted_distinct(client, two_cards):
     response = client.get("/categories")
     assert response.status_code == 200
     assert response.json() == ["Food", "Travel"]
+
+
+# --- listing endpoints narrowed by the other filters -----------------------
+
+
+@pytest.fixture
+def two_cards_two_months(two_cards):
+    """two_cards plus a February statement on Card A only (one txn, Feb 10)."""
+    card_a, card_b = two_cards
+    conn = get_connection()
+    try:
+        insert_statement(
+            conn,
+            card_a,
+            date(2026, 2, 1),
+            date(2026, 2, 28),
+            [_txn(10, "CARD A FEB TXN", month=2)],
+        )
+    finally:
+        conn.close()
+    return card_a, card_b
+
+
+def test_cards_narrow_by_statement_month(client, two_cards_two_months):
+    card_a, card_b = two_cards_two_months
+    assert [c["id"] for c in client.get("/cards").json()] == [card_a, card_b]
+    assert [
+        c["id"] for c in client.get("/cards", params={"statement_month": "February-2026"}).json()
+    ] == [card_a]
+
+
+def test_cards_narrow_by_bank_card_type_and_date_range(client, two_cards_two_months):
+    card_a, card_b = two_cards_two_months
+    assert [c["id"] for c in client.get("/cards", params={"bank": "FAKE BANK B"}).json()] == [
+        card_b
+    ]
+    # Both cards share the card type.
+    assert [
+        c["id"] for c in client.get("/cards", params={"card_type": "FAKE CARD TYPE"}).json()
+    ] == [card_a, card_b]
+    # Only Card B has a transaction on/after Jan 20; only Card A has one in Feb.
+    assert [c["id"] for c in client.get("/cards", params={"start": "2026-01-20"}).json()] == [
+        card_a,
+        card_b,
+    ]
+    assert [c["id"] for c in client.get("/cards", params={"start": "2026-01-21"}).json()] == [
+        card_a
+    ]
+    assert [
+        c["id"]
+        for c in client.get("/cards", params={"start": "2026-01-16", "end": "2026-01-31"}).json()
+    ] == [card_b]
+    # A card appears once even when several of its transactions match.
+    assert [
+        c["id"] for c in client.get("/cards", params={"bank": "FAKE BANK A", "end": "2026-01-31"}).json()
+    ] == [card_a]
+
+
+def test_statement_months_narrow_by_card_bank_and_date_range(client, two_cards_two_months):
+    card_a, card_b = two_cards_two_months
+    assert client.get("/statement-months").json() == ["February-2026", "January-2026"]
+    assert client.get("/statement-months", params={"card_id": card_b}).json() == ["January-2026"]
+    assert client.get("/statement-months", params={"bank": "FAKE BANK A"}).json() == [
+        "February-2026",
+        "January-2026",
+    ]
+    assert client.get("/statement-months", params={"start": "2026-02-01"}).json() == [
+        "February-2026"
+    ]
+    assert client.get(
+        "/statement-months", params={"card_id": card_a, "end": "2026-01-31"}
+    ).json() == ["January-2026"]
+    assert client.get("/statement-months", params={"card_id": 9999}).json() == []
+
+
+def test_card_types_narrow_by_card_month_bank_and_date_range(client, two_cards_two_months):
+    card_a, _card_b = two_cards_two_months
+    both = [
+        {"bank": "FAKE BANK A", "card_type": "FAKE CARD TYPE"},
+        {"bank": "FAKE BANK B", "card_type": "FAKE CARD TYPE"},
+    ]
+    only_a = both[:1]
+    assert client.get("/card-types").json() == both
+    assert client.get("/card-types", params={"card_id": card_a}).json() == only_a
+    assert client.get("/card-types", params={"statement_month": "February-2026"}).json() == only_a
+    assert client.get("/card-types", params={"bank": "FAKE BANK A"}).json() == only_a
+    assert client.get("/card-types", params={"start": "2026-02-01"}).json() == only_a
+    assert client.get("/card-types", params={"end": "2026-01-31"}).json() == both
+    assert client.get("/card-types", params={"statement_month": "March-2026"}).json() == []
+
+
+@pytest.mark.parametrize("path", ["/cards", "/statement-months", "/card-types"])
+def test_listing_endpoints_validate_dates_like_transactions(client, two_cards, path):
+    assert client.get(path, params={"start": "not-a-date"}).status_code == 400
+    assert client.get(path, params={"start": "2026-02-01", "end": "2026-01-01"}).status_code == 400
+
+
+def test_filter_sql_joins_only_what_the_filters_need():
+    # The JOIN-only-when-needed discipline, asserted directly on the helper
+    # rather than inferred from results.
+    from storage.reads import filter_sql
+
+    joins, where, params = filter_sql("transactions")
+    assert (joins, where, params) == ("", "", [])
+
+    joins, _, _ = filter_sql("transactions", card_id=1)
+    assert "statements" in joins and "cards" not in joins
+
+    joins, _, _ = filter_sql("transactions", bank="X")
+    assert "JOIN statements" in joins and "JOIN cards" in joins
+
+    joins, _, _ = filter_sql("statements", card_id=1)
+    assert joins == ""
+
+    joins, _, _ = filter_sql("statements", start_date="2026-01-01")
+    assert "JOIN transactions" in joins and "cards" not in joins
+
+    joins, _, _ = filter_sql("cards", always_join=("statements",))
+    assert joins.strip() == "JOIN statements ON statements.card_id = cards.id"
+
+    joins, _, _ = filter_sql("cards", end_date="2026-01-01", always_join=("statements",))
+    assert joins.index("JOIN statements") < joins.index("JOIN transactions")

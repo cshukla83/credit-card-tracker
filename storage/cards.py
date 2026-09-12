@@ -56,17 +56,41 @@ def list_cards(conn: sqlite3.Connection) -> "list[dict]":
     return [dict(row) for row in rows]
 
 
-def list_cards_with_statements(conn: sqlite3.Connection) -> "list[dict]":
-    """Cards that have at least one statement, ordered by id ascending.
+def list_cards_with_statements(
+    conn: sqlite3.Connection,
+    statement_month: "str | None" = None,
+    bank: "str | None" = None,
+    card_type: "str | None" = None,
+    start_date=None,
+    end_date=None,
+) -> "list[dict]":
+    """Cards that have at least one statement, ordered by id ascending,
+    optionally narrowed by statement month, bank, card type, or a date range.
 
     Explicit `cards.*` (not a bare `*`) for the same reason as the
     transactions/statements read-path JOIN: both `cards` and `statements`
     have an `id` column, so a bare `*` would collide. `DISTINCT` collapses
-    the JOIN's one-row-per-statement fan-out back down to one row per card.
+    the JOIN's one-row-per-statement (or per-transaction, with a date range)
+    fan-out back down to one row per card.
+
+    The filters are the shared read-path set from storage.reads.filter_sql,
+    anchored on cards with the statements JOIN always on (that is what
+    "with statements" means). There is no card_id parameter: a filter is
+    never narrowed by itself.
     """
+    from storage.reads import filter_sql  # local import: reads is the lower layer
+
+    joins, where, params = filter_sql(
+        "cards",
+        statement_month=statement_month,
+        bank=bank,
+        card_type=card_type,
+        start_date=start_date,
+        end_date=end_date,
+        always_join=("statements",),
+    )
     rows = conn.execute(
-        "SELECT DISTINCT cards.* FROM cards "
-        "JOIN statements ON statements.card_id = cards.id "
-        "ORDER BY cards.id ASC"
+        "SELECT DISTINCT cards.* FROM cards" + joins + where + " ORDER BY cards.id ASC",
+        params,
     ).fetchall()
     return [dict(row) for row in rows]

@@ -47,6 +47,21 @@ def _parse_query_date(value: str, param_name: str) -> date:
         )
 
 
+def _parse_date_range(start: "str | None", end: "str | None"):
+    # Shared by every filterable read endpoint: malformed -> 400 naming the
+    # param; start after end -> 400. Both are the only inputs here that have
+    # a format to get wrong, which is why they get 400s while the other
+    # filters get "200 + empty" (see read_transactions).
+    start_date = _parse_query_date(start, "start") if start is not None else None
+    end_date = _parse_query_date(end, "end") if end is not None else None
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(
+            status_code=400,
+            detail=f"start ({start_date}) is after end ({end_date})",
+        )
+    return start_date, end_date
+
+
 @app.get("/transactions")
 def read_transactions(
     card_id: int | None = None,
@@ -57,14 +72,7 @@ def read_transactions(
     card_type: str | None = None,
     conn=Depends(get_db),
 ):
-    start_date = _parse_query_date(start, "start") if start is not None else None
-    end_date = _parse_query_date(end, "end") if end is not None else None
-
-    if start_date is not None and end_date is not None and start_date > end_date:
-        raise HTTPException(
-            status_code=400,
-            detail=f"start ({start_date}) is after end ({end_date})",
-        )
+    start_date, end_date = _parse_date_range(start, end)
 
     # Always 200 + [] when nothing matches -- including an unknown card_id,
     # statement_month, bank, or card_type. Same reasoning throughout: the
@@ -82,19 +90,68 @@ def read_transactions(
     )
 
 
+# The three listing endpoints accept the same filters as /transactions,
+# minus the one each of them *is* -- so a frontend can ask "which cards have
+# data in this month/range" or "which months exist for this card" and
+# narrow every picker by the others without a picker ever narrowing itself.
 @app.get("/cards")
-def read_cards(conn=Depends(get_db)):
-    return list_cards_with_statements(conn)
+def read_cards(
+    statement_month: str | None = None,
+    bank: str | None = None,
+    card_type: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    conn=Depends(get_db),
+):
+    start_date, end_date = _parse_date_range(start, end)
+    return list_cards_with_statements(
+        conn,
+        statement_month=statement_month,
+        bank=bank,
+        card_type=card_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 
 @app.get("/statement-months")
-def read_statement_months(conn=Depends(get_db)):
-    return list_statement_months(conn)
+def read_statement_months(
+    card_id: int | None = None,
+    bank: str | None = None,
+    card_type: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    conn=Depends(get_db),
+):
+    start_date, end_date = _parse_date_range(start, end)
+    return list_statement_months(
+        conn,
+        card_id=card_id,
+        bank=bank,
+        card_type=card_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 
 @app.get("/card-types")
-def read_card_types(conn=Depends(get_db)):
-    return list_card_types(conn)
+def read_card_types(
+    card_id: int | None = None,
+    statement_month: str | None = None,
+    bank: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    conn=Depends(get_db),
+):
+    start_date, end_date = _parse_date_range(start, end)
+    return list_card_types(
+        conn,
+        card_id=card_id,
+        statement_month=statement_month,
+        bank=bank,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 
 @app.get("/categories")
