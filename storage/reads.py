@@ -111,13 +111,20 @@ def get_transactions(
     """Query transactions, optionally filtered by card, date range, statement
     month, bank, and/or card type.
 
+    Every row carries, besides `transactions.*`, the two identity columns a
+    consumer otherwise cannot derive: `card_id` (from statements) and `bank`
+    (from cards) -- added in Session 63 so the frontend can name a row's
+    bank without a second request. That makes the statements and cards
+    JOINs unconditional *for this query*: they are needed for the output,
+    not only for filtering. The filter set itself is still the shared
+    `filter_sql`, and the listing queries still join only what their
+    filters need. Explicit `transactions.*` plus named columns, never a bare
+    `*`, so the three tables' `id` columns cannot collide.
+
     All filters are optional and compose with AND. card_id, statement_month,
-    bank, and card_type all filter via the parent statement (and, for bank/
-    card_type, the grandparent card) rather than columns on transactions
-    itself, so the statements/cards JOINs are only added when a filter that
-    actually needs them is present -- never unconditionally. start_date/
-    end_date filter on transactions.txn_date and are both inclusive. Accepts
-    date objects or ISO strings for start_date/end_date.
+    bank, and card_type filter via the parent statement / grandparent card;
+    start_date/end_date filter on transactions.txn_date and are both
+    inclusive. Accepts date objects or ISO strings for start_date/end_date.
 
     Results are ordered most-recent-first (txn_date DESC), with id DESC as a
     stable tiebreaker for multiple transactions on the same date.
@@ -130,9 +137,11 @@ def get_transactions(
         card_type=card_type,
         start_date=start_date,
         end_date=end_date,
+        always_join=("statements", "cards"),
     )
     rows = conn.execute(
-        "SELECT transactions.* FROM transactions"
+        "SELECT transactions.*, statements.card_id AS card_id, cards.bank AS bank "
+        "FROM transactions"
         + joins
         + where
         + " ORDER BY transactions.txn_date DESC, transactions.id DESC",

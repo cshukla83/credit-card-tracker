@@ -91,6 +91,8 @@ def test_no_filters_returns_all_transactions(client, two_cards):
         "subcategory",
         "merchant",
         "is_payment",
+        "card_id",
+        "bank",
     }
 
 
@@ -1066,3 +1068,22 @@ def test_merchants_catalog_is_sorted_distinct_and_unscoped(client, two_cards):
     assert client.get("/merchants").json() == ["Alpha", "Zeta"]
     # No category scoping: the param is simply not part of this endpoint.
     assert client.get("/merchants", params={"category": "Food"}).json() == ["Alpha", "Zeta"]
+
+
+# --- rows carry card_id and bank (Session 63) --------------------------------
+
+
+def test_transactions_rows_carry_their_card_id_and_bank(client, two_cards):
+    card_a, card_b = two_cards
+    rows = client.get("/transactions").json()
+    by_bank = {}
+    for r in rows:
+        by_bank.setdefault(r["bank"], set()).add(r["card_id"])
+    assert by_bank == {"FAKE BANK A": {card_a}, "FAKE BANK B": {card_b}}
+    # Consistent with the filters that use the same columns.
+    only_b = client.get("/transactions", params={"card_id": card_b}).json()
+    assert {(r["card_id"], r["bank"]) for r in only_b} == {(card_b, "FAKE BANK B")}
+    only_a = client.get("/transactions", params={"bank": "FAKE BANK A"}).json()
+    assert {(r["card_id"], r["bank"]) for r in only_a} == {(card_a, "FAKE BANK A")}
+    # The row's own id is the transaction's, not a joined table's.
+    assert sorted(r["id"] for r in rows) == _ids(client)

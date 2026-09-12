@@ -158,10 +158,13 @@ system font stack.
   generated columns entirely and was verified to cause `init_db()` to
   crash on every database, including a freshly created one, by always
   believing the column was missing.
-- `storage.reads.get_transactions()`'s `statements`/`cards` JOINs are
-  built conditionally per-call based on which filters are actually
+- Read-path JOINs are built per-call from which filters are actually
   present (`statement_month` needs `statements`; `bank`/`card_type` need
-  `cards` too) — never joined unconditionally "just in case."
+  `cards` too) — never joined unconditionally "just in case." One
+  qualified exception since Session 63: `get_transactions()` always joins
+  `statements` and `cards` because its rows now *return* `card_id` and
+  `bank`; that join is needed for the output, not speculatively. The
+  listing queries still join only what their filters need.
   `storage.reads.list_card_types()` applies the same "only cards with a
   statement" filter as `storage.cards.list_cards_with_statements()`, but
   lives in `storage/reads.py` and returns bank/card-type pairs rather

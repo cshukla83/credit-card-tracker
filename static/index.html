@@ -2043,13 +2043,6 @@
     // succeeded: the click is cancelled and the box is redrawn from state.
     const PAYMENT_LABEL = "Credit Card Payment";
 
-    // What the modal can say about the bank. /transactions rows carry no
-    // card or bank, so the name is known only when the Bank filter pins it
-    // (picking a card snaps Bank to its bank, so that case is covered too).
-    function knownBankForRows() {
-      return bankFilterEl.value || null;
-    }
-
     function renderPaymentCell(txn) {
       const cell = document.createElement("td");
       cell.className = "payment";
@@ -2081,12 +2074,11 @@
 
     function requestPaymentFlag(txn, wanted) {
       if (review.busy) return;
-      const bank = knownBankForRows();
+      // Every row carries its own bank (Session 63), whatever the filters.
       const message = wanted
         ? "Marking this as a Credit Card Payment will set Category and Subcategory to " +
-          "\u2018" + PAYMENT_LABEL + "\u2019 and Merchant to " +
-          (bank ? "\u2018" + bank + "\u2019" : "the card\u2019s bank name") +
-          ", replacing any existing values on this transaction. This affects expense " +
+          "\u2018" + PAYMENT_LABEL + "\u2019 and Merchant to \u2018" + txn.bank + "\u2019, " +
+          "replacing any existing values on this transaction. This affects expense " +
           "totals in the analytics dashboard. Confirm?"
         : "Unmarking this as a Credit Card Payment will clear Category, Subcategory, and " +
           "Merchant back to unset. This affects expense totals in the analytics dashboard. " +
@@ -2097,18 +2089,17 @@
         confirmLabel: wanted ? "Mark as payment" : "Unmark",
       }).then((confirmed) => {
         if (!confirmed) return; // Cancel: no write, box already unchanged
-        setPaymentFlag(txn, wanted, bank);
+        setPaymentFlag(txn, wanted);
       });
     }
 
     // One write, then the row's local state is set to what the endpoint's
-    // cascade contract guarantees -- no re-read for values the contract
-    // already fixes. The one exception is the merchant on check when the
-    // bank isn't known client-side: that row is re-read so the screen shows
-    // the real value rather than a guess. On uncheck the row re-enters the
-    // suggestion flow, so its suggestions are fetched (one id) as for any
-    // open row. A 400/422 shows inline in the cell and changes nothing.
-    function setPaymentFlag(txn, wanted, knownBank) {
+    // cascade contract guarantees -- no re-read: the merchant the cascade
+    // writes is the card's bank, which the row already carries. On uncheck
+    // the row re-enters the suggestion flow, so its suggestions are fetched
+    // (one id) as for any open row. A 400/422 shows inline in the cell and
+    // changes nothing.
+    function setPaymentFlag(txn, wanted) {
       review.busy = true;
       review.rowError = null;
       setError("");
@@ -2121,17 +2112,9 @@
             txn.is_payment = 1;
             txn.category = PAYMENT_LABEL;
             txn.subcategory = PAYMENT_LABEL;
-            if (knownBank) {
-              txn.merchant = knownBank;
-              renderReview();
-              return null;
-            }
-            // Bank not known here: re-read this row's merchant from the API.
-            return fetchJSON(transactionsURL(currentFilters())).then((rows) => {
-              const fresh = rows.find((r) => r.id === txn.id);
-              if (fresh) txn.merchant = fresh.merchant;
-              renderReview();
-            });
+            txn.merchant = txn.bank;
+            renderReview();
+            return null;
           }
           txn.is_payment = 0;
           txn.category = null;

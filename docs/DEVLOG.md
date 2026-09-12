@@ -7405,3 +7405,62 @@ code rather than seeing it run.
 Decide whether `/transactions` rows should carry the bank (or card id), which
 would remove the re-read and let the modal always name the bank. Then the
 Module 3 aggregation endpoint, excluding `is_payment` rows from spend.
+
+## Session 63 — 2026-09-12
+
+### Goal
+Close the gap Session 62 flagged: put `card_id` and `bank` on every
+`GET /transactions` row so the frontend can name a row's bank without a
+second request, and remove Session 62's re-fetch workaround. Backend and
+frontend together — a small, single-purpose fix.
+
+### What happened
+
+**Backend.** `storage.reads.get_transactions()` now selects
+`transactions.*, statements.card_id AS card_id, cards.bank AS bank`,
+passing `always_join=("statements", "cards")` to the shared `filter_sql`.
+Explicit `transactions.*` plus two named columns, never a bare `*`, so the
+three tables' `id` columns cannot collide — the standing rule. This makes
+the two JOINs unconditional *for this one query*, because they are now
+needed for the output rather than only for filtering; the listing queries
+are unchanged and still join only what their filters need. STATE.md's
+locked-decision bullet on conditional JOINs was reworded to say exactly
+that, rather than left overstating the rule. No schema change; nothing
+for `DATA_MODEL.md`. The clustering endpoint returns ids and similarity,
+not rows, so it needed nothing; `/transactions` is the only endpoint that
+returns transaction rows. The `query_transactions` CLI also calls
+`get_transactions()` and simply gains two keys.
+
+**Tests.** The `/transactions` key-set assertion gains `card_id` and
+`bank`; a new test checks the values against the two-card fixture (each
+bank maps to exactly its card's id), that they agree with the `card_id`
+and `bank` *filters* on the same rows, and that each row's `id` is still
+the transaction's own. Full suite: **397 passing** (396 + 1).
+
+**Frontend.** The Session 62 workaround is gone in full, not just bypassed:
+`knownBankForRows()` (which read the Bank filter) is deleted; the
+confirmation message always interpolates `txn.bank`, so the locked text
+is now used verbatim in every case; after a successful check the merchant
+is set locally to `txn.bank`; and the `fetchJSON(...)` re-read branch and
+its `knownBank` parameter are removed. No other UI change.
+
+**Verification.** Backend by pytest. Frontend: script parsed with the
+system JavaScriptCore; **reasoned through, not verified visually** — the
+browser extension was not available this session.
+
+### Outcome
+Every transaction row states which card and bank it belongs to; the
+card-payment modal always names the bank and the row shows the cascade's
+merchant immediately, with no extra request in any filter state.
+
+### In plain English
+Each transaction the screen receives now says which bank and card it
+belongs to. That removes yesterday's stopgap: the confirmation message
+before marking a bill payment always names the bank, and the row can show
+the bank as the merchant straight after saving without asking the server
+again. Nothing else on screen changes. Checked by reading the code, not by
+seeing it run.
+
+### Next steps
+The Module 3 aggregation endpoint, excluding `is_payment` rows from spend
+totals.
