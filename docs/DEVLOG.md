@@ -7621,3 +7621,101 @@ everywhere else in the app, because they share the same code.
 ### Next steps
 The dashboard UI over this endpoint (Module 3 frontend), then its LLM
 commentary once that module's open questions are answered.
+
+## Session 66 — 2026-09-12
+
+### Goal
+The Analytics Dashboard tab — a third tab in `static/index.html` over
+Session 65's `GET /transactions/aggregate`: period controls, the shared
+Bank → Card filters, resolved period and total, a Chart.js bar chart of
+categories, and a collapsible category/subcategory table. Frontend only;
+no LLM commentary.
+
+### What happened
+
+**First external frontend dependency.** Chart.js 4.4.1 from cdnjs, pinned
+by exact version in a plain `<script src>` in the head — no bundler, no
+build step, as the project has none. The URL was checked to resolve (HTTP
+200) before being written in. The dashboard degrades: if `Chart` is not
+defined at render time the chart area is replaced by a one-line note and
+the table below still carries every figure.
+
+**Tab.** "Dashboard" joins the tab strip and `setTab()` learns a third
+state. On it, the shared filter bar keeps Bank and Card (the cascade is
+reused as-is) and hides Statement month, Start, and End — the period
+controls supersede them here — plus the review-only checkbox. Switching
+tabs loads only the newly active tab, as before.
+
+**Period controls,** in a bar above the results: a granularity select
+(week / month / quarter / year / custom); a "Last N" / "Specific" segmented
+mode toggle shown only for month, quarter, and year — hidden for week
+(relative-only, mirroring the API's 422) and for custom (no mode); a count
+input with the unit spelled out ("Last [3] months"); native `type="month"`
+for absolute month, a year number plus Q1–Q4 select for absolute quarter,
+a year number for absolute year; two date inputs for custom. Every change
+refetches immediately — selects and the toggle on change, typed inputs
+after the existing 300 ms debounce — no Apply button. Defaults: month,
+relative, count 1; the absolute pickers are pre-seeded with the current
+month / quarter / year so "Specific" shows something sensible at once.
+
+**Not asking obvious 422s.** `aggregateParams()` returns a hint instead of
+a request when the form is plainly incomplete (custom with one date, empty
+count, a non-four-digit year); the hint replaces the status line. Anything
+else goes to the API, and a real 422 (or any failure) shows as an inline
+error line with the API's message — no silent failure. A "Loading…" status
+shows while a fetch is in flight, and `dashSeq` guards against an older
+response landing after a newer one.
+
+**URL state.** Dashboard period state lives in a `d_` namespace
+(`d_granularity`, `d_mode`, `d_count`, `d_month`, `d_quarter`, `d_year`,
+`d_start`, `d_end`), written on every URL update from any tab and read on
+load, defaults omitted; `tab=dashboard` selects the tab. Bank and card use
+the existing `bank` / `card_id` params because the filter bar itself is
+shared — that is one state, not two. Nothing collides with the other
+tabs' params.
+
+**Layout.** Top: the resolved period, printed exactly as `period.start →
+period.end` from the response, and `total` — never recomputed
+client-side; a negative total is tinted like credits. Middle: a horizontal
+bar chart, one bar per category in the API's order (already
+amount-descending, not re-sorted), negative bars in the credit colour,
+tooltips with amount and transaction count, axis ticks formatted as
+amounts, height scaled to the category count, animation off; the previous
+`Chart` instance is destroyed before a new one is built. Bottom: a table
+of the same categories — chevron, name, amount, transaction count —
+collapsed by default; expanding a row reveals its subcategories as nested
+rows in the API's order. Expanded state is an in-memory set keyed by
+category name, the same shape as Review & assign's collapse state. Empty
+result: "No spend in this period." and no chart or table.
+
+**Verification.** Script parsed with the system JavaScriptCore (the inline
+script; the CDN tag is a plain external reference). **Reasoned through
+only — not verified visually**: the browser extension was not available
+this session. This is the first session where that matters for a third
+party's rendering too — Chart.js's output has not been seen here. Backend
+suite unaffected (460); no server, no live request.
+
+### Outcome
+A Dashboard tab shows, for any of the API's period forms and the shared
+bank/card filters, the exact period used, the total, a bar per category,
+and a collapsible breakdown to subcategory — with loading and error states
+and URL round-tripping.
+
+### In plain English
+There is now a third screen: a dashboard of where the money went. Pick a
+span — the last few weeks, months, quarters or years counted back from
+today, a particular month, quarter or year, or any two dates — and
+optionally a bank or card, and it shows the exact dates used, the total,
+a bar chart of spending by category from largest to smallest, and a list
+underneath where each category opens to show its finer labels. Every
+change updates the view straight away, the address bar remembers the
+choice, and if something can't be loaded it says so plainly instead of
+showing a blank. The charting comes from a small outside library, the
+first the app has used, fixed to one version; if it ever fails to load the
+list underneath still shows all the numbers. As before, this was checked
+by reading the code, not by seeing it run.
+
+### Next steps
+Module 3's LLM commentary, once its open questions (key storage, rate-limit
+behaviour) are settled in their own scoping conversation. A manual look at
+the dashboard is part of the outstanding browser walk.
