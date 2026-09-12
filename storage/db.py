@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 from storage.schema import (
     ADD_CATEGORY_COLUMN,
+    ADD_IS_PAYMENT_COLUMN,
     ADD_MERCHANT_COLUMN,
     ADD_SUBCATEGORY_COLUMN,
     ADD_STATEMENT_MONTH_COLUMN,
@@ -54,6 +55,7 @@ def init_db() -> None:
         _ensure_category_column(conn)
         _ensure_subcategory_column(conn)
         _ensure_merchant_column(conn)
+        _ensure_is_payment_column(conn)
         conn.commit()
     finally:
         conn.close()
@@ -102,3 +104,10 @@ def _ensure_merchant_column(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_xinfo(transactions)")}
     if "merchant" not in columns:
         conn.execute(ADD_MERCHANT_COLUMN)
+
+
+def _ensure_is_payment_column(conn: sqlite3.Connection) -> None:
+    # Fifth copy of the idiom (Session 61).
+    columns = {row["name"] for row in conn.execute("PRAGMA table_xinfo(transactions)")}
+    if "is_payment" not in columns:
+        conn.execute(ADD_IS_PAYMENT_COLUMN)

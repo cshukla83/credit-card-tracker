@@ -39,8 +39,8 @@ def insert_statement(
             for txn in transactions:
                 conn.execute(
                     "INSERT INTO transactions "
-                    "(statement_id, txn_date, description, amount, txn_type, reward_points) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(statement_id, txn_date, description, amount, txn_type, reward_points, "
+                    "is_payment) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (
                         statement_id,
                         to_date_str(txn["txn_date"]),
@@ -48,6 +48,9 @@ def insert_statement(
                         txn["amount"],
                         txn["txn_type"],
                         txn.get("reward_points"),
+                        # Boolean, never NULL: absent (older callers, tests
+                        # building rows by hand) means "not a payment".
+                        1 if txn.get("is_payment") else 0,
                     ),
                 )
     except sqlite3.IntegrityError as e:

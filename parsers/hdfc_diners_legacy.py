@@ -5,7 +5,16 @@ from datetime import date, datetime
 
 import pdfplumber
 
-from parsers.base import ParsedStatement, Transaction
+from parsers.base import ParsedStatement, Transaction, is_payment_credit
+
+# Lead tokens of an HDFC Diners credit line that is a payment to the card, as
+# observed across the real samples of BOTH layouts (Session 61): the current
+# layout's bill-pay payment line, and the legacy layout's two transfer forms.
+# Kept as one union here (the lower of the two HDFC modules, so the current
+# module can import it without a cycle) because the payment channel a
+# customer uses is not tied to which statement template the bank printed.
+# Refund credits carry ordinary merchant text and match none of these.
+HDFC_PAYMENT_PREFIXES = ("BPPY CC PAYMENT", "TELE TRANSFER CREDIT", "IMPS PMT")
 
 _AMOUNT_RE = r"[\d,]+\.\d{2}"
 
@@ -99,13 +108,15 @@ def _parse_line(line: str) -> "Transaction | None":
     amount = _to_float(match.group("amount"))
     points = match.group("points")
     is_credit = match.group("credit_marker") is not None
+    txn_type = "credit" if is_credit else "debit"
 
     return Transaction(
         date=date,
         description=description,
         amount=amount,
-        type="credit" if is_credit else "debit",
+        type=txn_type,
         reward_points=int(points) if points else None,
+        is_payment=is_payment_credit(txn_type, description, HDFC_PAYMENT_PREFIXES),
     )
 
 

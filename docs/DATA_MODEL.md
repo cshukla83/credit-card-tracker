@@ -38,7 +38,7 @@ it is not part of the application model and is never referenced by code.
 ### How the schema is applied
 
 `storage.db.init_db()` runs the three `CREATE TABLE IF NOT EXISTS`
-statements, then four column migrations of identical shape, each of which
+statements, then five column migrations of identical shape, each of which
 checks `PRAGMA table_xinfo(<table>)` for the column and runs
 `ALTER TABLE ... ADD COLUMN` only if it is absent:
 
@@ -53,8 +53,11 @@ checks `PRAGMA table_xinfo(<table>)` for the column and runs
   53). Same idiom as `category`.
 - `_ensure_merchant_column()` → `transactions.merchant` (Session 55).
   Same idiom again.
+- `_ensure_is_payment_column()` → `transactions.is_payment` (Session 61).
+  Same idiom; the only one whose `ADD COLUMN` carries `NOT NULL DEFAULT
+  0`, which SQLite permits and uses to back-fill existing rows.
 
-All four `ALTER TABLE` statements live in `storage/schema.py` next to the
+All five `ALTER TABLE` statements live in `storage/schema.py` next to the
 `CREATE TABLE` they must stay identical to.
 
 Every connection from `storage.db.get_connection()` sets
@@ -184,6 +187,7 @@ One line item from a statement, as extracted by the bank-specific parser.
 | `category`      | `TEXT`        | nullable — `NULL` means uncategorized                              |
 | `subcategory`   | `TEXT`        | nullable — `NULL` means no subcategory                             |
 | `merchant`      | `TEXT`        | nullable — `NULL` means no merchant label                          |
+| `is_payment`    | `INTEGER`     | `NOT NULL DEFAULT 0` — boolean 0/1, never `NULL`                    |
 
 **Table constraints**
 
@@ -277,6 +281,23 @@ One line item from a statement, as extracted by the bank-specific parser.
   "from_description"`, confidence `null`). The one labelled-rows query
   behind all three engines selects rows with a non-null `category` **or**
   `merchant`.
+
+- **`is_payment`** (Session 61) marks a credit line that is a payment
+  *to* the card (the cardholder paying the bill), as opposed to a refund
+  credit. Boolean, not tri-state: `NOT NULL DEFAULT 0`, so unlike the
+  three text labels there is no "unset". It is set at import time by
+  each bank's parser from that bank's own statement text (a fixed lead
+  token on payment lines; the token lists live in the parser modules, not
+  here), and can be changed through the assign endpoint. It is only ever
+  meaningful for `txn_type = "credit"`; the endpoint rejects `1` on a
+  debit with 400 and writes nothing. **No `CHECK` constraint enforces
+  that** — the column will accept `1` on a debit if written directly —
+  the invariant lives in `storage.categories.assign_categories()` and in
+  the parsers, which never flag a debit. Writing it through the endpoint
+  cascades: `0 → 1` also sets `category` and `subcategory` to the
+  payment label and `merchant` to the card's `bank` (verbatim, not
+  Title-Cased); `1 → 0` sets all three back to `NULL`. Import sets only
+  the flag, never the labels.
 
 ---
 
@@ -380,6 +401,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     category TEXT,
     subcategory TEXT,
     merchant TEXT,
+    is_payment INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(statement_id) REFERENCES statements(id) ON DELETE CASCADE
 );
 ```

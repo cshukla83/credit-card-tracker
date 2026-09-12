@@ -22,6 +22,11 @@ def _map_transaction(txn: dict) -> dict:
     # DATE column via isoformat()'s full datetime string.
     mapped["txn_date"] = txn_date.date() if isinstance(txn_date, datetime) else txn_date
 
+    # Also outside the map: optional on the way in (a parser dict built by
+    # hand, or from before Session 61, may lack it), always present and
+    # boolean on the way out -- storage's column is NOT NULL.
+    mapped["is_payment"] = bool(txn.get("is_payment", False))
+
     return mapped
 
 

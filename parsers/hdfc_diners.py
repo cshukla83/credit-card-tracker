@@ -6,7 +6,7 @@ from datetime import date, datetime
 import pdfplumber
 
 from parsers import hdfc_diners_legacy
-from parsers.base import ParsedStatement, Transaction
+from parsers.base import ParsedStatement, Transaction, is_payment_credit
 
 CREDIT_KEYWORDS = ("PAYMENT", "REFUND", "REVERSAL", "CASHBACK", "CREDIT")
 
@@ -114,12 +114,18 @@ def _parse_line_current_layout(
     if reward_points is not None and points_sign == "-":
         reward_points = -reward_points
 
+    txn_type = _classify(description, amount, credits_received_total, has_credit_marker)
+
     return Transaction(
         date=date,
         description=description,
         amount=amount,
-        type=_classify(description, amount, credits_received_total, has_credit_marker),
+        type=txn_type,
         reward_points=reward_points,
+        # Shared HDFC prefix list -- see hdfc_diners_legacy.HDFC_PAYMENT_PREFIXES.
+        is_payment=is_payment_credit(
+            txn_type, description, hdfc_diners_legacy.HDFC_PAYMENT_PREFIXES
+        ),
     )
 
 

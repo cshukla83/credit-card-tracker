@@ -5,7 +5,12 @@ from datetime import date, datetime
 
 import pdfplumber
 
-from parsers.base import ParsedStatement, Transaction
+from parsers.base import ParsedStatement, Transaction, is_payment_credit
+
+# Lead tokens of an SBI Titan credit line that is a payment to the card
+# (Session 61): a fixed "payment received" phrase followed by a reference.
+# Refund and waiver credits carry merchant / fee text instead.
+_PAYMENT_PREFIXES = ("PAYMENT RECEIVED",)
 
 # Matches one transaction line as it comes out of pdfplumber's extract_text(),
 # e.g. "18 Feb 26 SOME MERCHANT IN 3,865.00 D" or, on a credit row,
@@ -155,12 +160,15 @@ def _parse_line(line: str) -> "Transaction | None":
     # Two-digit year: "17 Feb 26" -> 2026-02-17. %y maps 00-68 to 2000-2068,
     # which comfortably covers any statement this tracker will see.
     txn_date = datetime.strptime(match.group("date"), "%d %b %y")
+    description = match.group("desc").strip()
+    txn_type = _classify(match.group("flag"))
 
     return Transaction(
         date=txn_date,
-        description=match.group("desc").strip(),
+        description=description,
         amount=_to_float(match.group("amount")),
-        type=_classify(match.group("flag")),
+        type=txn_type,
+        is_payment=is_payment_credit(txn_type, description, _PAYMENT_PREFIXES),
         # Always None: SBI reports reward points only in aggregate (the REWARD
         # SUMMARY and SAVINGS AND BENEFITS blocks), never per transaction, so
         # there is nothing per-row to record.

@@ -5,7 +5,12 @@ from datetime import date, datetime
 
 import pdfplumber
 
-from parsers.base import ParsedStatement, Transaction
+from parsers.base import ParsedStatement, Transaction, is_payment_credit
+
+# Lead tokens of an IndusInd Legend credit line that is a payment to the card
+# (Session 61): the bill-payment-system line, identical across all real
+# samples. Refund credits carry merchant text instead.
+_PAYMENT_PREFIXES = ("BBPS PAYMENT",)
 
 # Matches one transaction line as it comes out of pdfplumber's extract_text(),
 # e.g. "16/12/2025 SOME MERCHANT BENGALURU IN GROCERY & 10 986.00 DR" or, on a
@@ -154,11 +159,15 @@ def _parse_line(line: str) -> "Transaction | None":
     if not match:
         return None
 
+    description = match.group("desc").strip()
+    txn_type = _classify(match.group("marker"))
+
     return Transaction(
         date=datetime.strptime(match.group("date"), "%d/%m/%Y"),
-        description=match.group("desc").strip(),
+        description=description,
         amount=_to_float(match.group("amount")),
-        type=_classify(match.group("marker")),
+        type=txn_type,
+        is_payment=is_payment_credit(txn_type, description, _PAYMENT_PREFIXES),
         # IndusInd DOES report points per transaction (like ICICI, unlike SBI).
         # They can be zero, or negative where points are clawed back on a
         # refund/credit row.

@@ -54,7 +54,11 @@ def test_from_parsed_statement_maps_field_names_correctly():
     _, _, _, transactions = from_parsed_statement(_FAKE_PARSED_STATEMENT, card_id=1)
     txn = transactions[0]
 
-    assert set(txn.keys()) == {"txn_date", "description", "amount", "txn_type", "reward_points"}
+    assert set(txn.keys()) == {
+        "txn_date", "description", "amount", "txn_type", "reward_points", "is_payment"
+    }
+    # Absent on the parser side -> False on the storage side, never missing.
+    assert txn["is_payment"] is False
     assert txn["txn_date"] == date(2026, 1, 5)  # time-of-day dropped
     assert txn["description"] == "FAKE MERCHANT ONE"
     assert txn["amount"] == 250.50

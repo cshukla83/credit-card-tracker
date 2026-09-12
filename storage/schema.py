@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS transactions (
     category TEXT,
     subcategory TEXT,
     merchant TEXT,
+    is_payment INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(statement_id) REFERENCES statements(id) ON DELETE CASCADE
 )
 """
@@ -82,4 +83,13 @@ ADD COLUMN subcategory TEXT
 ADD_MERCHANT_COLUMN = """
 ALTER TABLE transactions
 ADD COLUMN merchant TEXT
+"""
+
+# Boolean, not tri-state: unlike the three text labels there is no "unset" --
+# a credit either is a payment to the card or it isn't, and a debit never is.
+# NOT NULL DEFAULT 0 is legal in ALTER TABLE ADD COLUMN (SQLite back-fills
+# existing rows with the default), so a migrated DB and a fresh one agree.
+ADD_IS_PAYMENT_COLUMN = """
+ALTER TABLE transactions
+ADD COLUMN is_payment INTEGER NOT NULL DEFAULT 0
 """

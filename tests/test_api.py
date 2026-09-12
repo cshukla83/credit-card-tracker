@@ -90,6 +90,7 @@ def test_no_filters_returns_all_transactions(client, two_cards):
         "category",
         "subcategory",
         "merchant",
+        "is_payment",
     }
 
 

@@ -312,43 +312,90 @@ def cluster_transactions(
     return cluster_by_similarity([(i, targets[i]["description"]) for i in ids], threshold)
 
 
+PAYMENT_LABEL = "Credit Card Payment"
+
+
+class InvalidPaymentFlagError(Exception):
+    """Raised when is_payment=1 is requested for a transaction that is not a credit.
+
+    A payment to the card can only ever be a credit line; flagging a debit as
+    one is semantically invalid, not merely unusual, so it is rejected (the
+    API maps this to 400) and nothing in the request is written.
+    """
+
+    def __init__(self, invalid_ids: "list[int]"):
+        self.invalid_ids = invalid_ids
+        super().__init__(f"is_payment can only be set on credit transactions: {invalid_ids}")
+
+
 def assign_categories(
     conn: sqlite3.Connection,
-    assignments: "list[tuple[int, str | None, str | None, str | None]]",
+    assignments: "list[tuple[int, str | None, str | None, str | None, bool | None]]",
 ) -> int:
-    """Write each (transaction_id, category, subcategory, merchant) entry, in one transaction.
+    """Write each (transaction_id, category, subcategory, merchant, is_payment)
+    entry, in one transaction.
 
     A None field means "leave that column as it is"; only the fields present
     are written, unconditionally overwriting whatever was there (Session 53
     -- until then every pair carried a category). Returns the number of
-    distinct transactions updated. A uniform assignment is just N triples
+    distinct transactions updated. A uniform assignment is just N entries
     with the same values; a mixed one (accepting several different
-    suggestions at once) is N triples with different values -- either way
+    suggestions at once) is N entries with different values -- either way
     one call, one SQL transaction.
 
     All-or-nothing: if any id does not exist, TransactionNotFoundError is
     raised and nothing is written -- a bulk assign must never partially
-    apply (the Session 17 invariant). The existence check and the UPDATEs
-    share one `with conn:` block so a row can't vanish between them.
+    apply (the Session 17 invariant). The existence check, the payment-flag
+    checks, and the UPDATEs share one `with conn:` block so a row can't
+    change between them.
 
     Rules on the input:
-    - A triple with neither field raises ValueError.
-    - Identical duplicate triples collapse and count once. Two triples for
+    - An entry with no field at all raises ValueError.
+    - Identical duplicate entries collapse and count once. Two entries for
       the same id that both set the same field to *different* values raise
       ValueError rather than resolving by position: that can only be a
-      client bug, and last-wins would hide it. Two triples for the same id
+      client bug, and last-wins would hide it. Two entries for the same id
       setting *different* fields are merged into one row update.
-    - A present field must be a non-empty string; NULL is the only
+    - A present text field must be a non-empty string; NULL is the only
       representation of "unset" and this function never writes an empty
-      string. The caller is expected to have stripped/normalised (the API
-      layer does).
+      string for a label. The caller is expected to have stripped/normalised
+      (the API layer does).
+
+    is_payment (Session 61) is a boolean with a cascade, resolved inside the
+    transaction against the row's current state:
+    - is_payment=True on a non-credit row -> InvalidPaymentFlagError, nothing
+      written for the whole request.
+    - Same value as already stored -> no-op for that field; the cascade is
+      not re-triggered and the row is not counted unless another field
+      changes it.
+    - 0 -> 1 also writes category and subcategory = PAYMENT_LABEL and
+      merchant = the card's bank name (via statement -> card), overwriting
+      whatever those held. The bank name is written as stored on the card,
+      not Title-Cased: "HDFC" must not become "Hdfc".
+    - 1 -> 0 reverts category, subcategory, and merchant to NULL, handing the
+      row back to the normal suggestion flow.
+    - A cascade value and an explicit value for the same field in one entry
+      go through the same conflict rule: equal is fine, different is a
+      ValueError.
     """
     if not assignments:
         raise ValueError("assignments must not be empty")
 
-    # id -> {"category": ..., "subcategory": ...} for the fields present.
-    by_id: "dict[int, dict[str, str]]" = {}
-    for transaction_id, category, subcategory, merchant in assignments:
+    # id -> {column: value} for the explicit fields present. Text labels are
+    # str; is_payment is bool and is resolved below once current state is
+    # known.
+    by_id: "dict[int, dict]" = {}
+
+    def merge(transaction_id: int, column: str, value) -> None:
+        merged = by_id.setdefault(transaction_id, {})
+        previous = merged.setdefault(column, value)
+        if previous != value:
+            raise ValueError(
+                f"transaction {transaction_id} assigned conflicting {column} values: "
+                f"{previous!r} and {value!r}"
+            )
+
+    for transaction_id, category, subcategory, merchant, is_payment in assignments:
         fields = {}
         if category is not None:
             fields["category"] = category
@@ -356,42 +403,78 @@ def assign_categories(
             fields["subcategory"] = subcategory
         if merchant is not None:
             fields["merchant"] = merchant
+        if is_payment is not None:
+            fields["is_payment"] = bool(is_payment)
         if not fields:
             raise ValueError(
                 f"transaction {transaction_id}: at least one of category, subcategory, "
-                "or merchant is required"
+                "merchant, or is_payment is required"
             )
         for column, value in fields.items():
-            if not value:
+            if column != "is_payment" and not value:
                 raise ValueError(f"{column} must be a non-empty string")
-        merged = by_id.setdefault(transaction_id, {})
+        by_id.setdefault(transaction_id, {})
         for column, value in fields.items():
-            previous = merged.setdefault(column, value)
-            if previous != value:
-                raise ValueError(
-                    f"transaction {transaction_id} assigned conflicting {column} values: "
-                    f"{previous!r} and {value!r}"
-                )
+            merge(transaction_id, column, value)
 
     ids = sorted(by_id)
     placeholders = ",".join("?" * len(ids))
     with conn:
-        found = {
-            row["id"]
-            for row in conn.execute(
-                f"SELECT id FROM transactions WHERE id IN ({placeholders})", ids
-            )
-        }
-        missing = [i for i in ids if i not in found]
+        rows = conn.execute(
+            "SELECT t.id, t.txn_type, t.is_payment, c.bank "
+            "FROM transactions t "
+            "JOIN statements s ON t.statement_id = s.id "
+            "JOIN cards c ON s.card_id = c.id "
+            f"WHERE t.id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        current = {row["id"]: row for row in rows}
+        missing = [i for i in ids if i not in current]
         if missing:
             raise TransactionNotFoundError(missing)
 
+        # Resolve the payment flag against current state: reject invalid,
+        # drop no-ops, expand the cascade -- all before any UPDATE, so an
+        # invalid entry anywhere in the request leaves nothing written.
+        invalid = []
+        for transaction_id, fields in by_id.items():
+            if "is_payment" not in fields:
+                continue
+            wanted = fields.pop("is_payment")
+            row = current[transaction_id]
+            if wanted and row["txn_type"] != "credit":
+                invalid.append(transaction_id)
+                continue
+            if wanted == bool(row["is_payment"]):
+                continue  # no-op: same value, no cascade
+            if wanted:
+                cascade = {
+                    "is_payment": 1,
+                    "category": PAYMENT_LABEL,
+                    "subcategory": PAYMENT_LABEL,
+                    "merchant": row["bank"],
+                }
+            else:
+                cascade = {
+                    "is_payment": 0,
+                    "category": None,
+                    "subcategory": None,
+                    "merchant": None,
+                }
+            for column, value in cascade.items():
+                merge(transaction_id, column, value)
+        if invalid:
+            raise InvalidPaymentFlagError(sorted(invalid))
+
         # One UPDATE per distinct (fields, values) combination, not per row:
         # the common case (accept a whole suggestion group, or assign one
-        # typed value) is still a single statement.
+        # typed value) is still a single statement. Entries left with no
+        # field (a pure no-op flag) write nothing and are not counted.
         by_update: "dict[tuple, list[int]]" = {}
         for transaction_id, fields in by_id.items():
-            key = tuple(sorted(fields.items()))
+            if not fields:
+                continue
+            key = tuple(sorted(fields.items(), key=lambda kv: kv[0]))
             by_update.setdefault(key, []).append(transaction_id)
         updated = 0
         for key, group in by_update.items():

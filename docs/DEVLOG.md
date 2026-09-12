@@ -7179,3 +7179,130 @@ out anything that record does not actually say.
 ### Next steps
 None from this session. The manual browser walk named in Session 59
 remains the next gate for the categorization module.
+
+## Session 61 — 2026-09-12
+
+### Goal
+Step 3a of the analytics arc (backend only): an `is_payment` flag on
+transactions marking credits that are payments *to* the card, detected per
+bank at import, and a cascade in the assign endpoint that labels or
+unlabels the row when the flag is set by hand. Prerequisite for the Module 3
+aggregation endpoint, which is not built here.
+
+### What happened
+
+**Schema.** `transactions.is_payment INTEGER NOT NULL DEFAULT 0`, added by
+`_ensure_is_payment_column()` — the fifth copy of the `table_xinfo`-guarded
+idiom, next to the other four in `storage/schema.py` / `storage/db.py`.
+Boolean, not tri-state, by decision: unlike the three text labels there is
+no "unset". SQLite accepts `NOT NULL DEFAULT 0` in `ADD COLUMN` and
+back-fills existing rows with the default; a legacy-DB test proves both that
+and idempotency. `docs/DATA_MODEL.md` updated: migration list, table,
+column note (including that no `CHECK` enforces credit-only — the invariant
+lives in code), and the `CREATE TABLE` reference.
+
+**Detection — inspected first, then written.** Before any code, every
+real sample for all four banks was parsed and the credit rows' descriptions
+were read (locally, on the terminal; none of that text appears here or in
+any commit). The finding, described structurally: in every bank, a payment
+credit line begins with a fixed lead-token sequence peculiar to that bank's
+bill-payment channel, while refund credits carry ordinary merchant text.
+HDFC has one such sequence in the current layout and two in the legacy
+layout (two different transfer channels); ICICI, SBI, and IndusInd each have
+one. Across the 18 samples that is 20 payment credits and 13 refund credits.
+
+The rule is implemented where per-bank knowledge already lives, keeping the
+one-parser-module-per-bank boundary: each parser module owns a small
+prefix tuple and passes it to a new bank-agnostic helper,
+`parsers.base.is_payment_credit(txn_type, description, prefixes)` — a
+casefolded, leading-whitespace-stripped prefix test that returns False for
+any debit regardless of text. HDFC's two modules share one union of
+prefixes, defined in the legacy module (the lower of the two, so the
+current module can import it without a cycle), because the payment channel
+a customer uses is not tied to which statement template the bank printed.
+`parsers.base.Transaction` gains `is_payment: bool`; the adapter maps it,
+defaulting to `False` when a parser dict lacks it (hand-built test rows,
+pre-Session-61 callers), so the storage column is never fed `NULL`;
+`insert_statement()` writes it. `GET /transactions` rows gain the key via
+`SELECT transactions.*` (one key-set assertion extended in the API tests,
+one in the adapter tests — the adapter's output shape genuinely grew).
+
+**Cascade, inside the existing atomic write.** The assign entry gains
+`is_payment?` (bool) under the Session 53 at-least-one rule; storage tuples
+widened to five (existing tests padded mechanically, as in 53 and 55). In
+`assign_categories()`, after the existence check and **before any
+`UPDATE`**, the current `txn_type`, `is_payment`, and the card's `bank` are
+fetched for every id (one query, `transactions → statements → cards`) and
+the flag is resolved against them:
+
+- `1` on a non-credit → `InvalidPaymentFlagError` (→ **400**, naming the
+  ids), nothing written for the whole request — checked for every entry
+  before the first write, so a valid entry earlier in the list is not
+  applied.
+- Same value as stored → dropped from that entry as a no-op; no cascade,
+  not counted. An entry that was *only* a no-op flag writes nothing; one
+  that also carried a label still writes the label.
+- `0 → 1` → `category` and `subcategory` = `"Credit Card Payment"`,
+  `merchant` = the card's `bank` **as stored, not Title-Cased** — the
+  normalisation rule is for user-typed text; running it here would turn
+  "HDFC" into "Hdfc". Overwrites whatever the three fields held.
+- `1 → 0` → the three labels back to `NULL`, returning the row to the
+  suggestion flow.
+- A cascade value and an explicit value for the same field in one entry go
+  through the existing conflict rule: equal is fine, different is a
+  `ValueError` → 422 — so a request cannot both flag a row as a payment and
+  label it something else.
+
+`PAYMENT_LABEL` is a module constant in `storage/categories.py`.
+
+**Tests.** New module `tests/test_is_payment.py`, 35 tests: fresh-DB column
+shape (`INTEGER`, `NOT NULL`, default `0`); legacy migration with back-fill
+and double `init_db()`; the prefix rule (case, leading space, prefix-not-
+substring, debit never); insert defaulting; **per-bank detection against
+all 18 real samples** (parametrised: expected credit count and payment
+count per file, no debit ever flagged, every row carries a real bool —
+counts only, skipped without the password or file); cascade 0→1 with
+pre-existing labels overwritten; bank name verbatim; 1→0 revert; no-op in
+both states without re-clobbering hand-edited labels; no-op flag beside a
+real field; debit rejection with nothing written even when a valid credit
+entry precedes it, and un-flagging a debit as a harmless no-op; atomicity
+with an unknown id; **atomicity when a later UPDATE fails** — via a proxy
+object around the connection (sqlite3's methods can't be monkeypatched)
+that raises on the second UPDATE and asserts the first really ran and was
+rolled back; explicit-vs-cascade conflict; and the endpoint end to end
+(both directions, 400 on a debit with nothing written, flag alone
+satisfying the at-least-one rule, no-op repeat returning `updated: 0`).
+Full suite: **396 passing** (361 + 35).
+
+Out of scope and untouched: the review-screen checkbox, confirmation
+dialogs, and the aggregation endpoint. No server, no live DB.
+
+### Outcome
+Every imported credit is marked as a card payment or not, by each bank's
+own statement pattern, and the flag can be flipped through the assign
+endpoint with its labels following — atomically, credit-only, and without
+re-running the cascade on a repeat. Module 3's aggregation has the
+distinction it needs to keep bill payments out of spend totals.
+
+### In plain English
+When you pay your credit card bill, the payment shows up on the next
+statement as a credit — but so does a refund from a shop, and a spending
+report must treat the two very differently. The system now tells them
+apart at import time: each bank prints its bill-payment lines with a
+recognisable opening phrase, which was confirmed by looking at every real
+sample statement before writing the rule, and each bank's own parser
+applies its own phrase. Across the eighteen sample statements, twenty
+credits are payments and thirteen are refunds.
+
+The flag can also be set or cleared by hand. Marking a credit as a payment
+automatically labels it as a card payment and names the bank as the
+merchant; clearing it removes those labels so the usual suggestions take
+over. Setting the flag on a purchase is refused outright, since a purchase
+can never be a payment to the card, and nothing in that request is saved.
+Sending the flag with the value it already has does nothing, so it can't
+overwrite labels someone has since adjusted.
+
+### Next steps
+Step 3b: the review-screen checkbox and its confirmation dialogs (frontend),
+then the Module 3 aggregation endpoint that excludes `is_payment` rows from
+spend.

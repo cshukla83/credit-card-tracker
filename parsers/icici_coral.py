@@ -5,7 +5,12 @@ from datetime import date, datetime
 
 import pdfplumber
 
-from parsers.base import ParsedStatement, Transaction
+from parsers.base import ParsedStatement, Transaction, is_payment_credit
+
+# Lead tokens of an ICICI Coral credit line that is a payment to the card
+# (Session 61): the bill-payment-system acknowledgement line, identical across
+# all real samples. Refund credits carry merchant text instead.
+_PAYMENT_PREFIXES = ("BBPS PAYMENT",)
 
 # Matches one transaction line as it comes out of pdfplumber's extract_text(),
 # e.g. "17/03/2026 13067759173 SOME MERCHANT BANGALORE IN 0 1,199.51" or, on a
@@ -86,13 +91,15 @@ def _parse_line(line: str) -> "Transaction | None":
     amount = _to_float(match.group("amount"))
     reward_points = int(match.group("points"))
     has_credit_marker = match.group("credit_marker") is not None
+    txn_type = _classify(has_credit_marker)
 
     return Transaction(
         date=txn_date,
         description=description,
         amount=amount,
-        type=_classify(has_credit_marker),
+        type=txn_type,
         reward_points=reward_points,
+        is_payment=is_payment_credit(txn_type, description, _PAYMENT_PREFIXES),
     )
 
 

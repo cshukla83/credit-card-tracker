@@ -10,6 +10,25 @@ class Transaction(TypedDict):
     amount: float
     type: str  # "debit" or "credit"
     reward_points: Optional[int]
+    # True only for a credit that is a payment *to* the card (the cardholder
+    # paying the bill), never for a refund credit. Each bank's parser decides
+    # this from its own statement text (Session 61); see is_payment_credit.
+    is_payment: bool
+
+
+def is_payment_credit(txn_type: str, description: str, prefixes: "tuple[str, ...]") -> bool:
+    """Bank-agnostic helper for the per-bank rule: a credit whose description
+    starts with one of the bank's known card-payment lead tokens.
+
+    The prefixes themselves are owned by each bank's parser module -- that is
+    where the statement-format knowledge lives -- so this only does the
+    comparison: case-insensitive, leading whitespace ignored, nothing else
+    normalised. A debit is never a payment, whatever its text says.
+    """
+    if txn_type != "credit":
+        return False
+    text = description.casefold().lstrip()
+    return any(text.startswith(p.casefold()) for p in prefixes)
 
 
 class ParsedStatement(TypedDict):

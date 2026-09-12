@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from storage.cards import list_cards_with_statements
 from storage.categories import (
+    InvalidPaymentFlagError,
     TransactionNotFoundError,
     assign_categories,
     cluster_transactions,
@@ -257,6 +258,10 @@ class CategoryAssignment(BaseModel):
     category: str | None = None
     subcategory: str | None = None
     merchant: str | None = None
+    # Boolean flag with a cascade (Session 61): True also writes the three
+    # labels to their payment values; False reverts them to NULL. Resolved
+    # against the row's current state in storage; same value = no-op.
+    is_payment: bool | None = None
 
     @field_validator("category", "subcategory", "merchant")
     @classmethod
@@ -267,8 +272,15 @@ class CategoryAssignment(BaseModel):
 
     @model_validator(mode="after")
     def _require_a_field(self):
-        if self.category is None and self.subcategory is None and self.merchant is None:
-            raise ValueError("each assignment needs at least one of category, subcategory, merchant")
+        if (
+            self.category is None
+            and self.subcategory is None
+            and self.merchant is None
+            and self.is_payment is None
+        ):
+            raise ValueError(
+                "each assignment needs at least one of category, subcategory, merchant, is_payment"
+            )
         return self
 
 
@@ -287,7 +299,8 @@ def write_category(body: CategoryAssignmentBatch, conn=Depends(get_db)):
     # Each entry writes only the field(s) it carries; the other column on
     # that row is left as it is (Session 53).
     pairs = [
-        (a.transaction_id, a.category, a.subcategory, a.merchant) for a in body.assignments
+        (a.transaction_id, a.category, a.subcategory, a.merchant, a.is_payment)
+        for a in body.assignments
     ]
     try:
         updated = assign_categories(conn, pairs)
@@ -295,6 +308,13 @@ def write_category(body: CategoryAssignmentBatch, conn=Depends(get_db)):
         # All-or-nothing: if any id is unknown nothing was written, so the
         # whole request is a 404 naming the ids that were missing.
         raise HTTPException(status_code=404, detail=f"No such transaction(s): {e.missing_ids}")
+    except InvalidPaymentFlagError as e:
+        # Semantically invalid, not malformed: a debit can never be a payment
+        # to the card. 400, nothing written.
+        raise HTTPException(
+            status_code=400,
+            detail=f"is_payment can only be set on credit transactions: {e.invalid_ids}",
+        )
     except ValueError as e:
         # The same id with two different values for one field in one request.
         raise HTTPException(status_code=422, detail=str(e))

@@ -61,7 +61,7 @@ def _seed(conn, descriptions):
 
 def _assign(conn, ids, category):
     """Uniform category assignment: N triples with the same category, no subcategory."""
-    return assign_categories(conn, [(i, category, None, None) for i in ids])
+    return assign_categories(conn, [(i, category, None, None, None) for i in ids])
 
 
 def _cat(result):
@@ -213,11 +213,11 @@ def test_assign_single_and_bulk_overwrite_unconditionally(db_path):
     try:
         a, b, c = _seed(conn, ["A", "B", "C"])
 
-        assert assign_categories(conn, [(a, "Food", None, None)]) == 1
+        assert assign_categories(conn, [(a, "Food", None, None, None)]) == 1
         assert _categories(conn, [a, b, c]) == ["Food", None, None]
 
         # Bulk, including an already-categorized row: overwritten, not skipped.
-        assert assign_categories(conn, [(a, "Travel", None, None), (b, "Travel", None, None)]) == 2
+        assert assign_categories(conn, [(a, "Travel", None, None, None), (b, "Travel", None, None, None)]) == 2
         assert _categories(conn, [a, b, c]) == ["Travel", "Travel", None]
     finally:
         conn.close()
@@ -228,7 +228,7 @@ def test_assign_mixed_categories_in_one_call(db_path):
     conn = get_connection()
     try:
         a, b, c = _seed(conn, ["A", "B", "C"])
-        assert assign_categories(conn, [(a, "Food", None, None), (b, "Travel", None, None), (c, "Food", None, None)]) == 3
+        assert assign_categories(conn, [(a, "Food", None, None, None), (b, "Travel", None, None, None), (c, "Food", None, None, None)]) == 3
         assert _categories(conn, [a, b, c]) == ["Food", "Travel", "Food"]
     finally:
         conn.close()
@@ -238,7 +238,7 @@ def test_assign_identical_duplicate_pairs_count_once(db_path):
     conn = get_connection()
     try:
         (a,) = _seed(conn, ["A"])
-        assert assign_categories(conn, [(a, "Food", None, None), (a, "Food", None, None), (a, "Food", None, None)]) == 1
+        assert assign_categories(conn, [(a, "Food", None, None, None), (a, "Food", None, None, None), (a, "Food", None, None, None)]) == 1
     finally:
         conn.close()
 
@@ -248,7 +248,7 @@ def test_assign_conflicting_duplicate_pairs_are_rejected_and_write_nothing(db_pa
     try:
         a, b = _seed(conn, ["A", "B"])
         with pytest.raises(ValueError):
-            assign_categories(conn, [(a, "Food", None, None), (b, "Travel", None, None), (a, "Travel", None, None)])
+            assign_categories(conn, [(a, "Food", None, None, None), (b, "Travel", None, None, None), (a, "Travel", None, None, None)])
         assert _categories(conn, [a, b]) == [None, None]
     finally:
         conn.close()
@@ -260,7 +260,7 @@ def test_assign_with_any_missing_id_writes_nothing(db_path):
         a, b = _seed(conn, ["A", "B"])
         with pytest.raises(TransactionNotFoundError) as exc_info:
             # Mixed categories: the existence check must cover every group, not just one.
-            assign_categories(conn, [(a, "Food", None, None), (b, "Travel", None, None), (9999, "Food", None, None)])
+            assign_categories(conn, [(a, "Food", None, None, None), (b, "Travel", None, None, None), (9999, "Food", None, None, None)])
         assert exc_info.value.missing_ids == [9999]
         # Atomic: the two valid ids were not updated either.
         assert _categories(conn, [a, b]) == [None, None]
@@ -273,7 +273,7 @@ def test_assign_rejects_empty_category_and_empty_pair_list(db_path):
     try:
         (a,) = _seed(conn, ["A"])
         with pytest.raises(ValueError):
-            assign_categories(conn, [(a, "", None, None)])
+            assign_categories(conn, [(a, "", None, None, None)])
         with pytest.raises(ValueError):
             assign_categories(conn, [])
         assert _categories(conn, [a]) == [None]
@@ -517,10 +517,10 @@ def test_list_categories_is_sorted_distinct_and_empty_before_any_assignment(db_p
     try:
         a, b, c, d = _seed(conn, ["A", "B", "C", "D"])
         assert list_categories(conn) == []
-        assign_categories(conn, [(a, "Travel", None, None), (b, "Food", None, None), (c, "Food", None, None)])
+        assign_categories(conn, [(a, "Travel", None, None, None), (b, "Food", None, None, None), (c, "Food", None, None, None)])
         assert list_categories(conn) == ["Food", "Travel"]
         # Reassigning the only "Travel" row drops it from the catalog.
-        assign_categories(conn, [(a, "Food", None, None)])
+        assign_categories(conn, [(a, "Food", None, None, None)])
         assert list_categories(conn) == ["Food"]
     finally:
         conn.close()
@@ -670,13 +670,13 @@ def test_assign_subcategory_only_leaves_category_untouched(db_path):
     conn = get_connection()
     try:
         a, b = _seed(conn, ["A", "B"])
-        assign_categories(conn, [(a, "Food", None, None)])
-        assert assign_categories(conn, [(a, None, "Coffee", None)]) == 1
+        assign_categories(conn, [(a, "Food", None, None, None)])
+        assert assign_categories(conn, [(a, None, "Coffee", None, None)]) == 1
         assert _categories(conn, [a, b]) == ["Food", None]
         assert _subcategories(conn, [a, b]) == ["Coffee", None]
         # Subcategory can be set on a row with no category; the API allows it
         # and storage does not second-guess.
-        assign_categories(conn, [(b, None, "Misc", None)])
+        assign_categories(conn, [(b, None, "Misc", None, None)])
         assert _categories(conn, [a, b]) == ["Food", None]
         assert _subcategories(conn, [a, b]) == ["Coffee", "Misc"]
     finally:
@@ -687,8 +687,8 @@ def test_assign_category_only_leaves_subcategory_untouched(db_path):
     conn = get_connection()
     try:
         (a,) = _seed(conn, ["A"])
-        assign_categories(conn, [(a, "Food", "Coffee", None)])
-        assert assign_categories(conn, [(a, "Travel", None, None)]) == 1
+        assign_categories(conn, [(a, "Food", "Coffee", None, None)])
+        assert assign_categories(conn, [(a, "Travel", None, None, None)]) == 1
         assert _categories(conn, [a]) == ["Travel"]
         assert _subcategories(conn, [a]) == ["Coffee"]
     finally:
@@ -699,11 +699,11 @@ def test_assign_both_together_and_merged_fields_for_one_id(db_path):
     conn = get_connection()
     try:
         a, b = _seed(conn, ["A", "B"])
-        assert assign_categories(conn, [(a, "Food", "Coffee", None), (b, "Food", "Tea", None)]) == 2
+        assert assign_categories(conn, [(a, "Food", "Coffee", None, None), (b, "Food", "Tea", None, None)]) == 2
         assert _categories(conn, [a, b]) == ["Food", "Food"]
         assert _subcategories(conn, [a, b]) == ["Coffee", "Tea"]
         # Two triples for one id setting different fields merge into one update.
-        assert assign_categories(conn, [(a, "Travel", None, None), (a, None, "Flights", None)]) == 1
+        assert assign_categories(conn, [(a, "Travel", None, None, None), (a, None, "Flights", None, None)]) == 1
         assert _categories(conn, [a]) == ["Travel"]
         assert _subcategories(conn, [a]) == ["Flights"]
     finally:
@@ -715,11 +715,11 @@ def test_assign_rejects_neither_field_and_conflicting_subcategories(db_path):
     try:
         (a,) = _seed(conn, ["A"])
         with pytest.raises(ValueError):
-            assign_categories(conn, [(a, None, None, None)])
+            assign_categories(conn, [(a, None, None, None, None)])
         with pytest.raises(ValueError):
-            assign_categories(conn, [(a, None, "", None)])
+            assign_categories(conn, [(a, None, "", None, None)])
         with pytest.raises(ValueError):
-            assign_categories(conn, [(a, None, "Coffee", None), (a, None, "Tea", None)])
+            assign_categories(conn, [(a, None, "Coffee", None, None), (a, None, "Tea", None, None)])
         assert _categories(conn, [a]) == [None]
         assert _subcategories(conn, [a]) == [None]
     finally:
@@ -733,7 +733,7 @@ def test_subcategory_suggestion_is_none_until_category_is_set(db_path):
     conn = get_connection()
     try:
         target, peer = _seed(conn, ["SHOP", "SHOP"])
-        assign_categories(conn, [(peer, "Food", "Snacks", None)])
+        assign_categories(conn, [(peer, "Food", "Snacks", None, None)])
         result = suggest_category(conn, target)
         # Category is suggested (exact peer) but subcategory does not run.
         assert _cat(result)["value"] == "Food"
@@ -748,12 +748,12 @@ def test_subcategory_exact_match_same_category_and_description(db_path):
         target, p1, p2, other_cat, other_desc = _seed(
             conn, ["Coffee Shop", "COFFEE SHOP", "coffee shop", "COFFEE SHOP", "TEA HOUSE"]
         )
-        assign_categories(conn, [(target, "Food", None, None)])
-        assign_categories(conn, [(p1, "Food", "Cafe", None), (p2, "Food", "Cafe", None)])
+        assign_categories(conn, [(target, "Food", None, None, None)])
+        assign_categories(conn, [(p1, "Food", "Cafe", None, None), (p2, "Food", "Cafe", None, None)])
         # Same description but a different category: not a peer.
-        assign_categories(conn, [(other_cat, "Travel", "Airport", None)])
+        assign_categories(conn, [(other_cat, "Travel", "Airport", None, None)])
         # Same category and a subcategory but a different description: not a peer.
-        assign_categories(conn, [(other_desc, "Food", "Tea", None)])
+        assign_categories(conn, [(other_desc, "Food", "Tea", None, None)])
         assert suggest_category(conn, target)["subcategory"] == {
             "value": "Cafe",
             "confidence": 1.0,
@@ -767,12 +767,12 @@ def test_subcategory_falls_back_to_same_as_category(db_path):
     conn = get_connection()
     try:
         target, near, other = _seed(conn, ["COFFEE SHOP 12", "COFFEE SHOP 34", "COFFEE SHOP 12"])
-        assign_categories(conn, [(target, "Food", None, None)])
+        assign_categories(conn, [(target, "Food", None, None, None)])
         # A fuzzy neighbour with a subcategory does NOT count: no fuzzy tier.
-        assign_categories(conn, [(near, "Food", "Cafe", None)])
+        assign_categories(conn, [(near, "Food", "Cafe", None, None)])
         # An exact-description peer in the same category but with no
         # subcategory does not count either.
-        assign_categories(conn, [(other, "Food", None, None)])
+        assign_categories(conn, [(other, "Food", None, None, None)])
         assert suggest_category(conn, target)["subcategory"] == {
             "value": "Food",
             "confidence": 1.0,
@@ -786,10 +786,10 @@ def test_subcategory_majority_wins_and_ties_break_to_highest_id(db_path):
     conn = get_connection()
     try:
         target, a1, a2, b1 = _seed(conn, ["SHOP", "SHOP", "SHOP", "SHOP"])
-        assign_categories(conn, [(target, "Food", None, None)])
+        assign_categories(conn, [(target, "Food", None, None, None)])
         assign_categories(
             conn,
-            [(a1, "Food", "Cafe", None), (a2, "Food", "Cafe", None), (b1, "Food", "Bakery", None)],
+            [(a1, "Food", "Cafe", None, None), (a2, "Food", "Cafe", None, None), (b1, "Food", "Bakery", None, None)],
         )
         result = suggest_category(conn, target)["subcategory"]
         assert result["value"] == "Cafe"
@@ -805,14 +805,14 @@ def test_subcategory_tie_breaks_to_highest_id(db_path):
     conn = get_connection()
     try:
         target, older, newer = _seed(conn, ["SHOP", "SHOP", "SHOP"])
-        assign_categories(conn, [(target, "Food", None, None)])
-        assign_categories(conn, [(older, "Food", "Bakery", None), (newer, "Food", "Cafe", None)])
+        assign_categories(conn, [(target, "Food", None, None, None)])
+        assign_categories(conn, [(older, "Food", "Bakery", None, None), (newer, "Food", "Cafe", None, None)])
         result = suggest_category(conn, target)["subcategory"]
         assert result["value"] == "Cafe"
         assert result["confidence"] == pytest.approx(0.5)
 
         # Flip the values: the tie must follow the id, not the name.
-        assign_categories(conn, [(older, None, "Cafe", None), (newer, None, "Bakery", None)])
+        assign_categories(conn, [(older, None, "Cafe", None, None), (newer, None, "Bakery", None, None)])
         assert suggest_category(conn, target)["subcategory"]["value"] == "Bakery"
     finally:
         conn.close()
@@ -824,7 +824,7 @@ def test_subcategory_category_match_is_case_insensitive_and_self_excluded(db_pat
         target, peer = _seed(conn, ["SHOP", "SHOP"])
         # Storage does not normalise; write mixed case directly to prove the
         # comparison itself is case-insensitive.
-        assign_categories(conn, [(target, "food", "Own", None), (peer, "FOOD", "Cafe", None)])
+        assign_categories(conn, [(target, "food", "Own", None, None), (peer, "FOOD", "Cafe", None, None)])
         result = suggest_category(conn, target)["subcategory"]
         assert result == {"value": "Cafe", "confidence": 1.0, "match_type": "exact"}
         # The target's own subcategory never suggests itself back.
@@ -839,7 +839,7 @@ def test_batch_carries_subcategory_suggestions(db_path):
     conn = get_connection()
     try:
         a, b, c = _seed(conn, ["SHOP", "SHOP", "OTHER"])
-        assign_categories(conn, [(a, "Food", None, None), (b, "Food", "Cafe", None)])
+        assign_categories(conn, [(a, "Food", None, None, None), (b, "Food", "Cafe", None, None)])
         by_id = {e["transaction_id"]: e for e in suggest_categories(conn, [a, b, c])}
         assert by_id[a]["subcategory"] == {"value": "Cafe", "confidence": 1.0, "match_type": "exact"}
         assert by_id[b]["subcategory"]["match_type"] == "same_as_category"
@@ -859,10 +859,10 @@ def test_list_subcategories_unfiltered_and_filtered(db_path):
         assign_categories(
             conn,
             [
-                (a, "Food", "Tea", None),
-                (b, "Food", "Cafe", None),
-                (c, "Travel", "Flights", None),
-                (d, "Food", None, None),
+                (a, "Food", "Tea", None, None),
+                (b, "Food", "Cafe", None, None),
+                (c, "Travel", "Flights", None, None),
+                (d, "Food", None, None, None),
             ],
         )
         assert list_subcategories(conn) == ["Cafe", "Flights", "Tea"]
@@ -880,28 +880,28 @@ def test_assign_merchant_only_and_combinations(db_path):
     conn = get_connection()
     try:
         a, b, c = _seed(conn, ["A", "B", "C"])
-        assert assign_categories(conn, [(a, None, None, "Shop One")]) == 1
+        assert assign_categories(conn, [(a, None, None, "Shop One", None)]) == 1
         assert _categories(conn, [a]) == [None]
         assert _merchants(conn, [a]) == ["Shop One"]
         # merchant + category
-        assert assign_categories(conn, [(b, "Food", None, "Shop Two")]) == 1
+        assert assign_categories(conn, [(b, "Food", None, "Shop Two", None)]) == 1
         assert (_categories(conn, [b]), _subcategories(conn, [b]), _merchants(conn, [b])) == (
             ["Food"], [None], ["Shop Two"]
         )
         # merchant + subcategory
-        assert assign_categories(conn, [(c, None, "Cafe", "Shop Three")]) == 1
+        assert assign_categories(conn, [(c, None, "Cafe", "Shop Three", None)]) == 1
         assert (_categories(conn, [c]), _subcategories(conn, [c]), _merchants(conn, [c])) == (
             [None], ["Cafe"], ["Shop Three"]
         )
         # all three, overwriting; then a category-only write leaves merchant alone
-        assert assign_categories(conn, [(a, "Travel", "Flights", "Shop Nine")]) == 1
-        assign_categories(conn, [(a, "Food", None, None)])
+        assert assign_categories(conn, [(a, "Travel", "Flights", "Shop Nine", None)]) == 1
+        assign_categories(conn, [(a, "Food", None, None, None)])
         assert (_categories(conn, [a]), _subcategories(conn, [a]), _merchants(conn, [a])) == (
             ["Food"], ["Flights"], ["Shop Nine"]
         )
         # conflicting merchants for one id -> rejected, nothing written
         with pytest.raises(ValueError):
-            assign_categories(conn, [(b, None, None, "X"), (b, None, None, "Y")])
+            assign_categories(conn, [(b, None, None, "X", None), (b, None, None, "Y", None)])
         assert _merchants(conn, [b]) == ["Shop Two"]
     finally:
         conn.close()
@@ -928,20 +928,20 @@ def test_merchant_exact_tier_majority_and_tie_break(db_path):
         target, m1, m2, m3, other = _seed(conn, ["SHOP", "shop", "Shop", "SHOP", "ELSEWHERE"])
         assign_categories(
             conn,
-            [(m1, None, None, "Alpha"), (m2, None, None, "Alpha"), (m3, None, None, "Beta"),
-             (other, None, None, "Gamma")],
+            [(m1, None, None, "Alpha", None), (m2, None, None, "Alpha", None), (m3, None, None, "Beta", None),
+             (other, None, None, "Gamma", None)],
         )
         result = suggest_category(conn, target)["merchant"]
         assert result == {"value": "Alpha", "confidence": pytest.approx(2 / 3), "match_type": "exact"}
 
         # 1-1 tie -> highest id wins, whichever value it holds.
-        assign_categories(conn, [(m2, None, None, "Beta")])  # Alpha: m1 ; Beta: m2, m3
-        assign_categories(conn, [(m3, None, None, "Alpha")])  # Alpha: m1, m3 ; Beta: m2 -> majority Alpha
+        assign_categories(conn, [(m2, None, None, "Beta", None)])  # Alpha: m1 ; Beta: m2, m3
+        assign_categories(conn, [(m3, None, None, "Alpha", None)])  # Alpha: m1, m3 ; Beta: m2 -> majority Alpha
         conn.execute("UPDATE transactions SET merchant = NULL WHERE id = ?", (m1,))
         conn.commit()
         # Now Alpha: m3 ; Beta: m2 -> tie, m3 is the higher id.
         assert suggest_category(conn, target)["merchant"]["value"] == "Alpha"
-        assign_categories(conn, [(m2, None, None, "Alpha"), (m3, None, None, "Beta")])
+        assign_categories(conn, [(m2, None, None, "Alpha", None), (m3, None, None, "Beta", None)])
         assert suggest_category(conn, target)["merchant"]["value"] == "Beta"
     finally:
         conn.close()
@@ -952,8 +952,8 @@ def test_merchant_fuzzy_tier_is_global_and_not_scoped_by_category(db_path):
     try:
         target, close, far = _seed(conn, ["COFFEE SHOP 12", "COFFEE SHOP 34", "AIRLINE TICKETS"])
         # Different categories everywhere: irrelevant to merchant matching.
-        assign_categories(conn, [(target, "Travel", None, None)])
-        assign_categories(conn, [(close, "Food", None, "Bean Bar"), (far, "Travel", None, "Sky Air")])
+        assign_categories(conn, [(target, "Travel", None, None, None)])
+        assign_categories(conn, [(close, "Food", None, "Bean Bar", None), (far, "Travel", None, "Sky Air", None)])
         result = suggest_category(conn, target)["merchant"]
         assert result["match_type"] == "fuzzy"
         assert result["value"] == "Bean Bar"
@@ -966,7 +966,7 @@ def test_merchant_never_matches_itself(db_path):
     conn = get_connection()
     try:
         (only,) = _seed(conn, ["SHOP"])
-        assign_categories(conn, [(only, None, None, "Alpha")])
+        assign_categories(conn, [(only, None, None, "Alpha", None)])
         # The only merchant-bearing row is the target: cold start for it.
         assert suggest_category(conn, only)["merchant"]["match_type"] == "from_description"
     finally:
@@ -977,7 +977,7 @@ def test_batch_carries_merchant_and_runs_one_query(db_path, monkeypatch):
     conn = get_connection()
     try:
         a, b, c = _seed(conn, ["SHOP", "SHOP", "OTHER"])
-        assign_categories(conn, [(b, None, None, "Alpha")])
+        assign_categories(conn, [(b, None, None, "Alpha", None)])
         calls = []
         real = categories._fetch_labeled
         monkeypatch.setattr(categories, "_fetch_labeled", lambda cn: (calls.append(1), real(cn))[1])
@@ -996,7 +996,7 @@ def test_list_merchants_is_sorted_distinct_and_unscoped(db_path):
         a, b, c = _seed(conn, ["A", "B", "C"])
         assert list_merchants(conn) == []
         assign_categories(
-            conn, [(a, "Food", None, "Zeta"), (b, "Travel", None, "Alpha"), (c, None, None, "Alpha")]
+            conn, [(a, "Food", None, "Zeta", None), (b, "Travel", None, "Alpha", None), (c, None, None, "Alpha", None)]
         )
         assert list_merchants(conn) == ["Alpha", "Zeta"]
     finally:
