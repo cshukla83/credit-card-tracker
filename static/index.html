@@ -291,6 +291,70 @@
   .dash-chart-wrap canvas.clickable {
     cursor: pointer;
   }
+  .dash-insight-action {
+    margin-left: auto;
+    align-self: center;
+  }
+  .dash-insight-action button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-size: 0.9rem;
+    padding: 0.45rem 1rem;
+  }
+  .dash-insight-action button.primary:hover:not(:disabled) {
+    background: var(--accent-ink);
+    border-color: var(--accent-ink);
+    color: #fff;
+  }
+  .dash-insight-action button.primary:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  /* Three visually distinct states: fresh (accent), cached (amber), and
+     the two error kinds (danger), each with a left rule and its own tint. */
+  .dash-insight {
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 0.9rem 1.1rem;
+    margin: -0.5rem 0 1.25rem;
+  }
+  .dash-insight-label {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-bottom: 0.35rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .dash-insight-text {
+    margin: 0;
+    line-height: 1.55;
+    max-width: 70ch;
+  }
+  .dash-insight.fresh {
+    border-left-color: var(--accent);
+    background: var(--accent-wash);
+  }
+  .dash-insight.cached {
+    border-left-color: var(--edit-line);
+    background: var(--edit-wash);
+  }
+  .dash-insight.cached .dash-insight-label {
+    color: #7a5a00;
+    font-weight: 600;
+  }
+  .dash-insight.error {
+    border-left-color: var(--danger);
+    background: #fdf0ef;
+  }
+  .dash-insight.error .dash-insight-text {
+    color: var(--danger);
+  }
+  .dash-insight.loading {
+    border-left-color: var(--rule-strong);
+    color: var(--muted);
+  }
   .dash-chart-wrap {
     background: var(--surface);
     border: 1px solid var(--rule);
@@ -1016,6 +1080,13 @@
         <span class="dash-summary-label">Total spend</span>
         <span id="dash-total-text" class="dash-total-text"></span>
       </div>
+      <div class="dash-insight-action">
+        <button type="button" id="dash-insight-btn" class="small primary">Generate insight</button>
+      </div>
+    </div>
+    <div id="dash-insight" class="dash-insight" style="display: none;" aria-live="polite">
+      <div id="dash-insight-label" class="dash-insight-label"></div>
+      <p id="dash-insight-text" class="dash-insight-text"></p>
     </div>
 
     <div id="dash-drill" class="dash-drill" style="display: none;">
@@ -1117,7 +1188,9 @@
     function handleResponse(response) {
       if (!response.ok) {
         return extractErrorMessage(response).then((message) => {
-          throw new Error(message);
+          const error = new Error(message);
+          error.status = response.status; // callers may branch on it (Session 69)
+          throw error;
         });
       }
       return response.json();
@@ -1125,6 +1198,12 @@
 
     function fetchJSON(url) {
       return fetch(url).then(handleResponse);
+    }
+
+    // POST with query params and no body -- for action endpoints that take
+    // the same params as a GET (POST /analytics/commentary).
+    function postQuery(url) {
+      return fetch(url, { method: "POST" }).then(handleResponse);
     }
 
     function postJSON(url, body) {
@@ -2641,6 +2720,10 @@
     const dashChartEl = document.getElementById("dash-chart");
     const dashChartNoteEl = document.getElementById("dash-chart-note");
     const dashTableEl = document.getElementById("dash-table");
+    const dashInsightBtnEl = document.getElementById("dash-insight-btn");
+    const dashInsightEl = document.getElementById("dash-insight");
+    const dashInsightLabelEl = document.getElementById("dash-insight-label");
+    const dashInsightTextEl = document.getElementById("dash-insight-text");
     const dashBodyEl = document.getElementById("dash-body");
 
     // Period state. Defaults: the last calendar month back from today. The
@@ -2662,6 +2745,11 @@
       ...DASH_DEFAULTS,
       expanded: new Set(), // category names whose subcategories are open (in-memory)
       drill: null,          // category name the chart is drilled into, or null (Session 67)
+      // On-demand commentary (Session 69): null, or {state: "loading" |
+      // "fresh" | "cached" | "unconfigured" | "unavailable" | "failed",
+      // text, generatedAt}. In memory only -- never in the URL, never
+      // auto-fetched; cleared by any change to the underlying view.
+      insight: null,
       chart: null,          // the live Chart.js instance, if any
       data: null,
     };
@@ -2871,11 +2959,13 @@
         );
       }
       renderDashboardTable(categories);
+      renderInsight();
     }
 
     function drillInto(category) {
       if (dash.drill === category) return;
       dash.drill = category;
+      clearInsight(); // the view changed; no stale commentary lingers
       updateURL(currentFilters());
       renderDashboardView();
     }
@@ -2883,9 +2973,94 @@
     function drillOut() {
       if (!dash.drill) return;
       dash.drill = null;
+      clearInsight();
       updateURL(currentFilters());
       renderDashboardView();
     }
+
+    // --- insight (LLM commentary), explicit click only ---------------------
+    let insightSeq = 0;
+
+    function clearInsight() {
+      dash.insight = null;
+      insightSeq += 1; // any in-flight response is now stale
+      renderInsight();
+    }
+
+    function renderInsight() {
+      const built = dash.data ? aggregateParams(currentFilters()) : { hint: true };
+      const loading = dash.insight && dash.insight.state === "loading";
+      dashInsightBtnEl.disabled = Boolean(loading || !built.params);
+      dashInsightBtnEl.textContent = loading ? "Generating\u2026" : "Generate insight";
+
+      const ins = dash.insight;
+      if (!ins) {
+        dashInsightEl.style.display = "none";
+        dashInsightEl.className = "dash-insight";
+        return;
+      }
+      let cls = "dash-insight", label = "", text = "";
+      if (ins.state === "loading") {
+        cls += " loading";
+        label = "Asking for commentary on this view\u2026";
+      } else if (ins.state === "fresh") {
+        cls += " fresh";
+        label = "Generated at " + ins.generatedAt + " UTC";
+        text = ins.text;
+      } else if (ins.state === "cached") {
+        cls += " cached";
+        label = "Cached \u2014 generated at " + ins.generatedAt + " UTC (a fresh result couldn\u2019t be fetched)";
+        text = ins.text;
+      } else if (ins.state === "unconfigured") {
+        cls += " error";
+        label = "Not available";
+        text = "Commentary isn\u2019t configured for this deployment.";
+      } else if (ins.state === "unavailable") {
+        cls += " error";
+        label = "Not available";
+        text = "Insight unavailable for this view \u2014 try again.";
+      } else {
+        cls += " error";
+        label = "Not available";
+        text = "Couldn\u2019t fetch insight \u2014 try again.";
+      }
+      dashInsightEl.className = cls;
+      dashInsightLabelEl.textContent = label;
+      dashInsightTextEl.textContent = text;
+      dashInsightEl.style.display = "";
+    }
+
+    function requestInsight() {
+      // Same params as the aggregate call driving the view -- drill state is
+      // deliberately not part of them: commentary always covers the full
+      // category breakdown for the current period and filters.
+      const built = aggregateParams(currentFilters());
+      if (!built.params || (dash.insight && dash.insight.state === "loading")) return;
+      const seq = ++insightSeq;
+      dash.insight = { state: "loading" };
+      renderInsight();
+      postQuery(withParams("/analytics/commentary", built.params))
+        .then((body) => {
+          if (seq !== insightSeq) return; // view changed or re-clicked since
+          dash.insight = {
+            state: body.cached ? "cached" : "fresh",
+            text: body.commentary,
+            generatedAt: body.generated_at,
+          };
+          renderInsight();
+        })
+        .catch((error) => {
+          if (seq !== insightSeq) return;
+          const state =
+            error.status === 500 ? "unconfigured"
+            : error.status === 503 ? "unavailable"
+            : "failed";
+          dash.insight = { state };
+          renderInsight();
+        });
+    }
+
+    dashInsightBtnEl.addEventListener("click", requestInsight);
 
     dashBackEl.addEventListener("click", drillOut);
 
@@ -3042,6 +3217,7 @@
 
     // --- control events: every change refetches at once (no Apply) ---
     function onPeriodChange() {
+      clearInsight(); // the underlying query changed
       syncPeriodControls();
       const filters = currentFilters();
       updateURL(filters);
@@ -3311,6 +3487,9 @@
     }
 
     function onFilterChange() {
+      // A real filter change (never a tab switch reaches here): the
+      // dashboard's underlying query changed, so any commentary is stale.
+      clearInsight();
       const filters = currentFilters();
       updateURL(filters);
       recomputeOptions(filters);

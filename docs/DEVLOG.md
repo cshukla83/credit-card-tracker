@@ -7910,3 +7910,96 @@ calls were made in building this.
 The frontend wiring: a button on the dashboard, the commentary text with
 its age indicator, and the three states (fresh, cached-with-age,
 unavailable). A first live call to confirm the default model name.
+
+## Session 69 — 2026-09-12
+
+### Goal
+A "Generate insight" button on the Dashboard tab wired to Session 68's
+`POST /analytics/commentary`: explicit click only, loading state, three
+visually distinct result states, cleared by any change to the underlying
+view, never in the URL. `static/index.html` only.
+
+### What happened
+
+**Placement.** The button sits in the summary row, right-aligned beside
+the echoed period and total; the commentary panel appears immediately
+beneath that row, above the chart — grouped with the summary, not with
+the breakdown.
+
+**Request.** The click builds its params with the same
+`aggregateParams(currentFilters())` that drives the aggregate call —
+granularity, mode, count / month / quarter / year / start / end, bank,
+card_id — so commentary always describes exactly the view the numbers
+describe. Drill state is not part of that builder and is therefore never
+sent: commentary covers the full category breakdown whether or not the
+chart is drilled in. A new `postQuery(url)` helper POSTs with query params
+and no body, through the shared `handleResponse`, which now attaches the
+HTTP `status` to the error it throws so callers can branch on it.
+
+**In flight.** The button reads "Generating…" and is disabled; a second
+click is ignored. `insightSeq` mirrors the `dashSeq` pattern: every
+request takes a number, and a response whose number is no longer current
+is dropped. `clearInsight()` also bumps the counter, so a response to a
+click made before the view changed can never land on the new view.
+
+**Three states, three looks.** One panel with a coloured left rule and
+tint per state: *fresh* (accent, "Generated at <timestamp> UTC"),
+*cached* (amber, bold label "Cached — generated at <timestamp> UTC (a
+fresh result couldn't be fetched)"), and *error* (danger tint) with two
+messages by status — 500 → "Commentary isn't configured for this
+deployment.", 503 → "Insight unavailable for this view — try again." —
+plus a generic fallback for anything else. Timestamps are shown exactly as
+the API returns them (SQLite's UTC `YYYY-MM-DD HH:MM:SS`) with a "UTC"
+suffix, not relativised; the cached state uses the cached row's own
+timestamp, which the backend already guarantees. No raw error internals
+reach the panel. A "loading" look exists for the in-flight moment.
+
+**Clearing.** `clearInsight()` runs from every path that changes the
+underlying query: `onPeriodChange()` (all period controls),
+`onFilterChange()` (bank / card — that function is reached only by real
+control changes, never by a tab switch), and `drillInto()` / `drillOut()`.
+Switching tabs calls `loadActiveTab()` directly, so whatever commentary was
+last shown survives a round-trip to another tab and back, in memory.
+
+**No auto-fetch, no URL.** The only caller of `requestInsight()` is the
+button's click handler; loads, refetches, and control changes never call
+it. `dash.insight` is not written to `dashboardURLParams()` and not read
+on load, so a reload starts with no commentary and the button in its
+initial state. The button is disabled while the period form is incomplete
+(the same hint condition that suppresses the aggregate call) and before the
+first aggregate has loaded.
+
+**Verification.** Script parsed with the system JavaScriptCore.
+**Traced only — not seen working against a live response.** The browser
+extension was not available this session, and per convention no server
+was started here. `.env` now carries `GEMINI_API_KEY` and `GEMINI_MODEL`
+entries (key *names* checked; values were not read and do not appear
+anywhere), so the live path is ready to be tried by hand. This is the
+first frontend surface that drives the real Gemini call; that first live
+run — and confirmation of the model name, now set via `GEMINI_MODEL` —
+remains to be done manually.
+
+### Outcome
+The dashboard can ask for commentary on the current view with one click
+and shows the answer, a clearly labelled older answer, or a plain reason
+why there is none — always for the view currently on screen, and never
+without being asked.
+
+### In plain English
+The dashboard has a "Generate insight" button next to the period and
+total. Pressing it asks for a few sentences about the spending shown —
+always the whole breakdown for the current dates and filters, whatever
+part of the chart you've zoomed into — and shows the reply with the exact
+time it was written. If a fresh reply can't be fetched but an earlier one
+exists for the same view, that older text is shown in a distinctly
+different, clearly labelled style with its own time; if there's nothing
+to fall back on, or the feature hasn't been set up, a plain message says
+so. Changing anything about the view removes the text rather than leaving
+it next to numbers it no longer describes, and nothing is fetched unless
+the button is pressed. Not yet seen running; the outside service's key is
+now in place for a first manual try.
+
+### Next steps
+Make the first live call by hand and confirm the configured model; then the
+outstanding manual browser walk, which now spans Review & assign, the
+dashboard, the drill-down, and this button.
