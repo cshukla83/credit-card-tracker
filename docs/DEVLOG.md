@@ -8685,3 +8685,90 @@ manual look.
 - The `docs/STATE.md` full reconciliation backlog, Sessions 61–77.
 - **Module 1** (upload UI with auto-detect) is the next arc, once that
   verification has happened.
+
+## Session 78 — 2026-09-13
+
+### Goal
+Frontend only. A breadcrumb strip above the dashboard chart showing the
+current drill path with click-to-step-back — a correction to Session 77,
+whose assumption that the filter dropdowns alone were enough navigation
+did not survive manual verification.
+
+### What happened
+
+State confirmed first: `feature/merchant-aggregation` at `7cd3f12`,
+clean. Browser tooling checked before any code: **not available**.
+
+**Where this came from.** The manual verification pass of Session 77's
+drill — done by hand, outside Claude Code — found a real gap, not a
+requested feature: while looking at the chart there was no visible way to
+see how far one had drilled or to undo a step; the dropdowns in the filter
+bar above did carry the state, but they did not read as "you are here /
+go back" from the chart. Session 77's reasoning for one mechanism (the
+filters) stands; what it lacked was a view of that mechanism next to the
+chart.
+
+**Breadcrumb.** A `nav` directly above the chart, below the Level 1/2/3
+selects, styled from the existing variables as small pill buttons. Left to
+right, in the **current order-select sequence**: an "All" root crumb,
+always present, disabled and dimmed when no label filter is active and
+otherwise clickable; then one crumb per level whose dimension currently has
+an active filter — unfiltered levels are skipped, not shown as empty
+placeholders — labelled "<Dimension>: <value>". The last active crumb is
+highlighted as the current position. An out-of-order state (only the
+Subcategory dropdown set, say, under the default order) therefore shows
+exactly one crumb.
+
+**Click semantics — that level and everything after it.** Clicking the
+crumb at order position *i* clears the filters for the dimensions at
+positions *i*, *i+1*, and *i+2* in the current order — whether or not the
+in-between levels were individually set — and "All" clears all three
+positions. Each clear sets the relevant dropdowns to "" and then calls the
+existing `onFilterChange()` once, so the end state is exactly what clearing
+those dropdowns by hand produces, and there is still only one way of
+mutating filter state.
+
+**Reactivity.** `renderCrumbs(filters)` runs at the start of
+`loadDashboard()` — so the strip reflects a new position immediately, not
+after the fetch — and again in `renderDashboardView()`. Every path that
+changes position goes through `loadDashboard()`: a bar click and a direct
+dropdown change (via `onFilterChange()`), an order change (its handler
+refetches; crumb order and labels follow the new sequence), and a crumb
+click. The three dropdown elements are now looked up through one shared
+map used by both the bar-click path and the crumb path.
+
+**Not touched.** The table (verification item I), the order selects'
+behaviour, the display-level rule, the backend.
+
+**Tests.** No backend code changed; backend suite run for the record:
+**500 passing**. No frontend tests exist or were added, per convention.
+
+**Verification — traced, not seen.** Script parsed with the system
+JavaScriptCore; the crumb set, the clear-from-position loop, and the
+reactivity paths were checked by reading the code. This addition needs the
+same manual browser check as the rest of Sessions 73–77's work.
+
+### Outcome
+The chart now carries its own drill path and a way back: crumbs in the
+current level order, each clearing its level and everything deeper, with
+"All" resetting the three label filters — all through the one existing
+filter-change path.
+
+### In plain English
+A small trail now sits above the dashboard chart — "All › Merchant: … ›
+Category: …" — showing how far you have drilled, in the order you chose.
+Clicking any step takes you back to it by clearing that level and the ones
+after; "All" clears the lot. This was added because trying the previous
+version by hand showed that the filter dropdowns alone, though they held
+the same information, did not make it obvious where you were or how to
+step back while looking at the chart. Not yet seen running from here.
+
+### Next steps
+- This breadcrumb needs the same manual browser check as the rest of
+  Sessions 73–77's dashboard work (default order, drill through three
+  levels, dropdowns reflecting clicks, stepping back via crumbs and via
+  clearing dropdowns, reordering mid-session, the three-level table, the
+  filter-row mesh, the insight button live).
+- The `docs/STATE.md` full reconciliation backlog, Sessions 61–78.
+- **Module 1** (upload UI with auto-detect) is the next arc once that
+  verification has happened.

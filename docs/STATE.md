@@ -110,10 +110,15 @@ are the first level whose dimension has no active filter — computed as
 1 + the count of contiguous filtered levels from Level 1. Clicking a bar
 **sets that dimension's filter dropdown** (Session 76's row) and goes
 through the ordinary filter-change path; "back" is clearing the dropdown.
-There is no separate drill state or breadcrumb — the filters are the
-drill. The table below always shows the whole three-level tree in the
-current order, collapsible at every level. Order round-trips in the URL
-(`d_order`).
+There is no separate drill state — the filters are the drill — but since
+Session 78 a **breadcrumb strip** above the chart shows the path ("All ›
+Merchant: X › Category: Y", in the current order, skipping unfiltered
+levels); clicking a crumb clears that level's filter and every level
+after it, "All" clears all three, both through the ordinary filter-change
+path. Added after manual verification of Session 77 found the dropdowns
+alone insufficient as a way to see the position and step back. The table
+below always shows the whole three-level tree in the current order,
+collapsible at every level. Order round-trips in the URL (`d_order`).
 Groups are collapsible; the visual system is CSS-variable based with a
 system font stack.
 

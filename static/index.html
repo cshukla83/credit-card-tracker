@@ -304,6 +304,40 @@
     color: var(--ink);
     font-weight: 600;
   }
+  .dash-crumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.35rem;
+    margin-bottom: 0.7rem;
+    font-size: 0.9rem;
+  }
+  .dash-crumbs .crumb {
+    font: inherit;
+    font-size: 0.88rem;
+    padding: 0.25rem 0.65rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--accent-ink);
+    cursor: pointer;
+  }
+  .dash-crumbs .crumb:hover:not(:disabled) {
+    background: var(--accent-wash);
+    border-color: var(--accent);
+  }
+  .dash-crumbs .crumb:disabled {
+    color: var(--muted);
+    border-color: var(--rule);
+    cursor: default;
+  }
+  .dash-crumbs .crumb.current {
+    background: var(--accent-wash);
+    border-color: var(--accent-wash-strong);
+  }
+  .dash-crumbs .sep {
+    color: var(--muted);
+  }
   #dash-table tr.depth-1 td {
     background: #fafafb;
   }
@@ -1150,6 +1184,11 @@
       </label>
       <span id="dash-showing" class="dash-showing"></span>
     </div>
+    <!-- Breadcrumb (Session 78): the current drill path in order-select
+         sequence, with click-to-clear-from-here. Found missing in manual
+         verification of Session 77: the dropdowns alone did not read as
+         "where am I / how do I go back" while looking at the chart. -->
+    <nav id="dash-crumbs" class="dash-crumbs" aria-label="Drill path"></nav>
     <div id="dash-chart-wrap" class="dash-chart-wrap" style="display: none;">
       <canvas id="dash-chart" aria-label="Spend by label" role="img"></canvas>
     </div>
@@ -2796,6 +2835,7 @@
     const dashChartWrapEl = document.getElementById("dash-chart-wrap");
     const dashLevelEls = Array.from(document.querySelectorAll("select.dash-level"));
     const dashShowingEl = document.getElementById("dash-showing");
+    const dashCrumbsEl = document.getElementById("dash-crumbs");
     const dashTableHeadEl = document.getElementById("dash-table-head");
     const dashChartEl = document.getElementById("dash-chart");
     const dashChartNoteEl = document.getElementById("dash-chart-note");
@@ -2973,6 +3013,7 @@
     function loadDashboard(filters) {
       const seq = ++dashSeq;
       dashErrorEl.style.display = "none";
+      renderCrumbs(filters); // reflect the new position at once, not after the fetch
       const built = aggregateParams(filters);
       if (!built.params) {
         dashStatusEl.textContent = built.hint;
@@ -3052,6 +3093,7 @@
         .join(" \u203a ");
       dashShowingEl.textContent =
         "Bars: " + DIM_LABEL[dim] + (pinned ? " (within " + pinned + ")" : "");
+      renderCrumbs(filters);
       renderDashboardChart(
         nodes.map((n) => ({ label: n[dim], amount: n.amount, transaction_count: n.transaction_count })),
         {
@@ -3065,13 +3107,72 @@
       renderInsight();
     }
 
+    // --- breadcrumb (Session 78) -------------------------------------------
+    // "All" plus one crumb per level -- in the CURRENT order -- whose
+    // dimension has an active filter; levels with no filter are skipped, so
+    // an out-of-order state (only Level 3's dimension set) shows a single
+    // crumb. Clicking the crumb at order position i clears the filters at
+    // positions i, i+1, i+2 -- that level and everything after it, whether
+    // or not the in-between levels were set -- through the ordinary
+    // onFilterChange() path, exactly as clearing those dropdowns by hand
+    // would. "All" clears all three and is disabled when none is active.
+    const LABEL_FILTER_ELS = {
+      category: categoryFilterEl,
+      subcategory: subcategoryFilterEl,
+      merchant: merchantFilterEl,
+    };
+
+    function clearLabelsFromPosition(position) {
+      let changed = false;
+      for (let i = position; i < 3; i += 1) {
+        const el = LABEL_FILTER_ELS[dash.order[i]];
+        if (el.value) {
+          el.value = "";
+          changed = true;
+        }
+      }
+      if (changed) onFilterChange();
+    }
+
+    function renderCrumbs(filters) {
+      dashCrumbsEl.textContent = "";
+      const anyActive = dash.order.some((d) => filters[d]);
+
+      const root = document.createElement("button");
+      root.type = "button";
+      root.className = "crumb" + (anyActive ? "" : " current");
+      root.textContent = "All";
+      root.disabled = !anyActive;
+      root.title = anyActive ? "Clear all three label filters" : "No label filter active";
+      root.addEventListener("click", () => clearLabelsFromPosition(0));
+      dashCrumbsEl.appendChild(root);
+
+      const activePositions = [0, 1, 2].filter((i) => filters[dash.order[i]]);
+      activePositions.forEach((i, idx) => {
+        const sep = document.createElement("span");
+        sep.className = "sep";
+        sep.textContent = "\u203a";
+        dashCrumbsEl.appendChild(sep);
+
+        const dim = dash.order[i];
+        const crumb = document.createElement("button");
+        crumb.type = "button";
+        const isLast = idx === activePositions.length - 1;
+        crumb.className = "crumb" + (isLast ? " current" : "");
+        crumb.textContent = DIM_LABEL[dim] + ": " + filters[dim];
+        crumb.title = "Clear " + DIM_LABEL[dim].toLowerCase() + " and every level after it";
+        crumb.addEventListener("click", () => clearLabelsFromPosition(i));
+        dashCrumbsEl.appendChild(crumb);
+      });
+    }
+
     // Clicking a bar sets that dimension's filter dropdown (Session 76) and
     // goes through the ordinary filter-change path -- the full mesh refetch
     // and URL update. "Back" is clearing that dropdown. One mechanism (the
     // filters) instead of two doing overlapping jobs (filters plus a drill
     // stack that would have to be kept consistent with them).
     function setLabelFilter(dim, value) {
-      const el = { category: categoryFilterEl, subcategory: subcategoryFilterEl, merchant: merchantFilterEl }[dim];
+      const el = LABEL_FILTER_ELS[dim];
       if (!Array.from(el.options).some((o) => o.value === value)) {
         const option = document.createElement("option");
         option.value = value;
