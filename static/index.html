@@ -2623,9 +2623,12 @@
       const renderMenu = () => {
         menu.textContent = "";
         const q = input.value.trim().toLowerCase();
-        const matches = spec.options()
-          .filter((v) => !q || v.toLowerCase().includes(q))
-          .slice(0, 8);
+        // The whole list, untyped or filtered -- never capped. A cap here
+        // (Session 82 shipped .slice(0, 8), inherited from the old bar
+        // typeahead) hid every value past the first eight with nothing to
+        // scroll to; the menu's own max-height + overflow-y provides the
+        // scrolling, exactly as the filter-bar selects show every value.
+        const matches = spec.options().filter((v) => !q || v.toLowerCase().includes(q));
         for (const v of matches) {
           const b = document.createElement("button");
           b.type = "button";

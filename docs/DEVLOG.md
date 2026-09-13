@@ -9155,3 +9155,88 @@ running.
   merge to `main`.
 - **Module 1** (upload UI with auto-detect) is the next arc once both
   rounds are verified.
+
+## Session 84 — 2026-09-13
+
+### Goal
+Fix a bug found in manual verification of Session 82's inline editor: its
+dropdown, opened without typing, did not show the full list of existing
+values — not even by scrolling — while typing filtered to and surfaced
+matching values. The Session 76 filter-bar dropdowns, which use the same
+three listing endpoints, were confirmed by hand to be fine, and served as
+the reference.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `8fecd55`, clean.
+Browser tooling: not available; traced. **The bug was reported from the
+manual verification pass of Session 82, done by hand outside Claude
+Code — not discovered here.**
+
+**Investigation, in the brief's order.** (1) *A hardcoded cap on the
+render:* `renderInlineEditor()`'s `renderMenu()` did
+`spec.options().filter(...).slice(0, 8)` — on **both** the untyped and the
+typed path, since they are one function. Untyped, only the first eight
+values of the alphabetical list were ever put in the DOM; the rest were
+not clipped, they were absent, so scrolling had nothing to reach. Typing
+narrows the candidates to fewer than eight, so the cap stopped biting and
+the editor appeared to work. That is the symptom exactly. The cap was
+inherited from the bar's old typeahead (Session 43's six-match menu,
+carried into Session 82 as eight) where a short menu suited a bulk-assign
+box; it does not suit a full-list combo. (2) *CSS clipping without scroll:*
+ruled out — `.menu` already has `max-height: 16rem; overflow-y: auto`, the
+inline menu only overrides its offset, the cell has no overflow rule, and
+the table deliberately has no `overflow: hidden` (Session 44). (3) *A
+different fetch or render path for untyped-open:* ruled out — one
+`renderMenu()`, one option source per field (`review.catalog`,
+`review.subcategoriesAll`, `review.merchants`, the full lists fetched with
+the page), no per-open fetch. **Root cause: the `.slice(0, 8)` cap, not
+CSS and not a divergent path.** The Session 76 selects are native
+`<select>` elements filled by `setOptions()` with every value and were
+never capped, which is why they behaved.
+
+**Fix.** The cap is removed; the menu renders every match and scrolls
+within its existing `max-height`. The code carries a comment naming the
+cap that was there and why it must not return — the only "safeguard"
+available without a frontend suite. Nothing else in the editor changed,
+and the Session 76 dropdowns' code was not touched: the fault was not in
+shared code.
+
+**Traced before/after, all three fields.** *Inline editor, untyped open:*
+before — the first eight of the field's full list rendered, others absent,
+the 16rem menu holding roughly those eight, so scrolling did nothing;
+after — the whole list rendered, scrollable past the visible area.
+*Inline editor, typed:* before — matches filtered then capped at eight (a
+latent form of the same bug for a broad query with more than eight
+matches); after — every match. Same for category, subcategory
+(unscoped list), and merchant, since they share the renderer and differ
+only in `spec.options()`. *Filter-bar selects (Sessions 76):* untouched,
+still `setOptions(labelOptions(list))` with the complete list plus the
+synthetic "Uncategorized" — no regression possible from this change.
+
+**Tests.** No backend change; backend suite for the record: **508
+passing**. No frontend suite exists.
+
+**Verification — traced, not seen.** The fix is a one-line removal whose
+effect is fully determined by reading the code; it still joins the
+manual-verification backlog for a confirming look.
+
+`docs/STATE.md`: nothing it describes was wrong; no change.
+
+### Outcome
+The inline editor's dropdown shows every existing value when opened
+untyped, scrolling when long, and every match when typed — for all three
+labels — matching the filter-bar dropdowns' behaviour.
+
+### In plain English
+Opening the new in-place editor's list without typing showed only the
+first eight values and no way to reach the rest; typing worked because it
+narrowed the list below eight. The cause was a leftover limit of eight
+carried over from the old bulk-assign box, not a display or loading
+problem. The limit is removed; the list now shows everything and scrolls.
+Found by trying it by hand, not by the automated checks, which don't
+cover the screen. Not seen running from here.
+
+### Next steps
+Unchanged: manual verification of Sessions 73–84; STATE.md
+reconciliation; merge; then Module 1.
