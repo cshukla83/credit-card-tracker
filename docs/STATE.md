@@ -96,7 +96,14 @@ single column expresses: `incomplete` (any of the three labels `NULL`) or
 `complete` (all three set); anything else is a 422 — wired on
 `GET /transactions` and `GET /transactions/aggregate`, not on the listing
 endpoints. *All
-transactions* lists rows read-only with merchant/category/subcategory.
+transactions* lists rows read-only with merchant/category/subcategory;
+since Session 85 every displayed column header sorts the loaded filtered
+set client-side — click for ascending, again for descending, another
+column starts ascending; amounts numerically, dates chronologically, text
+case-insensitively, **unset values last whichever the direction**; the
+active sort is re-applied to whichever fetch wins the sequence race and
+round-trips in the URL (`sort`, `dir`); default order until a header is
+clicked.
 *Review & assign* shows, by default, the rows that still **need review —
 any of category, subcategory, or merchant unset** (`review_status=
 incomplete` on the server, Session 81; the toggle is "Needs review only",

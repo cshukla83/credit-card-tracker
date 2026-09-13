@@ -578,6 +578,19 @@
     background: var(--edit-wash);
   }
 
+  th[data-sort] {
+    cursor: pointer;
+    user-select: none;
+  }
+  th[data-sort]:hover {
+    color: var(--ink);
+  }
+  th[data-sort] .sort-arrow {
+    display: inline-block;
+    width: 1em;
+    margin-left: 0.25rem;
+    color: var(--accent);
+  }
   th.num, td.num {
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -1036,13 +1049,13 @@
     <table id="transactions-table" style="display: none;">
       <thead>
         <tr>
-          <th class="num">date</th>
-          <th>description</th>
-          <th class="type">type</th>
-          <th class="num amount">amount</th>
-          <th>merchant</th>
-          <th>category</th>
-          <th>subcategory</th>
+          <th class="num" data-sort="txn_date">date</th>
+          <th data-sort="description">description</th>
+          <th class="type" data-sort="txn_type">type</th>
+          <th class="num amount" data-sort="amount">amount</th>
+          <th data-sort="merchant">merchant</th>
+          <th data-sort="category">category</th>
+          <th data-sort="subcategory">subcategory</th>
         </tr>
       </thead>
       <tbody id="transactions-body"></tbody>
@@ -1380,6 +1393,8 @@
       // tab is active, so it survives a reload from any tab and never
       // collides with the other tabs' params. Defaults are omitted.
       for (const [key, value] of Object.entries(dashboardURLParams())) params.set(key, value);
+      // Table sorts (Session 85), likewise namespaced and omitted when unset.
+      for (const [key, value] of Object.entries(sortURLParams("", allSort))) params.set(key, value);
       window.history.replaceState(null, "", withParams(window.location.pathname, params));
     }
 
@@ -1409,6 +1424,96 @@
       return Boolean(filters.start || filters.end);
     }
 
+    // ------------------------------------------------------------------
+    // Sortable columns (Session 85). One small module, reused by any flat
+    // table: a sort state {key, dir}, a comparator with NULL/unset last
+    // regardless of direction (the same "Uncategorized is its own bucket"
+    // stance the rest of the app takes), header wiring with an arrow and
+    // aria-sort, and URL round-trip under a per-table prefix.
+    // ------------------------------------------------------------------
+    const NUMERIC_SORT_KEYS = new Set(["amount"]);
+
+    function makeSort() {
+      return { key: null, dir: "asc" };
+    }
+
+    function isUnset(v) {
+      return v === null || v === undefined || v === "";
+    }
+
+    function compareValues(a, b, key) {
+      if (NUMERIC_SORT_KEYS.has(key)) return Number(a) - Number(b);
+      // ISO dates compare correctly as strings; other text case-insensitively.
+      return String(a).localeCompare(String(b), undefined, { sensitivity: "base" });
+    }
+
+    // Returns a sorted copy; input order is preserved among equal keys
+    // (Array.prototype.sort is stable) and untouched when no sort is set.
+    function sortRows(rows, sort) {
+      if (!sort.key) return rows.slice();
+      const key = sort.key;
+      const sign = sort.dir === "desc" ? -1 : 1;
+      const set = rows.filter((r) => !isUnset(r[key]));
+      const unset = rows.filter((r) => isUnset(r[key]));
+      set.sort((x, y) => sign * compareValues(x[key], y[key], key));
+      return set.concat(unset); // unset last, whichever direction
+    }
+
+    // Click: same column toggles direction; a new column starts ascending.
+    function toggleSort(sort, key) {
+      if (sort.key === key) sort.dir = sort.dir === "asc" ? "desc" : "asc";
+      else {
+        sort.key = key;
+        sort.dir = "asc";
+      }
+    }
+
+    function renderSortIndicators(tableEl, sort) {
+      for (const th of tableEl.querySelectorAll("th[data-sort]")) {
+        const active = th.dataset.sort === sort.key;
+        let arrow = th.querySelector(".sort-arrow");
+        if (!arrow) {
+          arrow = document.createElement("span");
+          arrow.className = "sort-arrow";
+          arrow.setAttribute("aria-hidden", "true");
+          th.appendChild(arrow);
+        }
+        arrow.textContent = active ? (sort.dir === "desc" ? "\u25be" : "\u25b4") : "";
+        if (active) th.setAttribute("aria-sort", sort.dir === "desc" ? "descending" : "ascending");
+        else th.removeAttribute("aria-sort");
+      }
+    }
+
+    function wireSortableHeaders(tableEl, sort, onChange) {
+      for (const th of tableEl.querySelectorAll("th[data-sort]")) {
+        th.title = "Sort by " + th.textContent.trim();
+        th.addEventListener("click", () => {
+          toggleSort(sort, th.dataset.sort);
+          onChange();
+        });
+      }
+      renderSortIndicators(tableEl, sort);
+    }
+
+    // URL: <prefix>sort=<key>&<prefix>dir=<asc|desc>, omitted when unsorted.
+    function sortURLParams(prefix, sort) {
+      const out = {};
+      if (sort.key) {
+        out[prefix + "sort"] = sort.key;
+        if (sort.dir === "desc") out[prefix + "dir"] = "desc";
+      }
+      return out;
+    }
+
+    function readSortURLParams(params, prefix, sort, tableEl) {
+      const key = params.get(prefix + "sort");
+      const allowed = new Set(Array.from(tableEl.querySelectorAll("th[data-sort]")).map((th) => th.dataset.sort));
+      if (key && allowed.has(key)) {
+        sort.key = key;
+        sort.dir = params.get(prefix + "dir") === "desc" ? "desc" : "asc";
+      }
+    }
+
     // The stored txn_type is lowercase ("debit"/"credit"); it's shown
     // capitalised, as a small pill, in both tables.
     function displayType(txnType) {
@@ -1429,7 +1534,21 @@
     // ------------------------------------------------------------------
     // Tab: All transactions
     // ------------------------------------------------------------------
+    // The last-won filtered row set and this table's own sort. A header
+    // click re-renders from allRows without a fetch; a new fetch replaces
+    // allRows (only if it wins the sequence race) and the active sort is
+    // re-applied to the new rows rather than reset.
+    let allRows = [];
+    const allSort = makeSort();
+
     function renderTransactions(transactions) {
+      allRows = transactions;
+      renderTransactionsSorted();
+    }
+
+    function renderTransactionsSorted() {
+      const transactions = sortRows(allRows, allSort);
+      renderSortIndicators(tableEl, allSort);
       bodyEl.textContent = "";
 
       if (transactions.length === 0) {
@@ -3557,6 +3676,7 @@
       const urlTabRaw = params.get("tab");
       const urlTab = ["review", "reviewed", "dashboard"].includes(urlTabRaw) ? urlTabRaw : "all";
       readDashboardURLParams(params);
+      readSortURLParams(params, "", allSort, tableEl);
       // "needs_review" since Session 81; the old "uncategorized" key is still
       // honoured so earlier bookmarks keep their meaning.
       uncategorizedOnlyEl.checked = params.get("needs_review") !== "0" && params.get("uncategorized") !== "0";
@@ -3721,6 +3841,10 @@
 
     tabAllEl.addEventListener("click", () => setTab("all", true));
     tabReviewEl.addEventListener("click", () => setTab("review", true));
+    wireSortableHeaders(tableEl, allSort, () => {
+      updateURL(currentFilters());
+      renderTransactionsSorted();
+    });
     tabReviewedEl.addEventListener("click", () => setTab("reviewed", true));
     tabDashboardEl.addEventListener("click", () => setTab("dashboard", true));
 

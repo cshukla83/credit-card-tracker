@@ -9240,3 +9240,80 @@ cover the screen. Not seen running from here.
 ### Next steps
 Unchanged: manual verification of Sessions 73–84; STATE.md
 reconciliation; merge; then Module 1.
+
+## Session 85 — 2026-09-13
+
+### Goal
+Frontend only. Every column header on All Transactions sorts the
+already-loaded filtered row set client-side, with a direction indicator,
+URL round-trip, and the active sort re-applied when new data arrives. No
+backend change — `GET /transactions` already returns the whole filtered
+set.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `5b4fb29`, clean.
+Browser tooling: not available; traced, plus the pure sort functions were
+exercised in JavaScriptCore (below).
+
+**A small reusable module**, in the shared section so Session 86 can use
+it unchanged: `makeSort()` (`{key: null, dir: "asc"}`), `sortRows(rows,
+sort)`, `toggleSort(sort, key)`, `renderSortIndicators(table, sort)`,
+`wireSortableHeaders(table, sort, onChange)`, and `sortURLParams` /
+`readSortURLParams` under a per-table prefix. Headers declare their row
+field with `data-sort` — the seven columns the table actually renders:
+date (`txn_date`), description, type (`txn_type`), amount, merchant,
+category, subcategory. Bank and card id ride on the rows but are not
+columns, so they are not sortable here.
+
+**Comparator and the NULL-last rule.** `amount` compares numerically;
+everything else with `localeCompare(..., {sensitivity: "base"})` —
+case-insensitive text, and ISO dates order chronologically as strings.
+**Unset values (null, undefined, empty string) sort last regardless of
+direction:** the rows are split into set and unset, only the set part is
+sorted (stable, so ties keep the server's order), and the unset part is
+appended. Descending therefore does not float the blanks to the top —
+"Uncategorized" is its own bucket here as it is in aggregation and in the
+filters. Sanity-checked in JavaScriptCore: `[apple, food, Travel, null,
+""]` ascending, `[Travel, food, apple, null, ""]` descending, amounts
+`5,7,10,50,100`, dates newest-first, no-sort preserving input order, and
+the toggle sequence asc → desc → (other column) asc.
+
+**Click rules.** Same header toggles direction; a different header starts
+ascending; single column only. The active header shows ▴/▾ and
+`aria-sort`. Default (server) order stands until a header is clicked.
+
+**Re-apply on new data, inside the sequence guard.** `renderTransactions()`
+now stores the rows as `allRows` and renders via
+`renderTransactionsSorted()`, which sorts `allRows` by `allSort`. It is
+called only from inside `fetchTransactions()`'s `.then`, **after** the
+`seq !== requestSeq` check — so the sort is applied to whichever response
+actually won the race, and a stale response never reaches it. A header
+click re-renders from `allRows` with no fetch.
+
+**URL.** `sort=<key>&dir=desc` (asc omitted, nothing when unsorted),
+written by `updateURL()` on every state change alongside the filters, read
+on load before the first fetch and validated against the table's declared
+keys.
+
+**Tests.** No frontend suite exists and none was invented; no backend
+code was touched. Backend suite for the record: **508 passing**.
+
+**Verification — traced, plus the JavaScriptCore check of the pure
+functions; not seen rendered.** Adds to the manual-verification backlog.
+
+`docs/STATE.md`: a targeted sentence on the All Transactions description.
+
+### Outcome
+All Transactions sorts by any shown column, both directions, blanks
+last, surviving filter changes and reloads.
+
+### In plain English
+On the full transactions list, clicking a column heading now sorts by it
+— once for ascending, again for descending — with an arrow showing which
+column and way. Empty labels always sink to the bottom whichever way you
+sort, so they never crowd the top. The chosen sort stays put when filters
+change and is kept in the page address. Not seen running.
+
+### Next steps
+Session 86: the Reviewed tab drops grouping for this sortable table.
