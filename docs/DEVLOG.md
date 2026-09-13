@@ -8848,3 +8848,64 @@ each other, and don't belong in one sweep. Not seen running.
 ### Next steps
 Session 80 (review-status filter, backend), then 81–83. Manual
 verification backlog grows by this session.
+
+## Session 80 — 2026-09-13
+
+### Goal
+Backend. A `review_status` filter — the one predicate neither `filter_sql`
+nor any single-column param could express: a row is "incomplete" if any of
+category / subcategory / merchant is unset and "complete" only when all
+three are set. Needed by Session 81.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `98884cc`, clean.
+
+**One shared definition.** `filter_sql(review_status=)` in
+`storage/reads.py`, alongside the Session 74 label filters: `incomplete` →
+`(category IS NULL OR subcategory IS NULL OR merchant IS NULL)`; `complete`
+→ the three `IS NOT NULL` ANDed; any other value (including the empty
+string, and case variants — the set is closed and case-sensitive like
+`dimensions`) raises `ReviewStatusError`, mapped to **422** at the
+endpoints. It needs only `transactions`, so from another anchor it walks
+the chain like the label filters. Being in `filter_sql`, it composes with
+every other filter — `category=Food & review_status=incomplete` is "Food
+rows still missing a subcategory or merchant", which Session 81 relies on.
+
+**Wired where it is needed, and one step further.** `get_transactions()`
+and `GET /transactions` take it (the required surface). Because passing it
+through `aggregate_spend()` and `GET /transactions/aggregate` cost two
+lines, they take it too, and a test confirms the two statuses partition the
+total. The listing endpoints (`/categories`, `/cards`, …) were **not**
+wired: `filter_sql` being shared means their storage functions *could*
+accept it, but each endpoint's signature is explicit and nothing yet asks
+for it — the brief's "if it flows through for free" did not apply at the
+endpoint layer, and adding it there speculatively would violate the
+anti-speculation rule.
+
+**Tests** — 8 new, **508 passing** (500 + 8): the two statuses on the
+labelled fixture, that they partition the set, both combined with
+category / bank / card / month / date filters, four invalid values → 422
+with the message, the aggregate pass-through (totals partition, no
+"Uncategorized" category under `complete`, invalid → 422), and the
+`filter_sql` clause shapes including the chain walk from `cards`.
+
+**Docs.** `docs/STATE.md`: a targeted sentence on the new filter and its
+two values in the filter-mesh bullet. `docs/DATA_MODEL.md`: nothing (read
+path only).
+
+### Outcome
+Any consumer of `/transactions` or the aggregate can ask for the rows
+still needing review or the rows fully labelled, in combination with every
+other filter, through the one filter definition.
+
+### In plain English
+The system can now answer "which transactions still need attention?" —
+meaning any of the three labels is missing — and its opposite, "which are
+fully labelled?", as a filter that combines with all the others. Until
+now each label could only be asked about one at a time, which is why a
+row could look finished the moment its category was set. The review
+screen will switch to this next session.
+
+### Next steps
+Session 81: Review & Assign uses `review_status=incomplete`; then 82–83.

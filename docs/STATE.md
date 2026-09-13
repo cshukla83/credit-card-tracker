@@ -90,7 +90,12 @@ deliberate exception: the three labels do not narrow each other.** They
 are independent peers, selected in any combination, not a cascade like
 Bank → Card — mirroring the chart's design in which the three are chosen
 independently. (`/subcategories?category=` remains the review screen's
-per-row editor scope, unchanged, and is not part of the mesh.) *All
+per-row editor scope, unchanged, and is not part of the mesh.) **Since
+Session 80 `filter_sql` also takes `review_status`** — the one predicate no
+single column expresses: `incomplete` (any of the three labels `NULL`) or
+`complete` (all three set); anything else is a 422 — wired on
+`GET /transactions` and `GET /transactions/aggregate`, not on the listing
+endpoints. *All
 transactions* lists rows read-only with merchant/category/subcategory.
 *Review & assign* groups rows either by suggested category (default) or by
 description similarity at a chosen threshold; each row shows its

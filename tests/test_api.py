@@ -1242,3 +1242,64 @@ def test_pickers_narrow_by_label_filters(client, labelled_two_cards):
     assert client.get("/card-types", params={"merchant": "Bean Bar"}).json() == both[:1]
     assert client.get("/card-types", params={"subcategory": "Cafe", "merchant": "Uncategorized"}).json() == both[1:]
     assert client.get("/card-types", params={"category": "Travel", "bank": "FAKE BANK B"}).json() == []
+
+
+# --- review_status filter (Session 80) ------------------------------------------
+
+
+def test_review_status_incomplete_and_complete(client, labelled_two_cards):
+    # Only Jan 5 (Card A) has all three labels; Feb 10 has all three too.
+    complete = _labels(client, review_status="complete")
+    assert [r[1] for r in complete] == ["2026-01-05", "2026-02-10"]
+    assert all(None not in r[2:] for r in complete)
+    incomplete = _labels(client, review_status="incomplete")
+    assert [r[1] for r in incomplete] == ["2026-01-08", "2026-01-10", "2026-01-15", "2026-01-20"]
+    assert all(None in r[2:] for r in incomplete)
+    # The two partition the set.
+    assert len(complete) + len(incomplete) == len(client.get("/transactions").json())
+
+
+def test_review_status_combines_with_other_filters(client, labelled_two_cards):
+    card_a, card_b = labelled_two_cards
+    # Food rows still missing something: Card A Jan 10 (no subcategory) and Card B Jan 8 (no merchant).
+    assert [r[1] for r in _labels(client, category="Food", review_status="incomplete")] == ["2026-01-08", "2026-01-10"]
+    assert [r[1] for r in _labels(client, category="Food", review_status="complete")] == ["2026-01-05"]
+    assert [r[1] for r in _labels(client, bank="FAKE BANK B", review_status="incomplete")] == ["2026-01-08", "2026-01-20"]
+    assert [r[1] for r in _labels(client, card_id=card_a, statement_month="February-2026", review_status="complete")] == ["2026-02-10"]
+    assert _labels(client, bank="FAKE BANK B", review_status="complete") == []
+    assert [r[1] for r in _labels(client, start="2026-01-09", end="2026-01-31", review_status="incomplete")] == ["2026-01-10", "2026-01-15", "2026-01-20"]
+
+
+@pytest.mark.parametrize("value", ["done", "COMPLETE", "", "partial"])
+def test_review_status_invalid_value_is_422(client, labelled_two_cards, value):
+    # A closed value set, case-sensitive; an empty value counts as given-but-
+    # invalid, consistent with the other closed-set param (dimensions).
+    response = client.get("/transactions", params={"review_status": value})
+    assert response.status_code == 422
+    assert "review_status must be one of" in response.json()["detail"]
+
+
+def test_review_status_flows_through_to_aggregate(client, labelled_two_cards):
+    base = {"granularity": "year", "mode": "absolute", "year": "2026"}
+    all_rows = client.get("/transactions/aggregate", params=base).json()
+    complete = client.get("/transactions/aggregate", params={**base, "review_status": "complete"})
+    incomplete = client.get("/transactions/aggregate", params={**base, "review_status": "incomplete"})
+    assert complete.status_code == 200 and incomplete.status_code == 200
+    assert round(complete.json()["total"] + incomplete.json()["total"], 2) == all_rows["total"]
+    assert "Uncategorized" not in {c["category"] for c in complete.json()["categories"]}
+    assert client.get("/transactions/aggregate", params={**base, "review_status": "nope"}).status_code == 422
+
+
+def test_filter_sql_review_status_clauses():
+    from storage.reads import ReviewStatusError, filter_sql
+
+    _, where, params = filter_sql("transactions", review_status="incomplete")
+    assert where == " WHERE (transactions.category IS NULL OR transactions.subcategory IS NULL OR transactions.merchant IS NULL)"
+    assert params == []
+    _, where, _ = filter_sql("transactions", review_status="complete")
+    assert "IS NOT NULL AND" in where
+    # From another anchor it walks to transactions like the label filters.
+    joins, where, _ = filter_sql("cards", review_status="incomplete", always_join=("statements",))
+    assert "JOIN transactions" in joins and "transactions.category IS NULL" in where
+    with pytest.raises(ReviewStatusError):
+        filter_sql("transactions", review_status="maybe")

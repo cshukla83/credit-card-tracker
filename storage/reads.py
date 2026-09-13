@@ -9,6 +9,15 @@ from storage.normalize import normalize_label
 # from a dashboard bucket back into a filter selects exactly that bucket.
 UNCATEGORIZED_FILTER = "Uncategorized"
 
+# review_status (Session 80): the one predicate no single-column filter can
+# express -- a row's labelling is "complete" only when all three labels are
+# set, "incomplete" when any is missing.
+REVIEW_STATUSES = ("incomplete", "complete")
+
+
+class ReviewStatusError(ValueError):
+    """An invalid review_status value (the API maps it to 422)."""
+
 # The three tables form a chain: cards -(card_id)- statements -(statement_id)-
 # transactions. Every read-path filter lives on exactly one of them, and a
 # query anchored on any one table reaches the others by walking the chain.
@@ -33,6 +42,7 @@ def filter_sql(
     category: "str | None" = None,
     subcategory: "str | None" = None,
     merchant: "str | None" = None,
+    review_status: "str | None" = None,
     always_join: "tuple[str, ...]" = (),
 ) -> "tuple[str, str, list]":
     """Build the JOIN and WHERE clauses that narrow `anchor` by the given filters.
@@ -57,6 +67,13 @@ def filter_sql(
     combinable with each other and with every other filter, and treat the
     value "Uncategorized" as `IS NULL` (see UNCATEGORIZED_FILTER). An
     empty or whitespace-only value is ignored, as if not given.
+
+    review_status (Session 80): "incomplete" -> category IS NULL OR
+    subcategory IS NULL OR merchant IS NULL; "complete" -> all three IS
+    NOT NULL. Any other value raises ReviewStatusError. Combinable with
+    everything, including the label filters (e.g. category=Food &
+    review_status=incomplete: Food rows still missing a subcategory or
+    merchant).
 
     This is the single definition of the read-path filters; get_transactions
     and the three listing functions all use it, so "narrow by X" means the
@@ -103,6 +120,22 @@ def filter_sql(
         else:
             conditions.append(f"transactions.{column} = ?")
             params.append(value)
+    if review_status is not None:
+        if review_status not in REVIEW_STATUSES:
+            raise ReviewStatusError(
+                f"review_status must be one of {', '.join(REVIEW_STATUSES)}; got {review_status!r}"
+            )
+        needed.add("transactions")
+        if review_status == "incomplete":
+            conditions.append(
+                "(transactions.category IS NULL OR transactions.subcategory IS NULL "
+                "OR transactions.merchant IS NULL)"
+            )
+        else:
+            conditions.append(
+                "(transactions.category IS NOT NULL AND transactions.subcategory IS NOT NULL "
+                "AND transactions.merchant IS NOT NULL)"
+            )
 
     # Walk outward from the anchor in each direction along the chain, adding
     # a JOIN for every step until the farthest needed table in that
@@ -140,6 +173,7 @@ def get_transactions(
     category: "str | None" = None,
     subcategory: "str | None" = None,
     merchant: "str | None" = None,
+    review_status: "str | None" = None,
 ) -> "list[dict]":
     """Query transactions, optionally filtered by card, date range, statement
     month, bank, card type, and/or the three labels (Session 75; label
@@ -174,6 +208,7 @@ def get_transactions(
         category=category,
         subcategory=subcategory,
         merchant=merchant,
+        review_status=review_status,
         always_join=("statements", "cards"),
     )
     rows = conn.execute(

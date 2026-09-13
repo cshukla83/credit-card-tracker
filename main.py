@@ -24,7 +24,12 @@ from storage.categories import (
     suggest_category,
 )
 from storage.db import get_connection, init_db
-from storage.reads import get_transactions, list_card_types, list_statement_months
+from storage.reads import (
+    ReviewStatusError,
+    get_transactions,
+    list_card_types,
+    list_statement_months,
+)
 
 app = FastAPI()
 
@@ -84,6 +89,7 @@ def read_transactions(
     category: str | None = None,
     subcategory: str | None = None,
     merchant: str | None = None,
+    review_status: str | None = None,
     conn=Depends(get_db),
 ):
     start_date, end_date = _parse_date_range(start, end)
@@ -93,18 +99,24 @@ def read_transactions(
     # storage layer doesn't distinguish "no such value" from "value exists
     # but has no matching transactions," so this endpoint doesn't either --
     # no format validation, no 400s, for these three, unlike start/end.
-    return get_transactions(
-        conn,
-        card_id=card_id,
-        start_date=start_date,
-        end_date=end_date,
-        statement_month=statement_month,
-        bank=bank,
-        card_type=card_type,
-        category=category,
-        subcategory=subcategory,
-        merchant=merchant,
-    )
+    # review_status (Session 80) is the one filter with a closed value set,
+    # so it alone can be invalid: 422, like a bad `dimensions`.
+    try:
+        return get_transactions(
+            conn,
+            card_id=card_id,
+            start_date=start_date,
+            end_date=end_date,
+            statement_month=statement_month,
+            bank=bank,
+            card_type=card_type,
+            category=category,
+            subcategory=subcategory,
+            merchant=merchant,
+            review_status=review_status,
+        )
+    except ReviewStatusError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 # The three listing endpoints accept the same filters as /transactions,
@@ -127,6 +139,7 @@ def read_aggregate(
     category: str | None = None,
     subcategory: str | None = None,
     merchant: str | None = None,
+    review_status: str | None = None,
     dimensions: str | None = None,
     conn=Depends(get_db),
 ):
@@ -150,8 +163,9 @@ def read_aggregate(
         return aggregate_spend(
             conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type,
             dimensions=dims, category=category, subcategory=subcategory, merchant=merchant,
+            review_status=review_status,
         )
-    except DimensionsError as e:
+    except (DimensionsError, ReviewStatusError) as e:
         raise HTTPException(status_code=422, detail=str(e))
 
 

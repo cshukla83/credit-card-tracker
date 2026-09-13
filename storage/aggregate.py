@@ -166,6 +166,7 @@ def aggregate_spend(
     category: "str | None" = None,
     subcategory: "str | None" = None,
     merchant: "str | None" = None,
+    review_status: "str | None" = None,
 ) -> dict:
     """Net spend over [start_date, end_date] as a nested tree.
 
@@ -209,6 +210,7 @@ def aggregate_spend(
         category=category,
         subcategory=subcategory,
         merchant=merchant,
+        review_status=review_status,
     )
     scope = "(transactions.txn_type = 'debit' OR (transactions.txn_type = 'credit' AND transactions.is_payment = 0))"
     where = (where + " AND " if where else " WHERE ") + scope
