@@ -489,42 +489,105 @@ def assign_categories(
     return updated
 
 
-def list_categories(conn: sqlite3.Connection) -> "list[str]":
+def _catalog(
+    conn: sqlite3.Connection,
+    column: str,
+    *,
+    scope_sql: str = "",
+    scope_params: "list | None" = None,
+    **filters,
+) -> "list[str]":
+    """Sorted distinct non-null values of one label column, narrowed by the
+    shared read-path filters (Session 75). `scope_sql`/`scope_params` carry
+    an endpoint's own extra clause (list_subcategories' category scoping),
+    kept verbatim so pre-existing behaviour does not shift."""
+    from storage.reads import filter_sql  # reads is the lower layer
+
+    joins, where, params = filter_sql("transactions", **filters)
+    conditions = [f"transactions.{column} IS NOT NULL"]
+    if scope_sql:
+        conditions.append(scope_sql)
+    extra = " AND ".join(conditions)
+    where = (where + " AND " if where else " WHERE ") + extra
+    rows = conn.execute(
+        f"SELECT DISTINCT transactions.{column} AS value FROM transactions"
+        + joins + where + f" ORDER BY transactions.{column}",
+        [*params, *(scope_params or [])],
+    ).fetchall()
+    return [row["value"] for row in rows]
+
+
+def list_categories(
+    conn: sqlite3.Connection,
+    bank: "str | None" = None,
+    card_id: "int | None" = None,
+    card_type: "str | None" = None,
+    statement_month: "str | None" = None,
+    start_date=None,
+    end_date=None,
+) -> "list[str]":
     """Sorted distinct category values currently in use on transactions.
 
     There is no predefined category list anywhere in the system; this is
     the only source of "categories you've used before", and it feeds the
     frontend's dropdown/typeahead. Empty until the first assignment.
+
+    Narrowable by bank / card / card type / statement month / date range
+    (Session 75) so the picker shows only categories with data under the
+    other filters. Deliberately NOT narrowable by subcategory or merchant:
+    the three labels are independent peers in the filter bar, not a
+    cascade, so none of their option lists narrows another's.
     """
-    rows = conn.execute(
-        "SELECT DISTINCT category FROM transactions "
-        "WHERE category IS NOT NULL ORDER BY category"
-    ).fetchall()
-    return [row["category"] for row in rows]
+    return _catalog(
+        conn, "category",
+        bank=bank, card_id=card_id, card_type=card_type,
+        statement_month=statement_month, start_date=start_date, end_date=end_date,
+    )
 
 
-def list_subcategories(conn: sqlite3.Connection, category: "str | None" = None) -> "list[str]":
+def list_subcategories(
+    conn: sqlite3.Connection,
+    category: "str | None" = None,
+    bank: "str | None" = None,
+    card_id: "int | None" = None,
+    card_type: "str | None" = None,
+    statement_month: "str | None" = None,
+    start_date=None,
+    end_date=None,
+) -> "list[str]":
     """Sorted distinct subcategory values in use, optionally within one category.
 
-    Same role for subcategory as list_categories() has for category: there
-    is no predefined list, so this is the only source of "subcategories
-    you've used before". With `category`, only rows carrying that exact
-    category value are considered (values are Title-Cased on write, so an
-    exact comparison is a case-insensitive one in practice).
+    Same role for subcategory as list_categories() has for category. The
+    `category` scope predates Session 75 and serves the review screen's
+    per-row editor: an exact match on the stored value (values are
+    Title-Cased on write, so exact is case-insensitive in practice), kept
+    verbatim -- it is not the filter-bar narrowing, and it deliberately
+    stays the only label that scopes this list. The bank / card / card
+    type / month / date narrowing (Session 75) is the filter-bar mesh; no
+    merchant scoping, by design.
     """
-    sql = "SELECT DISTINCT subcategory FROM transactions WHERE subcategory IS NOT NULL"
-    params: list = []
-    if category is not None:
-        sql += " AND category = ?"
-        params.append(category)
-    rows = conn.execute(sql + " ORDER BY subcategory", params).fetchall()
-    return [row["subcategory"] for row in rows]
+    scope_sql, scope_params = ("transactions.category = ?", [category]) if category is not None else ("", [])
+    return _catalog(
+        conn, "subcategory", scope_sql=scope_sql, scope_params=scope_params,
+        bank=bank, card_id=card_id, card_type=card_type,
+        statement_month=statement_month, start_date=start_date, end_date=end_date,
+    )
 
 
-def list_merchants(conn: sqlite3.Connection) -> "list[str]":
-    """Sorted distinct merchant values in use. Unscoped: merchant matching is
-    global, so there is no category filter here (unlike list_subcategories)."""
-    rows = conn.execute(
-        "SELECT DISTINCT merchant FROM transactions WHERE merchant IS NOT NULL ORDER BY merchant"
-    ).fetchall()
-    return [row["merchant"] for row in rows]
+def list_merchants(
+    conn: sqlite3.Connection,
+    bank: "str | None" = None,
+    card_id: "int | None" = None,
+    card_type: "str | None" = None,
+    statement_month: "str | None" = None,
+    start_date=None,
+    end_date=None,
+) -> "list[str]":
+    """Sorted distinct merchant values in use. Never scoped by category or
+    subcategory (merchant matching is global, and the three labels don't
+    narrow each other); narrowable by the filter-bar mesh (Session 75)."""
+    return _catalog(
+        conn, "merchant",
+        bank=bank, card_id=card_id, card_type=card_type,
+        statement_month=statement_month, start_date=start_date, end_date=end_date,
+    )

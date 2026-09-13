@@ -78,7 +78,17 @@ picker's options are recomputed from the listing endpoints using all
 filters except its own (Bank also omits Card; picking a card snaps Bank to
 its bank), date inputs bounded by the real data, invalidated selections
 kept and flagged rather than silently cleared, URL as source of truth on
-load, and a second sequence counter guarding the pickers. *All
+load, and a second sequence counter guarding the pickers. **As of Session
+75 the mesh includes category, subcategory, and merchant on the API side**
+(frontend dropdowns pending, Session 76): `/categories`, `/subcategories`,
+and `/merchants` are narrowed by bank / card / card type / statement month
+/ date range, and `/cards`, `/statement-months`, `/card-types`, and
+`/transactions` are narrowed by the three labels in return — with **one
+deliberate exception: the three labels do not narrow each other.** They
+are independent peers, selected in any combination, not a cascade like
+Bank → Card — mirroring the chart's design in which the three are chosen
+independently. (`/subcategories?category=` remains the review screen's
+per-row editor scope, unchanged, and is not part of the mesh.) *All
 transactions* lists rows read-only with merchant/category/subcategory.
 *Review & assign* groups rows either by suggested category (default) or by
 description similarity at a chosen threshold; each row shows its

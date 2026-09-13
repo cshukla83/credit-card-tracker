@@ -1114,3 +1114,131 @@ def test_filter_sql_label_filters_normalise_combine_and_map_uncategorized_to_nul
     # From another anchor the label filter walks to transactions.
     joins, where, _ = filter_sql("cards", merchant="Shop", always_join=("statements",))
     assert "JOIN transactions" in joins and "transactions.merchant = ?" in where
+
+
+# --- label filters in the bidirectional mesh (Session 75) ---------------------
+
+
+@pytest.fixture
+def labelled_two_cards(two_cards_two_months):
+    """two_cards_two_months with labels:
+
+    Card A (FAKE BANK A): Jan 5 Food/Cafe/Bean Bar; Jan 10 Food/(none)/Corner
+      Shop; Jan 15 (none); Feb 10 Travel/Flights/Sky Air.
+    Card B (FAKE BANK B): Jan 8 Food/Cafe/(none); Jan 20 (none).
+    """
+    card_a, card_b = two_cards_two_months
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT t.id, t.txn_date, s.card_id FROM transactions t "
+            "JOIN statements s ON t.statement_id = s.id ORDER BY t.id"
+        ).fetchall()
+        by = {(r["card_id"], r["txn_date"]): r["id"] for r in rows}
+        assign_categories = __import__("storage.categories", fromlist=["assign_categories"]).assign_categories
+        assign_categories(conn, [
+            (by[(card_a, "2026-01-05")], "Food", "Cafe", "Bean Bar", None),
+            (by[(card_a, "2026-01-10")], "Food", None, "Corner Shop", None),
+            (by[(card_a, "2026-02-10")], "Travel", "Flights", "Sky Air", None),
+            (by[(card_b, "2026-01-08")], "Food", "Cafe", None, None),
+        ])
+    finally:
+        conn.close()
+    return card_a, card_b
+
+
+def _labels(client, **params):
+    # (bank, date, ...) tuples sorted by date, so expectations read chronologically.
+    return sorted(
+        ((t["bank"], t["txn_date"], t["category"], t["subcategory"], t["merchant"])
+         for t in client.get("/transactions", params=params).json()),
+        key=lambda r: (r[1], r[0]),
+    )
+
+
+def test_transactions_label_filters_alone_combined_and_uncategorized(client, labelled_two_cards):
+    card_a, card_b = labelled_two_cards
+    assert len(client.get("/transactions").json()) == 6
+    assert [r[1] for r in _labels(client, category="food")] == ["2026-01-05", "2026-01-08", "2026-01-10"]
+    assert [r[1] for r in _labels(client, subcategory="Cafe")] == ["2026-01-05", "2026-01-08"]
+    assert [r[1] for r in _labels(client, merchant="bean bar")] == ["2026-01-05"]
+    # Combined with each other.
+    assert [r[1] for r in _labels(client, category="Food", subcategory="Cafe", merchant="Bean Bar")] == ["2026-01-05"]
+    assert _labels(client, category="Food", subcategory="Flights") == []
+    # Combined with existing filters.
+    assert [r[1] for r in _labels(client, category="Food", bank="FAKE BANK B")] == ["2026-01-08"]
+    assert [r[1] for r in _labels(client, category="Food", card_id=card_a)] == ["2026-01-05", "2026-01-10"]
+    assert [r[1] for r in _labels(client, category="Food", card_type="FAKE CARD TYPE", start="2026-01-09")] == ["2026-01-10"]
+    assert [r[1] for r in _labels(client, subcategory="Flights", statement_month="February-2026")] == ["2026-02-10"]
+    # Uncategorized -> NULL at each label.
+    assert [r[1] for r in _labels(client, category="Uncategorized")] == ["2026-01-15", "2026-01-20"]
+    assert [r[1] for r in _labels(client, subcategory="uncategorized")] == ["2026-01-10", "2026-01-15", "2026-01-20"]
+    assert [r[1] for r in _labels(client, merchant="Uncategorized")] == ["2026-01-08", "2026-01-15", "2026-01-20"]
+    assert [r[1] for r in _labels(client, category="Food", subcategory="Uncategorized")] == ["2026-01-10"]
+    # Unknown label -> empty, like an unknown bank.
+    assert client.get("/transactions", params={"category": "Nothing"}).json() == []
+
+
+def test_label_catalogs_narrow_by_the_mesh_but_not_by_each_other(client, labelled_two_cards):
+    card_a, card_b = labelled_two_cards
+    # Unfiltered, as before.
+    assert client.get("/categories").json() == ["Food", "Travel"]
+    assert client.get("/subcategories").json() == ["Cafe", "Flights"]
+    assert client.get("/merchants").json() == ["Bean Bar", "Corner Shop", "Sky Air"]
+    # Each mesh param alone.
+    assert client.get("/categories", params={"bank": "FAKE BANK B"}).json() == ["Food"]
+    assert client.get("/categories", params={"card_id": card_b}).json() == ["Food"]
+    assert client.get("/categories", params={"statement_month": "February-2026"}).json() == ["Travel"]
+    assert client.get("/categories", params={"end": "2026-01-31"}).json() == ["Food"]
+    assert client.get("/categories", params={"card_type": "FAKE CARD TYPE"}).json() == ["Food", "Travel"]
+    assert client.get("/merchants", params={"bank": "FAKE BANK A", "start": "2026-01-09"}).json() == ["Corner Shop", "Sky Air"]
+    assert client.get("/subcategories", params={"card_id": card_b}).json() == ["Cafe"]
+    # All four narrowing params at once.
+    assert client.get(
+        "/merchants",
+        params={"bank": "FAKE BANK A", "card_id": card_a, "card_type": "FAKE CARD TYPE",
+                "statement_month": "January-2026", "start": "2026-01-01", "end": "2026-01-31"},
+    ).json() == ["Bean Bar", "Corner Shop"]
+    # Unknown values -> empty list, consistent with the other pickers.
+    assert client.get("/categories", params={"bank": "NO SUCH BANK"}).json() == []
+    assert client.get("/subcategories", params={"card_id": 9999}).json() == []
+    assert client.get("/merchants", params={"card_type": "NO SUCH TYPE"}).json() == []
+    # /subcategories' pre-existing category= scope is unchanged with no mesh params...
+    assert client.get("/subcategories", params={"category": "Food"}).json() == ["Cafe"]
+    assert client.get("/subcategories", params={"category": "Travel"}).json() == ["Flights"]
+    # ...and composes with the mesh.
+    assert client.get("/subcategories", params={"category": "Food", "bank": "FAKE BANK B"}).json() == ["Cafe"]
+    assert client.get("/subcategories", params={"category": "Travel", "bank": "FAKE BANK B"}).json() == []
+    # The three do NOT narrow each other: the params are simply not accepted
+    # (ignored as unknown query params), so the lists are unchanged.
+    assert client.get("/categories", params={"subcategory": "Flights"}).json() == ["Food", "Travel"]
+    assert client.get("/categories", params={"merchant": "Sky Air"}).json() == ["Food", "Travel"]
+    assert client.get("/merchants", params={"category": "Travel"}).json() == ["Bean Bar", "Corner Shop", "Sky Air"]
+    assert client.get("/merchants", params={"subcategory": "Cafe"}).json() == ["Bean Bar", "Corner Shop", "Sky Air"]
+    assert client.get("/subcategories", params={"merchant": "Sky Air"}).json() == ["Cafe", "Flights"]
+
+
+def test_pickers_narrow_by_label_filters(client, labelled_two_cards):
+    card_a, card_b = labelled_two_cards
+    ids = lambda rows: [c["id"] for c in rows]
+    # /cards
+    assert ids(client.get("/cards", params={"category": "Travel"}).json()) == [card_a]
+    assert ids(client.get("/cards", params={"category": "food"}).json()) == [card_a, card_b]
+    assert ids(client.get("/cards", params={"merchant": "Uncategorized"}).json()) == [card_a, card_b]
+    assert ids(client.get("/cards", params={"subcategory": "Cafe", "merchant": "Bean Bar"}).json()) == [card_a]
+    assert ids(client.get("/cards", params={"category": "Food", "statement_month": "February-2026"}).json()) == []
+    # Uncategorized category: cards with at least one unlabelled transaction.
+    assert ids(client.get("/cards", params={"category": "Uncategorized"}).json()) == [card_a, card_b]
+    assert ids(client.get("/cards", params={"category": "Uncategorized", "start": "2026-01-16"}).json()) == [card_b]
+    # /statement-months
+    assert client.get("/statement-months", params={"category": "Travel"}).json() == ["February-2026"]
+    assert client.get("/statement-months", params={"subcategory": "Cafe"}).json() == ["January-2026"]
+    assert client.get("/statement-months", params={"merchant": "Sky Air", "card_id": card_a}).json() == ["February-2026"]
+    assert client.get("/statement-months", params={"category": "Uncategorized"}).json() == ["January-2026"]
+    assert client.get("/statement-months", params={"category": "Nothing"}).json() == []
+    # /card-types
+    both = [{"bank": "FAKE BANK A", "card_type": "FAKE CARD TYPE"}, {"bank": "FAKE BANK B", "card_type": "FAKE CARD TYPE"}]
+    assert client.get("/card-types", params={"category": "Food"}).json() == both
+    assert client.get("/card-types", params={"merchant": "Bean Bar"}).json() == both[:1]
+    assert client.get("/card-types", params={"subcategory": "Cafe", "merchant": "Uncategorized"}).json() == both[1:]
+    assert client.get("/card-types", params={"category": "Travel", "bank": "FAKE BANK B"}).json() == []

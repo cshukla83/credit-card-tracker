@@ -8387,3 +8387,98 @@ the chart and use the new filters are the next two sessions' work.
 - `docs/STATE.md` received only a targeted correction this session, not a
   full reconciliation; Sessions 61–73's changes there are still
   outstanding.
+
+## Session 75 — 2026-09-13
+
+### Goal
+Backend only. Make category, subcategory, and merchant full peers in the
+filter bar's bidirectional-narrowing mesh: narrowed by bank / card / card
+type / statement month / date range like every other picker, narrowing
+those in return — but never narrowing each other. Session 76 wires the
+dropdowns.
+
+### What happened
+
+State confirmed first: `feature/merchant-aggregation` at `313be33`, clean.
+
+**Six endpoints changed**, all through the Session 74 `filter_sql`
+extension, no new SQL of their own:
+
+1. `GET /transactions` — `category`, `subcategory`, `merchant` params,
+   combinable with every existing one; "Uncategorized" → `IS NULL`.
+2. `GET /categories`, 3. `GET /subcategories`, 4. `GET /merchants` —
+   `bank`, `card_id`, `card_type`, `statement_month`, `start`, `end`
+   params. The three catalog functions in `storage/categories.py` now share
+   one `_catalog()` helper over `filter_sql` anchored on `transactions`.
+   `/subcategories`' pre-existing `category=` scope — the review screen's
+   per-row editor, an exact match on the stored value — is carried
+   verbatim as an extra clause, so its behaviour with no mesh params is
+   unchanged (tested), and it composes with the mesh when both are given.
+   These three still list real distinct assigned values only; a synthetic
+   "Uncategorized" option is Session 76's frontend concern.
+5. `GET /cards`, 6. `GET /statement-months`, and `GET /card-types` —
+   `category`, `subcategory`, `merchant` params, narrowing exactly as they
+   already narrow by each other; `GET /cards?category=Uncategorized`
+   returns the cards with at least one unlabelled transaction (tested).
+
+Shared date parsing and 400s apply on the new params of every endpoint
+through the existing `_parse_date_range`; a small `_mesh()` helper in
+`main.py` keeps the three catalog endpoints' signatures identical.
+
+**Why the three don't narrow each other.** Every other pair in the mesh
+narrows both ways because the pickers form a path through one row's
+identity — bank → card → statement → date — and any choice on that path
+legitimately shrinks the rest. The three labels are not on that path;
+they are three independent attributes of a row that the user combines
+freely. The chart's own locked design (Sessions 73–74) treats them the
+same way: three peers selected independently, in any order, not a
+cascade like Bank → Card. If `/merchants` were narrowed by the chosen
+category, picking a category would hide merchants the user might want to
+combine with a *different* category next, and the "picker never locks the
+user out" rule would break in a new place. So: the label catalogs accept
+the mesh params and nothing else; passing `subcategory=` to `/categories`
+(say) is simply an unknown query param and changes nothing — pinned by
+tests for all six such pairings.
+
+**Tests** — 3 new, larger ones (500 passing, 497 + 3), on a
+`labelled_two_cards` fixture that labels four of the six fixture rows
+across both cards and both months: `/transactions` label filters alone,
+combined with each other, combined with bank / card / card type / date /
+statement month, "Uncategorized" at each label and combined with a real
+label, unknown → empty; the three catalogs narrowed by each mesh param
+alone, all four at once, unknown → empty, `/subcategories?category=`
+unchanged alone and composed with the mesh, and the six non-narrowing
+pairings; the three pickers narrowed by each label, combined, with their
+existing params, and by "Uncategorized". One test helper's sort key was
+corrected mid-session — the assertion had been written chronologically
+while the helper sorted by bank first; the code was right.
+
+**Docs.** `docs/STATE.md`: the filter-bar narrowing sentence in *Current
+state* gained the mesh's new members and the one exception — targeted
+correction only, nothing else reconciled. `docs/DATA_MODEL.md`: nothing
+(read path only).
+
+### Outcome
+Selecting a bank, card, card type, month, or date range now narrows what
+categories, subcategories, and merchants are on offer, and selecting any
+of those three narrows the banks, cards, card types, and months in return
+— through the same one filter definition — while the three labels remain
+freely combinable with each other. Verified by the suite only.
+
+### In plain English
+The behind-the-scenes lists that feed the filter dropdowns now include
+category, finer label, and merchant as equal members: choose a bank or a
+month and those three lists shrink to what actually has data there; choose
+a category or a merchant and the bank, card, and month lists shrink to
+match. The one intentional difference is that the three labels never
+narrow one another — they are meant to be combined freely, like the
+chart's three interchangeable levels, rather than forming a chain where
+one choice limits the next. The dropdowns themselves arrive next session.
+
+### Next steps
+- **Session 76:** the three new dropdowns in the shared filter bar, wired
+  to this session's endpoints, with "Uncategorized" always offered
+  regardless of current data.
+- **Session 77:** the permutable three-level chart drill-down with the
+  "Level 1 / 2 / 3 =" order selects.
+- `docs/STATE.md` still awaits its full reconciliation (Sessions 61–75).

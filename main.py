@@ -81,6 +81,9 @@ def read_transactions(
     statement_month: str | None = None,
     bank: str | None = None,
     card_type: str | None = None,
+    category: str | None = None,
+    subcategory: str | None = None,
+    merchant: str | None = None,
     conn=Depends(get_db),
 ):
     start_date, end_date = _parse_date_range(start, end)
@@ -98,6 +101,9 @@ def read_transactions(
         statement_month=statement_month,
         bank=bank,
         card_type=card_type,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
     )
 
 
@@ -199,6 +205,9 @@ def read_cards(
     card_type: str | None = None,
     start: str | None = None,
     end: str | None = None,
+    category: str | None = None,
+    subcategory: str | None = None,
+    merchant: str | None = None,
     conn=Depends(get_db),
 ):
     start_date, end_date = _parse_date_range(start, end)
@@ -209,6 +218,9 @@ def read_cards(
         card_type=card_type,
         start_date=start_date,
         end_date=end_date,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
     )
 
 
@@ -219,6 +231,9 @@ def read_statement_months(
     card_type: str | None = None,
     start: str | None = None,
     end: str | None = None,
+    category: str | None = None,
+    subcategory: str | None = None,
+    merchant: str | None = None,
     conn=Depends(get_db),
 ):
     start_date, end_date = _parse_date_range(start, end)
@@ -229,6 +244,9 @@ def read_statement_months(
         card_type=card_type,
         start_date=start_date,
         end_date=end_date,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
     )
 
 
@@ -239,6 +257,9 @@ def read_card_types(
     bank: str | None = None,
     start: str | None = None,
     end: str | None = None,
+    category: str | None = None,
+    subcategory: str | None = None,
+    merchant: str | None = None,
     conn=Depends(get_db),
 ):
     start_date, end_date = _parse_date_range(start, end)
@@ -249,28 +270,73 @@ def read_card_types(
         bank=bank,
         start_date=start_date,
         end_date=end_date,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
+    )
+
+
+# The three label catalogs join the filter-bar mesh (Session 75): each is
+# narrowed by bank / card / card type / statement month / date range, and
+# each narrows those in return (see /cards etc. above) -- but none of the
+# three narrows another. They are independent peers in the filter bar, not
+# a cascade like Bank -> Card, mirroring the chart's own design where the
+# three are selected independently.
+def _mesh(bank, card_id, card_type, statement_month, start, end):
+    start_date, end_date = _parse_date_range(start, end)
+    return dict(
+        bank=bank, card_id=card_id, card_type=card_type,
+        statement_month=statement_month, start_date=start_date, end_date=end_date,
     )
 
 
 @app.get("/categories")
-def read_categories(conn=Depends(get_db)):
+def read_categories(
+    bank: str | None = None,
+    card_id: int | None = None,
+    card_type: str | None = None,
+    statement_month: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    conn=Depends(get_db),
+):
     # The catalog of categories in use -- there is no predefined list, so
     # this is what the frontend's dropdown/typeahead is populated from.
-    return list_categories(conn)
+    return list_categories(conn, **_mesh(bank, card_id, card_type, statement_month, start, end))
 
 
 @app.get("/merchants")
-def read_merchants(conn=Depends(get_db)):
-    # Sorted distinct merchants in use; unscoped, since merchant matching is
-    # global. Feeds the merchant dropdown and the multi-select typeahead.
-    return list_merchants(conn)
+def read_merchants(
+    bank: str | None = None,
+    card_id: int | None = None,
+    card_type: str | None = None,
+    statement_month: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    conn=Depends(get_db),
+):
+    # Sorted distinct merchants in use; never scoped by category or
+    # subcategory. Feeds the merchant dropdown and the multi-select typeahead.
+    return list_merchants(conn, **_mesh(bank, card_id, card_type, statement_month, start, end))
 
 
 @app.get("/subcategories")
-def read_subcategories(category: str | None = None, conn=Depends(get_db)):
-    # Sorted distinct subcategories in use; ?category= narrows to rows with
-    # that category. Feeds the per-row subcategory dropdown.
-    return list_subcategories(conn, category=category)
+def read_subcategories(
+    category: str | None = None,
+    bank: str | None = None,
+    card_id: int | None = None,
+    card_type: str | None = None,
+    statement_month: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    conn=Depends(get_db),
+):
+    # Sorted distinct subcategories in use; ?category= is the review
+    # screen's per-row scoping (pre-Session-75, unchanged); the rest is the
+    # filter-bar mesh.
+    return list_subcategories(
+        conn, category=category, **_mesh(bank, card_id, card_type, statement_month, start, end)
+    )
 
 
 @app.get("/transactions/{transaction_id}/suggestion")

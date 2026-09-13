@@ -63,6 +63,9 @@ def list_cards_with_statements(
     card_type: "str | None" = None,
     start_date=None,
     end_date=None,
+    category: "str | None" = None,
+    subcategory: "str | None" = None,
+    merchant: "str | None" = None,
 ) -> "list[dict]":
     """Cards that have at least one statement, ordered by id ascending,
     optionally narrowed by statement month, bank, card type, or a date range.
@@ -87,6 +90,9 @@ def list_cards_with_statements(
         card_type=card_type,
         start_date=start_date,
         end_date=end_date,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
         always_join=("statements",),
     )
     rows = conn.execute(

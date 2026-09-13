@@ -137,9 +137,13 @@ def get_transactions(
     statement_month: "str | None" = None,
     bank: "str | None" = None,
     card_type: "str | None" = None,
+    category: "str | None" = None,
+    subcategory: "str | None" = None,
+    merchant: "str | None" = None,
 ) -> "list[dict]":
     """Query transactions, optionally filtered by card, date range, statement
-    month, bank, and/or card type.
+    month, bank, card type, and/or the three labels (Session 75; label
+    filters follow filter_sql's rules -- normalised, "Uncategorized" = NULL).
 
     Every row carries, besides `transactions.*`, the two identity columns a
     consumer otherwise cannot derive: `card_id` (from statements) and `bank`
@@ -167,6 +171,9 @@ def get_transactions(
         card_type=card_type,
         start_date=start_date,
         end_date=end_date,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
         always_join=("statements", "cards"),
     )
     rows = conn.execute(
@@ -187,6 +194,9 @@ def list_statement_months(
     card_type: "str | None" = None,
     start_date=None,
     end_date=None,
+    category: "str | None" = None,
+    subcategory: "str | None" = None,
+    merchant: "str | None" = None,
 ) -> "list[str]":
     """Distinct statement_month values, most recent first, optionally narrowed.
 
@@ -207,6 +217,9 @@ def list_statement_months(
         card_type=card_type,
         start_date=start_date,
         end_date=end_date,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
     )
     rows = conn.execute(
         "SELECT statements.statement_month FROM statements"
@@ -226,6 +239,9 @@ def list_card_types(
     bank: "str | None" = None,
     start_date=None,
     end_date=None,
+    category: "str | None" = None,
+    subcategory: "str | None" = None,
+    merchant: "str | None" = None,
 ) -> "list[dict]":
     """Distinct (bank, card_type) pairs for cards with at least one statement,
     optionally narrowed. Ordered bank ASC, then card_type ASC.
@@ -244,6 +260,9 @@ def list_card_types(
         bank=bank,
         start_date=start_date,
         end_date=end_date,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
         always_join=("statements",),
     )
     rows = conn.execute(
