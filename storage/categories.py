@@ -201,11 +201,16 @@ def _suggest_subcategory_from(
         return None
     needle = description.casefold()
     wanted = category.casefold()
+    # `labeled` has held merchant-only rows (category NULL) since Session
+    # 55, and a subcategory-only write can give one a subcategory; the
+    # `is not None` guard before each casefold is the category and merchant
+    # engines' convention for exactly that pool (Session 91).
     peers = [
         row
         for row in labeled
         if row["id"] != target_id
         and row["subcategory"] is not None
+        and row["category"] is not None
         and row["category"].casefold() == wanted
         and row["description"].casefold() == needle
     ]

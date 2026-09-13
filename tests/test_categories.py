@@ -1034,6 +1034,56 @@ def test_batch_carries_merchant_category_suggestions(db_path):
         conn.close()
 
 
+# --- subcategory: None-safe against the merchant-widened pool (Session 91) -----
+
+
+def test_subcategory_pool_row_with_subcategory_but_no_category_is_skipped(db_path):
+    # Session 91 regression. Since Session 55 the labelled pool includes
+    # merchant-only rows (category NULL); a subcategory-only write (allowed
+    # since Session 53) can give such a row a subcategory. Tier 1 then
+    # reached row["category"].casefold() on None and the whole suggestion
+    # request 500'd. Such a row can never be a peer or a precedent -- no
+    # category to match -- so it is skipped, and the target falls through
+    # to whatever the other rows say.
+    conn = get_connection()
+    try:
+        target, stray, precedent = _seed(conn, ["SHOP A", "SHOP B", "SHOP C"])
+        _label(conn, target, "Grocery", None, "Amazon")
+        _label(conn, stray, None, "Orphan", "Amazon")  # merchant + subcategory, no category
+        assert _categories(conn, [stray]) == [None]
+        result = suggest_category(conn, target)["subcategory"]
+        assert result["match_type"] == "same_as_category"  # stray is not a precedent either
+        _label(conn, precedent, "Grocery", "Household", "Amazon")
+        result = suggest_category(conn, target)["subcategory"]
+        assert result == {"value": "Household", "confidence": 1.0, "match_type": "merchant_category", "precedents": 1}
+        # Batch path: the same pool, the same row, no raise.
+        assert suggest_categories(conn, [target, stray])[1]["subcategory"] is None
+    finally:
+        conn.close()
+
+
+def test_subcategory_pool_row_with_category_and_subcategory_but_no_merchant_is_skipped_as_precedent(db_path):
+    # The symmetric shape: category + subcategory set, merchant NULL. It is
+    # a valid Tier 1 peer (description match) but never a precedent.
+    conn = get_connection()
+    try:
+        target, no_merchant, twin = _seed(conn, ["SHOP A", "SHOP B", "shop a"])
+        _label(conn, target, "Grocery", None, "Amazon")
+        _label(conn, no_merchant, "Grocery", "Household", None)
+        assert suggest_category(conn, target)["subcategory"]["match_type"] == "same_as_category"
+        _label(conn, twin, "Grocery", "Snacks", None)
+        assert suggest_category(conn, target)["subcategory"] == {
+            "value": "Snacks", "confidence": 1.0, "match_type": "exact"
+        }
+        # And a target with no merchant of its own never enters the precedent tier.
+        conn.execute("UPDATE transactions SET subcategory = NULL WHERE id = ?", (twin,))
+        conn.execute("UPDATE transactions SET merchant = NULL WHERE id = ?", (target,))
+        conn.commit()
+        assert suggest_category(conn, target)["subcategory"]["match_type"] == "same_as_category"
+    finally:
+        conn.close()
+
+
 # --- list_subcategories -------------------------------------------------------
 
 

@@ -9730,3 +9730,98 @@ running.
 Manual verification: Down/Up movement, stops at both ends, highlight
 clears on typing, Enter with and without a highlight. Then the
 Session 88 backlog.
+
+## Session 91 — 2026-09-13
+
+### Goal
+Fix a production crash: `POST /transactions/suggestions` 500s with
+`AttributeError: 'NoneType' object has no attribute 'casefold'` at
+`storage/categories.py:209`. Reported from the running app's logs, not
+found in testing. Fix only; nothing else folded in.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `7cab698`, clean.
+Live confirmation: yes — the real app run on a scratchpad **copy** of
+the database (which contains the crashing row), over HTTP, before and
+after; `data/tracker.db` byte-identical afterwards.
+
+**Root cause, found not assumed — and it is not Session 88's new code.**
+Line 209 is the **Tier 1 `exact`** peers comprehension of
+`_suggest_subcategory_from()`:
+`row["subcategory"] is not None and row["category"].casefold() == wanted`.
+`git blame` dates that line to **Session 53** (`2b606df`); `git log -S`
+shows only Session 53 introducing the expression and Session 88 moving
+it unchanged. Session 88's own precedent block (lines 219–227) guards
+*both* `row["category"] is not None` and `row["merchant"] is not None`
+before casefolding, and the target's own `merchant is None` before
+entering the tier — so the "symmetric" merchant case was already safe;
+no second guard was needed.
+
+**Why the pool has category-NULL rows.** `_fetch_labeled()` is the one
+query shared by all three engines. **Session 55** (`8cc5ec6`) widened it
+from `category IS NOT NULL` to `category IS NOT NULL OR merchant IS NOT
+NULL` so the merchant engine could learn from merchant-only rows. The
+category engine (`row["category"] is not None`) and merchant engine
+(`row["merchant"] is not None`) each pre-filter the pool for their own
+field; the subcategory engine's Tier 1 never got that filter, and has
+been latent since Session 55: its `subcategory is not None` check
+short-circuits the casefold for the ordinary merchant-only row, so it
+only trips on a row with **subcategory set and category NULL**. That
+shape is legal — Session 53's assign accepts a subcategory-only write,
+and Session 82's inline editor offers the pencil on every cell,
+including subcategory on a row with no category. Read-only against the
+real database: **exactly one such row** exists (subcategory set,
+category NULL, merchant set), and because the pool is global, every
+suggestion request since that row was written crashed, whatever ids it
+asked for. So: a Session 53 comparison, exposed by Session 55's pool,
+triggered by one Session 82-era edit. Session 88 is coincidental in
+time only.
+
+**Fix.** One line: `and row["category"] is not None` before the
+casefold in Tier 1 — the pre-filter convention the category and merchant
+engines already apply to the same pool. Such a row has no category to
+match on, so "skip as a non-match" is the only correct semantics; it
+was never a candidate for a peer or a precedent.
+
+**Tests** (`test_categories.py`, 2 new). The reported shape first:
+target with a category and a merchant; pool row with merchant +
+subcategory and category NULL. Run before the fix it fails with the
+exact `categories.py:209 AttributeError`; after, the stray row is
+skipped, the target falls to `same_as_category`, and adding a real
+precedent yields `merchant_category` — through both the single and
+batch paths. The symmetric shape (category + subcategory, merchant NULL)
+is pinned too: a valid Tier 1 peer when the description matches, never
+a precedent, and a target without a merchant never enters the tier.
+**527 passing** (525 + 2).
+
+**Live verification.** `uvicorn main:app` on port 8765 with
+`DB_PATH=<scratchpad copy>`; `POST /transactions/suggestions` for one
+id. At `7cab698`: **HTTP 500**, server log carries the
+`row["category"].casefold()` traceback. With the fix: **HTTP 200**, a
+full suggestion body, no traceback. Server stopped; the copy discarded;
+the real file confirmed byte-identical to the copy taken before the run.
+
+**Docs.** STATE.md already describes the pool as "one labelled-rows
+query" shared by the three engines, which is accurate; no correction.
+
+### Outcome
+Suggestion requests no longer crash when any row has a subcategory but
+no category; that row is simply not a match for anything.
+
+### In plain English
+The suggestion service had been failing on every request because one
+transaction had been given a finer label without a main category — a
+combination the code never expected to see and tripped over. It now
+skips such rows, as the other parts of the engine already did. The bug
+was older than last session's change; that change just happened to land
+around the same time as the edit that exposed it. Confirmed fixed
+against a copy of the real data over a live request.
+
+### Next steps
+Noted, not fixed here: (1) the inline editor permits a subcategory on a
+row with no category, which is how the crashing row came to be — decide
+whether that should be allowed, or gated the way suggestions are; (2)
+`_suggest_subcategory_from` now walks the pool twice (peers, then
+precedents) — fine at 295 rows, could be one pass. Then the Session 88
+backlog.
