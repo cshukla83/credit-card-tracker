@@ -9617,3 +9617,56 @@ Manual verification: the new `precedent n/m · x%` badge next to a ghost
 subcategory, and bulk accept counting such rows while still skipping
 "same as category" rows. Then the standing backlog from Session 87
 (re-verification, STATE.md reconciliation 61–88, merge, Module 1).
+
+## Session 89 — 2026-09-13
+
+### Goal
+Inline editor (Session 82): select the pre-filled text whole when the
+pencil opens the combo box, so typing replaces it without a select-all
+or delete first.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `8ee4041`, clean.
+Browser tooling: not used; traced.
+
+**The change.** Both tab renderers ended with the same four lines —
+find `[data-autofocus]` in the freshly rendered body, `.focus()` it.
+Those are now one helper, `focusOpenEditor(container)`, which focuses
+the input and then calls `.select()` (guarded by a `typeof` check).
+Review & Assign and the Reviewed tab both call it, so the behaviour is
+identical on both and cannot drift. It applies to whatever the input was
+pre-filled with — saved value or carried-over suggestion — and to an
+empty input, where selecting nothing is harmless.
+
+**Item 2 — nothing else touched, and why it does not interfere.**
+`renderInlineEditor()` is unchanged. The selection is applied once per
+open: the editor's `input` listener re-renders only the typeahead menu,
+never the row, so no keystroke re-runs the tab renderer and re-selects.
+Enter still commits `input.value`; Escape and blur still cancel; the
+bulk-apply target list is computed before the input exists and does not
+read it. `.select()` fires no `input` event, so the menu filter is not
+disturbed either. The focus is programmatic (after render), not from a
+mouse click, so no mouseup collapses the selection.
+
+**Tests.** No frontend suite exists (Session 79's convention; Session
+88's `jsc` test covers pure functions only and a DOM selection is not
+one). No backend change; the suite was run for the record: **522
+passing**, unchanged. The page script was parsed under `jsc`
+(`checkSyntax`) after the edit.
+
+**Docs.** `docs/STATE.md`: one clause on the editor sentence.
+
+### Outcome
+Opening an inline editor lands with its pre-fill highlighted; the first
+keystroke replaces it. Same on both tabs, one code path.
+
+### In plain English
+When you click the pencil to edit a label, the text in the box is now
+already highlighted, so you can just start typing a new value instead of
+clearing the old one first. Not seen running.
+
+### Next steps
+Manual verification: click a pencil on each tab and confirm the
+pre-filled text is selected whole before typing. Then the Session 88
+backlog.

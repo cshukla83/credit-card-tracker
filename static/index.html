@@ -2248,10 +2248,7 @@
       reviewTableEl.style.display = "";
 
       // Focus whatever the open editor wants focused, now that it exists.
-      if (review.editing) {
-        const target = reviewBodyEl.querySelector("[data-autofocus]");
-        if (target) target.focus();
-      }
+      if (review.editing) focusOpenEditor(reviewBodyEl);
     }
 
     // --- selection bar -------------------------------------------------
@@ -2577,10 +2574,7 @@
       }
       reviewedTableEl.style.display = "";
 
-      if (review.editing) {
-        const target = reviewedBodyEl.querySelector("[data-autofocus]");
-        if (target) target.focus();
-      }
+      if (review.editing) focusOpenEditor(reviewedBodyEl);
     }
 
     // Count, total, and clear only. The per-field "accept suggestions"
@@ -2853,6 +2847,19 @@
       });
       cell.appendChild(edit);
       return cell;
+    }
+
+    // Focus the just-rendered editor's input and select its whole contents
+    // (Session 89), so typing replaces the pre-fill -- saved value or
+    // suggestion alike -- with no select-all or delete first. Only the two
+    // tab renderers call this, once per open; typing re-renders the menu,
+    // not the row, so the selection is never re-applied mid-edit. Both
+    // tabs' post-render focus went through here so they cannot drift.
+    function focusOpenEditor(container) {
+      const target = container.querySelector("[data-autofocus]");
+      if (!target) return;
+      target.focus();
+      if (typeof target.select === "function") target.select();
     }
 
     // The combo editor: an input pre-filled with the saved value, else the

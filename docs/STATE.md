@@ -126,7 +126,8 @@ share **one inline editor (Session 82)**: a saved value shows as text, an
 unset field with a suggestion shows it as ghost text plus its badge and a
 single click on the ghost accepts it, an unset field with none shows a
 dash; a small edit icon opens a combo box pre-filled with the saved value
-(else the suggestion) over the column's existing values — picking an
+(else the suggestion), that pre-fill selected whole on open so typing
+replaces it (Session 89), over the column's existing values — picking an
 option saves at once, typed text saves on Enter (a new value is just text
 not in the list), Escape/blur cancels. If the edited row is checked and
 2+ rows are checked, the save applies to every checked row's same column
