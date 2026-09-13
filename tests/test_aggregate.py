@@ -372,3 +372,164 @@ def test_endpoint_filters_and_unknown_values(client, ledger):
     assert body["total"] > 0
     body = _get(client, granularity="year", mode="absolute", year="2026", bank="NO SUCH BANK").json()
     assert body == {"period": {"start": "2026-01-01", "end": "2026-12-31"}, "total": 0.0, "categories": []}
+
+
+# --- depth="merchant" (Session 73) -------------------------------------------------
+
+
+@pytest.fixture
+def merchant_ledger(db_path):
+    """Fabricated rows covering every merchant-depth case in one place."""
+    conn = get_connection()
+    try:
+        _, ids = _seed_card(conn, "FAKE BANK A", "FAKE TYPE", [
+            _txn(date(2026, 5, 1), "A", 60.0),                    # 0 Food/Cafe/Bean Bar
+            _txn(date(2026, 5, 2), "B", 40.0),                    # 1 Food/Cafe/Bean Bar
+            _txn(date(2026, 5, 3), "C", 30.0),                    # 2 Food/Cafe/(none merchant)
+            _txn(date(2026, 5, 4), "D", 20.0),                    # 3 Food/(none)/Corner Shop
+            _txn(date(2026, 5, 5), "E", 10.0),                    # 4 Gadgets/Phones/Gizmo
+            _txn(date(2026, 5, 6), "F", 50.0, "credit"),          # 5 Gadgets/Phones/Gizmo refund
+            _txn(date(2026, 5, 7), "G", 15.0),                    # 6 Gadgets/Phones/Other Store
+            _txn(date(2026, 5, 8), "H", 5.0),                     # 7 (none)/(none)/Lone Merchant
+            _txn(date(2026, 5, 9), "I", 3.0),                     # 8 (none)/(none)/(none)
+            _txn(date(2026, 5, 10), "J", 500.0, "credit", is_payment=True),  # 9 excluded
+        ])
+        _label(conn, ids[0], "Food", "Cafe", "Bean Bar")
+        _label(conn, ids[1], "Food", "Cafe", "Bean Bar")
+        _label(conn, ids[2], "Food", "Cafe")
+        _label(conn, ids[3], "Food", merchant="Corner Shop")
+        _label(conn, ids[4], "Gadgets", "Phones", "Gizmo")
+        _label(conn, ids[5], "Gadgets", "Phones", "Gizmo")
+        _label(conn, ids[6], "Gadgets", "Phones", "Other Store")
+        _label(conn, ids[7], merchant="Lone Merchant")
+        _label(conn, ids[9], "Credit Card Payment", "Credit Card Payment", "FAKE BANK A")
+        return ids
+    finally:
+        conn.close()
+
+
+MAY = (date(2026, 5, 1), date(2026, 5, 31))
+
+
+def test_merchant_depth_groups_and_sorts_at_every_level(merchant_ledger):
+    conn = get_connection()
+    try:
+        result = aggregate_spend(conn, *MAY, depth="merchant")
+        cats = _by_cat(result)
+        assert list(cats) == ["Food", "Uncategorized", "Gadgets"]  # 150, 8, -25
+        food = cats["Food"]
+        assert food["amount"] == 150.0 and food["transaction_count"] == 4
+        assert [sc["subcategory"] for sc in food["subcategories"]] == ["Cafe", "Uncategorized"]
+        cafe = food["subcategories"][0]
+        assert cafe["amount"] == 130.0 and cafe["transaction_count"] == 3
+        assert cafe["merchants"] == [
+            {"merchant": "Bean Bar", "amount": 100.0, "transaction_count": 2},
+            {"merchant": "Uncategorized", "amount": 30.0, "transaction_count": 1},
+        ]
+        assert food["subcategories"][1]["merchants"] == [
+            {"merchant": "Corner Shop", "amount": 20.0, "transaction_count": 1},
+        ]
+        # Level totals are consistent with their merchants.
+        for c in result["categories"]:
+            for sc in c["subcategories"]:
+                assert round(sum(m["amount"] for m in sc["merchants"]), 2) == sc["amount"]
+                assert sum(m["transaction_count"] for m in sc["merchants"]) == sc["transaction_count"]
+        # Payment row is nowhere, at any level.
+        assert "Credit Card Payment" not in cats
+        assert result["total"] == 133.0
+    finally:
+        conn.close()
+
+
+def test_merchant_depth_uncategorized_nests_at_all_three_levels(merchant_ledger):
+    conn = get_connection()
+    try:
+        cats = _by_cat(aggregate_spend(conn, *MAY, depth="merchant"))
+        unc = cats["Uncategorized"]
+        assert unc["amount"] == 8.0 and unc["transaction_count"] == 2
+        assert [sc["subcategory"] for sc in unc["subcategories"]] == ["Uncategorized"]
+        # A merchant-only row (no category, no subcategory) nests as
+        # Uncategorized/Uncategorized/<merchant>; a fully unlabelled row as
+        # Uncategorized at all three levels.
+        assert unc["subcategories"][0]["merchants"] == [
+            {"merchant": "Lone Merchant", "amount": 5.0, "transaction_count": 1},
+            {"merchant": "Uncategorized", "amount": 3.0, "transaction_count": 1},
+        ]
+    finally:
+        conn.close()
+
+
+def test_merchant_depth_negative_merchant_net_is_not_clamped(merchant_ledger):
+    conn = get_connection()
+    try:
+        cats = _by_cat(aggregate_spend(conn, *MAY, depth="merchant"))
+        phones = cats["Gadgets"]["subcategories"][0]
+        assert phones["subcategory"] == "Phones" and phones["amount"] == -25.0
+        # Sorted descending: the positive merchant first, the negative one after.
+        assert phones["merchants"] == [
+            {"merchant": "Other Store", "amount": 15.0, "transaction_count": 1},
+            {"merchant": "Gizmo", "amount": -40.0, "transaction_count": 2},
+        ]
+        assert cats["Gadgets"]["amount"] == -25.0
+    finally:
+        conn.close()
+
+
+def test_subcategory_depth_is_identical_explicit_or_default(ledger, merchant_ledger):
+    conn = get_connection()
+    try:
+        for period in [(date(2026, 4, 1), date(2026, 5, 15)), MAY, (date(2020, 1, 1), date(2020, 12, 31))]:
+            default = aggregate_spend(conn, *period)
+            explicit = aggregate_spend(conn, *period, depth="subcategory")
+            assert default == explicit
+            # And the default shape has no merchants key anywhere.
+            for c in default["categories"]:
+                for sc in c["subcategories"]:
+                    assert "merchants" not in sc
+        # Merchant depth agrees with the default at the levels they share.
+        default = aggregate_spend(conn, *MAY)
+        deep = aggregate_spend(conn, *MAY, depth="merchant")
+        strip = lambda r: [
+            {**c, "subcategories": [{k: v for k, v in sc.items() if k != "merchants"} for sc in c["subcategories"]]}
+            for c in r["categories"]
+        ]
+        assert strip(deep) == default["categories"]
+        assert deep["total"] == default["total"] and deep["period"] == default["period"]
+    finally:
+        conn.close()
+
+
+def test_invalid_depth_raises(merchant_ledger):
+    conn = get_connection()
+    try:
+        with pytest.raises(ValueError):
+            aggregate_spend(conn, *MAY, depth="transaction")
+    finally:
+        conn.close()
+
+
+def test_endpoint_depth_param(client, merchant_ledger):
+    base = {"granularity": "month", "mode": "absolute", "month": "2026-05"}
+    default = _get(client, **base).json()
+    explicit = _get(client, **base, depth="subcategory").json()
+    assert default == explicit
+    for c in default["categories"]:
+        for sc in c["subcategories"]:
+            assert set(sc.keys()) == {"subcategory", "amount", "transaction_count"}
+
+    deep = _get(client, **base, depth="merchant")
+    assert deep.status_code == 200
+    body = deep.json()
+    for c in body["categories"]:
+        for sc in c["subcategories"]:
+            assert set(sc.keys()) == {"subcategory", "amount", "transaction_count", "merchants"}
+            for m in sc["merchants"]:
+                assert set(m.keys()) == {"merchant", "amount", "transaction_count"}
+    food = next(c for c in body["categories"] if c["category"] == "Food")
+    assert food["subcategories"][0]["merchants"][0] == {
+        "merchant": "Bean Bar", "amount": 100.0, "transaction_count": 2,
+    }
+
+    bad = _get(client, **base, depth="transaction")
+    assert bad.status_code == 422
+    assert "depth must be one of" in bad.json()["detail"]

@@ -1,7 +1,7 @@
 # PRD: Credit Card Statement Tracker
 
 ## 0. Document Control
-Version 1.2 — 12 Sep 2026 — Owner: Chandra — Consolidated from
+Version 1.3 — 13 Sep 2026 — Owner: Chandra — Consolidated from
 STATE.md, PRODUCT_VISION.md, EXPENSE_ANALYTICS_VISION.md, CONVENTIONS.md.
 This document is re-consolidated by hand whenever any of those source
 docs change materially — it is not maintained independently of them.
@@ -218,9 +218,17 @@ it's last in the build sequence.
 - Commentary is LLM-generated (e.g. a free-tier cloud API such as
   Gemini), not rule-based — a deliberate exception to the project's
   usual practice of never letting real financial data leave the machine.
-  Scoped narrowly: only aggregated category totals (category, amount,
-  period) are sent to the API — never individual transactions, merchant
-  names, or reference numbers.
+  Scoped narrowly. **As originally scoped (Session 37):** only aggregated
+  category totals (category, amount, period), never merchant names.
+  **Reversed on 2026-09-13 (Session 73), deliberately:** once the
+  dashboard's chart needed merchant-level grouping too, the payload was
+  reconsidered and widened to carry the label names at all three levels
+  — category, subcategory, and merchant — each with its net amount only,
+  plus the period and total. Still never sent: raw transaction
+  descriptions, individual transaction records, transaction counts,
+  amounts other than the per-label aggregates, and reference numbers. The
+  payload is built field by field from a fixed list, and a test guarantees
+  nothing else can ride along.
 
 **Build sequence:**
 
@@ -277,8 +285,11 @@ it's last in the build sequence.
   extracted text from real bank statements. They are git-ignored and must
   never be committed, pushed, or shared.
 - **The one named exception:** dashboard commentary (Section 7.3) sends
-  aggregated category-level totals only — category, amount, period — to
-  an external LLM API. Never individual transactions, merchant names, or
+  aggregated totals to an external LLM API: the period, the total, and
+  the label names with net amounts at category, subcategory, and
+  merchant level (widened from category-only on 2026-09-13, Session 73,
+  a recorded reversal of the original scoping). Never raw transaction
+  descriptions, individual transaction records, transaction counts, or
   reference numbers.
 
 ## 10. Assumptions & Open Questions
@@ -335,3 +346,4 @@ scoped):
 | 1.0 | 08 Sep 2026 | Initial consolidated PRD |
 | 1.1 | 08 Sep 2026 | Sourced from reconciled STATE.md/PRODUCT_VISION.md; removed source-currency note and staleness entry |
 | 1.2 | 12 Sep 2026 | Module 2 reconciled with what was built (Sessions 41–58): three labels, three suggestion engines, multi-select bulk actions in place of merchant-keyed bulk-apply, two grouping modes; requirements 1–2 marked built; verification gap recorded |
+| 1.3 | 13 Sep 2026 | Commentary payload scope corrected: labels to merchant depth with amounts only (Session 73 reversal), in 7.3 and 9 |

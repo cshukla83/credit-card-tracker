@@ -4,7 +4,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from storage.aggregate import PeriodError, aggregate_spend, resolve_period
+from storage.aggregate import DEPTHS, PeriodError, aggregate_spend, resolve_period
 from storage.cards import list_cards_with_statements
 from storage.commentary import (
     CommentaryNotConfiguredError,
@@ -118,9 +118,11 @@ def read_aggregate(
     bank: str | None = None,
     card_id: int | None = None,
     card_type: str | None = None,
+    depth: str = "subcategory",
     conn=Depends(get_db),
 ):
-    # Spend by category / subcategory over a period (Session 65). The
+    # Spend by category / subcategory over a period (Session 65), optionally
+    # one level finer per merchant (depth=merchant, Session 73). The
     # period is resolved server-side and echoed back as concrete dates, so a
     # client never re-derives them. Invalid period specs are 422 with the
     # reason; filters are the shared read-path set and, as on /transactions,
@@ -132,8 +134,12 @@ def read_aggregate(
         )
     except PeriodError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    if depth not in DEPTHS:
+        raise HTTPException(
+            status_code=422, detail=f"depth must be one of {', '.join(DEPTHS)}"
+        )
     return aggregate_spend(
-        conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type
+        conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type, depth=depth
     )
 
 
@@ -165,8 +171,11 @@ def write_commentary(
         )
     except PeriodError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    # Merchant depth (Session 73): the narrowed payload now carries labels
+    # down to merchant, amounts only.
     aggregate = aggregate_spend(
-        conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type
+        conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type,
+        depth="merchant",
     )
     signature = query_signature(start_date, end_date, bank=bank, card_id=card_id, card_type=card_type)
     try:

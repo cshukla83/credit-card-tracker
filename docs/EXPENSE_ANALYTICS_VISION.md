@@ -75,9 +75,17 @@ describe what was built, with the original intent noted where it changed.
 - Commentary is LLM-generated (e.g. a free-tier cloud API such as
   Gemini), not rule-based — a deliberate exception to the project's
   usual practice of never letting real financial data leave the machine.
-  Scoped narrowly: only aggregated category totals (category, amount,
-  period) are sent to the API — never individual transactions, merchant
-  names, or reference numbers.
+  Scoped narrowly. **As originally scoped (Session 37):** only aggregated
+  category totals (category, amount, period), never merchant names.
+  **Reversed on 2026-09-13 (Session 73), deliberately:** once the
+  dashboard's chart needed merchant-level grouping too, the payload was
+  reconsidered and widened to carry the label names at all three levels
+  — category, subcategory, and merchant — each with its net amount only,
+  plus the period and total. Still never sent: raw transaction
+  descriptions, individual transaction records, transaction counts,
+  amounts other than the per-label aggregates, and reference numbers. The
+  payload is built field by field from a fixed list, and a test guarantees
+  nothing else can ride along.
 
 ## Why the current architecture supports this
 

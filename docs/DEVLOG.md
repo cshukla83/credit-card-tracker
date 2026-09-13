@@ -8144,3 +8144,117 @@ was changed except one running total.
 
 ### Next steps
 None from this session.
+
+## Session 73 — 2026-09-13
+
+### Goal
+Extend the shared aggregation to an optional merchant depth, carry
+merchant into the LLM commentary payload, and correct two documents that
+still described the payload as category-only. Backend and docs; no
+frontend.
+
+### What happened
+
+Branch `feature/merchant-aggregation` created off `main` at `fcffc3d`,
+clean tree confirmed first.
+
+**`aggregate_spend(..., depth=)`.** A `depth` parameter, `"subcategory"`
+(default) or `"merchant"`, validated against a `DEPTHS` tuple
+(`ValueError` otherwise). The design decision: **group at the requested
+depth in SQL, on a separate code path, rather than always computing the
+merchant-level result and truncating it.** Two reasons. First, the brief
+required the default path to be byte-identical and its 63 tests to pass
+unmodified; the surest way to prove that is to leave that function body
+untouched behind an early `if depth == "merchant": return
+_aggregate_merchant_depth(...)`, which is what was done — the default
+path's SQL and folding did not change by a character, and all 63 tests
+passed without edits on the first run. Second, truncate-after-compute
+would make every default call pay for a three-column `GROUP BY` and a
+merchant-level fold it then throws away; the finer grouping should cost
+only the caller who asks for it. The price is some duplication between the
+two folders, accepted knowingly and named in the code.
+
+The merchant path applies the same scope rule (debits and non-payment
+credits), signed `SUM` netting, `NULL → "Uncategorized"` folding — now at
+three levels, so a merchant-only row nests as
+Uncategorized/Uncategorized/<merchant> and a fully unlabelled row as
+Uncategorized at all three — the same round-once-at-the-edge rule, and
+amount-descending order at every level. Each subcategory gains
+`merchants: [{merchant, amount, transaction_count}]`, uncapped. Level
+totals are consistent by construction (a test sums the merchants back up
+to each subcategory).
+
+**Endpoint.** `GET /transactions/aggregate` takes `depth` (default
+`subcategory`); anything else is 422 naming the allowed values. **Exposed
+publicly now, with no UI consumer yet**, deliberately: the parameter
+exists in the function anyway for the commentary path, its validation and
+shape are cheap to pin now while the code is fresh, and the chart's
+group-by-dimension selector — already discussed as the next frontend step
+— will need exactly this contract. Adding it later would mean a second
+pass over the same code; exposing it now costs one branch and three
+tests.
+
+**Commentary payload.** `write_commentary` now calls `aggregate_spend(...,
+depth="merchant")`, and `narrow_payload()` is rebuilt key by key to
+`{period: {start, end}, total, categories: [{category, amount,
+subcategories: [{subcategory, amount, merchants: [{merchant,
+amount}]}]}]}` — amounts only, no `transaction_count` at any level, order
+inherited from the aggregate. A subcategory without a `merchants` key (a
+default-depth aggregate) yields an empty list rather than failing. The
+prompt text now tells the model what the nesting is. This remains the
+vision document's one named exception to "no real data leaves the
+machine"; it is now exactly this shape and nothing else.
+
+**Tests.** `tests/test_aggregate.py` gains a `merchant_ledger` fixture and
+six tests: grouping and sorting at every level with level-consistency and
+payment exclusion; Uncategorized nesting at all three levels including
+the merchant-only row; a merchant netting to −40 inside a subcategory
+netting to −25, unclamped and ordered after the positive merchant;
+default equals explicit `depth="subcategory"` over three periods, no
+`merchants` key anywhere in the default shape, and merchant depth
+agreeing with the default at the levels they share; invalid depth raises;
+and the endpoint for both depths (key sets at every level) plus the 422.
+`tests/test_commentary.py`: the over-rich-aggregate test now asserts
+subcategory and merchant **are** present in `{name, amount}` form while
+`transaction_count`, `confidence`, raw descriptions, transaction records,
+and unknown keys are absent, and checks every leaf's key set; a new test
+covers the default-depth aggregate tolerance; the real-aggregate-to-mock
+test and the endpoint end-to-end test assert the nested shape. Full
+suite: **483 passing** (476 + 7). The 63 pre-existing aggregate tests are
+unmodified.
+
+**Docs.** `docs/EXPENSE_ANALYTICS_VISION.md` and `docs/PRD.md` (Module 3
+bullet; PRD also its privacy section, version 1.3) no longer say
+"never merchant names". Both now state the original Session 37 scope and
+the **dated reversal — 2026-09-13, Session 73** — reconsidered once the
+dashboard's chart needed merchant-level grouping too: labels at all three
+levels with net amounts only; still never raw descriptions, individual
+records, transaction counts, or reference numbers. `docs/STATE.md` was
+**not** reconciled this session, per the brief; `docs/DATA_MODEL.md`
+needed nothing (read path only).
+
+### Outcome
+One aggregation function serves two depths, the default provably
+unchanged; the commentary model receives labels down to merchant with
+amounts only; the planning documents say so, dated, instead of the
+opposite. Verified by the suite only.
+
+### In plain English
+The spending summary can now go one level deeper than before — from
+category, to finer label, to the individual merchant — when asked, while
+the summary the dashboard already uses is untouched and proven so by its
+existing checks passing without a single change. The commentary the
+outside model writes now sees that merchant level too, still as label
+names and totals only, never the raw bank text or any single transaction.
+That is a deliberate change of mind from the original plan, which had
+promised never to send merchant names; the plan documents now say so,
+with the date and the reason, rather than quietly disagreeing with the
+code.
+
+### Next steps
+- The chart's group-by-dimension selector (category / subcategory /
+  merchant) on the dashboard — separately scoped, not started; it will
+  consume `depth=merchant`.
+- `docs/STATE.md` has not been reconciled with this session and needs a
+  pass: the commentary-payload description and the aggregate endpoint's
+  shape have both moved.

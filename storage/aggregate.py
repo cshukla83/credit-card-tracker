@@ -13,10 +13,12 @@ import calendar
 import re
 import sqlite3
 from datetime import date, timedelta
+from typing import Literal
 
 from storage.reads import filter_sql
 
 GRANULARITIES = ("week", "month", "quarter", "year", "custom")
+DEPTHS = ("subcategory", "merchant")
 MODES = ("absolute", "relative")
 UNCATEGORIZED = "Uncategorized"
 
@@ -133,8 +135,19 @@ def aggregate_spend(
     bank: "str | None" = None,
     card_id: "int | None" = None,
     card_type: "str | None" = None,
+    depth: Literal["subcategory", "merchant"] = "subcategory",
 ) -> dict:
-    """Net spend per category and subcategory over [start_date, end_date].
+    """Net spend per category and subcategory over [start_date, end_date],
+    optionally one level finer, per merchant (Session 73).
+
+    depth="subcategory" (default) is the Session 65 query and shape, kept
+    byte-identical and on its own code path below. depth="merchant" groups
+    one level further and adds a `merchants` list to each subcategory
+    (sorted by amount descending; NULL merchant -> "Uncategorized", so a
+    merchant-only row nests as Uncategorized/Uncategorized/<merchant>). The
+    finer grouping is done in SQL rather than by truncating a merchant-
+    level result down to subcategory: that keeps the default path
+    provably unchanged and means each depth pays only for what it asks.
 
     In scope: every debit, plus every credit with is_payment = 0 (a refund).
     Excluded entirely: credits with is_payment = 1 (payments to the card) --
@@ -154,6 +167,11 @@ def aggregate_spend(
     card_type mean exactly what they do on /transactions. The period is
     passed through the same helper as start_date / end_date.
     """
+    if depth not in DEPTHS:
+        raise ValueError(f"depth must be one of {', '.join(DEPTHS)}")
+    if depth == "merchant":
+        return _aggregate_merchant_depth(conn, start_date, end_date, bank, card_id, card_type)
+
     joins, where, params = filter_sql(
         "transactions",
         card_id=card_id,
@@ -193,6 +211,88 @@ def aggregate_spend(
             {"subcategory": sub, "amount": round(v["amount"], 2), "transaction_count": v["count"]}
             for sub, v in b["subs"].items()
         ]
+        subs.sort(key=lambda x: x["amount"], reverse=True)
+        out.append(
+            {
+                "category": cat,
+                "amount": round(b["amount"], 2),
+                "transaction_count": b["count"],
+                "subcategories": subs,
+            }
+        )
+    out.sort(key=lambda x: x["amount"], reverse=True)
+    total = round(sum(b["amount"] for b in categories.values()), 2)
+    return {
+        "period": {"start": start_date.isoformat(), "end": end_date.isoformat()},
+        "total": total,
+        "categories": out,
+    }
+
+
+def _aggregate_merchant_depth(
+    conn: sqlite3.Connection,
+    start_date: date,
+    end_date: date,
+    bank: "str | None",
+    card_id: "int | None",
+    card_type: "str | None",
+) -> dict:
+    """depth="merchant": the same scope, netting, NULL folding, rounding and
+    ordering rules as the default path, grouped one level finer. Kept as
+    its own function so the default path's SQL and folding are untouched."""
+    joins, where, params = filter_sql(
+        "transactions",
+        card_id=card_id,
+        bank=bank,
+        card_type=card_type,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    scope = "(transactions.txn_type = 'debit' OR (transactions.txn_type = 'credit' AND transactions.is_payment = 0))"
+    where = (where + " AND " if where else " WHERE ") + scope
+    rows = conn.execute(
+        "SELECT transactions.category AS category, transactions.subcategory AS subcategory, "
+        "transactions.merchant AS merchant, "
+        "SUM(CASE WHEN transactions.txn_type = 'debit' THEN transactions.amount "
+        "ELSE -transactions.amount END) AS amount, "
+        "COUNT(*) AS n "
+        "FROM transactions" + joins + where
+        + " GROUP BY transactions.category, transactions.subcategory, transactions.merchant",
+        params,
+    ).fetchall()
+
+    categories: "dict[str, dict]" = {}
+    for row in rows:
+        cat = row["category"] if row["category"] is not None else UNCATEGORIZED
+        sub = row["subcategory"] if row["subcategory"] is not None else UNCATEGORIZED
+        mer = row["merchant"] if row["merchant"] is not None else UNCATEGORIZED
+        bucket = categories.setdefault(cat, {"amount": 0.0, "count": 0, "subs": {}})
+        bucket["amount"] += row["amount"]
+        bucket["count"] += row["n"]
+        s = bucket["subs"].setdefault(sub, {"amount": 0.0, "count": 0, "merchants": {}})
+        s["amount"] += row["amount"]
+        s["count"] += row["n"]
+        m = s["merchants"].setdefault(mer, {"amount": 0.0, "count": 0})
+        m["amount"] += row["amount"]
+        m["count"] += row["n"]
+
+    out = []
+    for cat, b in categories.items():
+        subs = []
+        for sub, v in b["subs"].items():
+            merchants = [
+                {"merchant": mer, "amount": round(mv["amount"], 2), "transaction_count": mv["count"]}
+                for mer, mv in v["merchants"].items()
+            ]
+            merchants.sort(key=lambda x: x["amount"], reverse=True)
+            subs.append(
+                {
+                    "subcategory": sub,
+                    "amount": round(v["amount"], 2),
+                    "transaction_count": v["count"],
+                    "merchants": merchants,
+                }
+            )
         subs.sort(key=lambda x: x["amount"], reverse=True)
         out.append(
             {

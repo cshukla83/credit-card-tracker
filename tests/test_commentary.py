@@ -122,9 +122,11 @@ def test_signature_depends_on_resolved_dates_not_on_how_they_were_asked_for():
 # --- narrow_payload ---------------------------------------------------------------
 
 
-def test_narrow_payload_carries_only_period_total_and_category_amounts():
-    # A deliberately over-rich aggregate: subcategories, transaction-level
-    # fields, and unknown future keys. None of it may reach the model.
+def test_narrow_payload_carries_labels_and_amounts_to_merchant_depth_and_nothing_else():
+    # A deliberately over-rich merchant-depth aggregate: transaction counts
+    # at every level, transaction-level fields, confidence-like keys, and
+    # unknown future keys. Labels and amounts at the three levels pass
+    # through; nothing else may reach the model (Session 73 shape).
     aggregate = {
         "period": {"start": "2026-04-01", "end": "2026-04-30", "extra": "x"},
         "total": 140.0,
@@ -133,27 +135,86 @@ def test_narrow_payload_carries_only_period_total_and_category_amounts():
                 "category": "Food",
                 "amount": 100.0,
                 "transaction_count": 1,
-                "subcategories": [{"subcategory": "Cafe", "amount": 100.0, "transaction_count": 1}],
-                "merchant": "SHOULD NOT LEAK",
-                "description": "SHOULD NOT LEAK",
-                "transactions": [{"id": 1, "description": "SHOULD NOT LEAK"}],
+                "subcategories": [
+                    {
+                        "subcategory": "Cafe",
+                        "amount": 100.0,
+                        "transaction_count": 1,
+                        "merchants": [
+                            {"merchant": "Bean Bar", "amount": 60.0, "transaction_count": 1,
+                             "confidence": 0.9, "description": "RAW LEAK"},
+                            {"merchant": "Uncategorized", "amount": 40.0, "transaction_count": 1},
+                        ],
+                    }
+                ],
+                "description": "RAW LEAK",
+                "transactions": [{"id": 1, "description": "RAW LEAK"}],
             },
-            {"category": "Uncategorized", "amount": 40.0, "transaction_count": 1, "subcategories": []},
+            {
+                "category": "Uncategorized",
+                "amount": 40.0,
+                "transaction_count": 1,
+                "subcategories": [
+                    {"subcategory": "Uncategorized", "amount": 40.0, "transaction_count": 1,
+                     "merchants": []},
+                ],
+            },
         ],
-        "future_key": "SHOULD NOT LEAK",
+        "future_key": "RAW LEAK",
     }
     payload = narrow_payload(aggregate)
     assert payload == {
         "period": {"start": "2026-04-01", "end": "2026-04-30"},
         "total": 140.0,
-        "categories": [{"category": "Food", "amount": 100.0}, {"category": "Uncategorized", "amount": 40.0}],
+        "categories": [
+            {
+                "category": "Food",
+                "amount": 100.0,
+                "subcategories": [
+                    {
+                        "subcategory": "Cafe",
+                        "amount": 100.0,
+                        "merchants": [
+                            {"merchant": "Bean Bar", "amount": 60.0},
+                            {"merchant": "Uncategorized", "amount": 40.0},
+                        ],
+                    }
+                ],
+            },
+            {
+                "category": "Uncategorized",
+                "amount": 40.0,
+                "subcategories": [
+                    {"subcategory": "Uncategorized", "amount": 40.0, "merchants": []},
+                ],
+            },
+        ],
     }
-    # Belt and braces: the serialised form contains no leaked marker or key.
     import json
 
     text = json.dumps(payload)
-    for forbidden in ("subcategor", "transaction", "merchant", "description", "LEAK", "future_key"):
+    for forbidden in ("transaction", "description", "confidence", "LEAK", "future_key", "extra"):
         assert forbidden not in text
+    # Every leaf dict is exactly {name, amount}.
+    for c in payload["categories"]:
+        assert set(c.keys()) == {"category", "amount", "subcategories"}
+        for sc in c["subcategories"]:
+            assert set(sc.keys()) == {"subcategory", "amount", "merchants"}
+            for m in sc["merchants"]:
+                assert set(m.keys()) == {"merchant", "amount"}
+
+
+def test_narrow_payload_tolerates_a_subcategory_depth_aggregate():
+    # No `merchants` key on a subcategory -> empty list, never a crash.
+    aggregate = {
+        "period": {"start": "2026-04-01", "end": "2026-04-30"},
+        "total": 1.0,
+        "categories": [
+            {"category": "Food", "amount": 1.0, "transaction_count": 1,
+             "subcategories": [{"subcategory": "Cafe", "amount": 1.0, "transaction_count": 1}]},
+        ],
+    }
+    assert narrow_payload(aggregate)["categories"][0]["subcategories"][0]["merchants"] == []
 
 
 def test_payload_sent_to_gemini_is_the_narrowed_one(db_path, seeded, with_key, monkeypatch):
@@ -161,15 +222,27 @@ def test_payload_sent_to_gemini_is_the_narrowed_one(db_path, seeded, with_key, m
     monkeypatch.setattr(com, "_call_gemini", fake)
     conn = get_connection()
     try:
-        aggregate = agg.aggregate_spend(conn, date(2026, 5, 1), date(2026, 5, 31))
-        assert aggregate["categories"][0]["subcategories"]  # the aggregate itself is rich
+        aggregate = agg.aggregate_spend(conn, date(2026, 5, 1), date(2026, 5, 31), depth="merchant")
+        assert aggregate["categories"][0]["subcategories"][0]["merchants"]  # rich input
         generate_commentary(conn, aggregate, "sig")
     finally:
         conn.close()
     assert len(fake.calls) == 1
     sent = fake.calls[0]["payload"]
     assert set(sent.keys()) == {"period", "total", "categories"}
-    assert all(set(c.keys()) == {"category", "amount"} for c in sent["categories"])
+    by_cat = {c["category"]: c for c in sent["categories"]}
+    assert set(by_cat) == {"Food", "Uncategorized"}
+    food = by_cat["Food"]
+    assert set(food.keys()) == {"category", "amount", "subcategories"}
+    assert [sc["subcategory"] for sc in food["subcategories"]] == ["Cafe"]
+    assert food["subcategories"][0]["merchants"] == [{"merchant": "Shop One", "amount": 100.0}]
+    unc = by_cat["Uncategorized"]["subcategories"][0]
+    assert unc["subcategory"] == "Uncategorized"
+    assert unc["merchants"] == [{"merchant": "Uncategorized", "amount": 40.0}]
+    for c in sent["categories"]:
+        for sc in c["subcategories"]:
+            assert "transaction_count" not in sc
+            assert all(set(m.keys()) == {"merchant", "amount"} for m in sc["merchants"])
     assert fake.calls[0]["api_key"] == "fake-test-key"
 
 
@@ -279,7 +352,10 @@ def test_endpoint_success_end_to_end(client, seeded, with_key, monkeypatch):
     assert sent["period"] == {"start": "2026-05-01", "end": "2026-05-31"}
     assert sent["total"] == 140.0
     assert {c["category"] for c in sent["categories"]} == {"Food", "Uncategorized"}
-    assert all(set(c.keys()) == {"category", "amount"} for c in sent["categories"])
+    # The endpoint aggregates at merchant depth for the payload (Session 73).
+    food = next(c for c in sent["categories"] if c["category"] == "Food")
+    assert set(food.keys()) == {"category", "amount", "subcategories"}
+    assert food["subcategories"][0]["merchants"] == [{"merchant": "Shop One", "amount": 100.0}]
     # Second call for a view that resolves to the same dates via a different
     # spec: the same cache row is replaced, not duplicated.
     _post(client, granularity="custom", start="2026-05-01", end="2026-05-31")

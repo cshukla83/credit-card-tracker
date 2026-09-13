@@ -2,9 +2,11 @@
 
 The one place in the project where data leaves the machine, and it is
 narrow by construction: `narrow_payload()` is the only thing that reaches
-the model call, and it carries category names, category amounts, the
-resolved period, and the total -- never subcategories, never any
-transaction-level field. A test pins that.
+the model call, and it carries the resolved period, the total, and label
+names with amounts down to merchant (category > subcategory > merchant, a
+Session 73 widening of the original category-only scope) -- never a raw
+description, never transaction counts, never any transaction-level field.
+A test pins that.
 
 Flow, given an already-computed aggregate for a resolved period:
   key missing            -> CommentaryNotConfiguredError (a config problem,
@@ -67,10 +69,14 @@ def query_signature(
 
 
 def narrow_payload(aggregate: dict) -> dict:
-    """The ONLY data that goes to the model: period, total, and per-category
-    name + amount. Built key by key from the aggregate rather than by
-    copying it, so a new key on the aggregate shape (or a subcategories
-    array, or anything transaction-level) can never ride along."""
+    """The ONLY data that goes to the model: period, total, and -- at each of
+    the three label levels -- the label name and its net amount. Built key
+    by key from a merchant-depth aggregate rather than by copying it, so
+    transaction counts, raw descriptions, individual transactions, or any
+    new key on the aggregate shape can never ride along. Order is the
+    aggregate's own (amount-descending at every level). A subcategory
+    without a `merchants` list (a subcategory-depth aggregate) yields an
+    empty merchants list rather than failing."""
     return {
         "period": {
             "start": aggregate["period"]["start"],
@@ -78,7 +84,22 @@ def narrow_payload(aggregate: dict) -> dict:
         },
         "total": aggregate["total"],
         "categories": [
-            {"category": c["category"], "amount": c["amount"]} for c in aggregate["categories"]
+            {
+                "category": c["category"],
+                "amount": c["amount"],
+                "subcategories": [
+                    {
+                        "subcategory": sc["subcategory"],
+                        "amount": sc["amount"],
+                        "merchants": [
+                            {"merchant": m["merchant"], "amount": m["amount"]}
+                            for m in sc.get("merchants", [])
+                        ],
+                    }
+                    for sc in c["subcategories"]
+                ],
+            }
+            for c in aggregate["categories"]
         ],
     }
 
@@ -86,9 +107,10 @@ def narrow_payload(aggregate: dict) -> dict:
 def _prompt(payload: dict) -> str:
     return (
         "You are writing a short, plain-English note for a personal spending "
-        "dashboard. Below are total card spend and spend by category for one "
-        "period (amounts in INR; a negative amount means refunds exceeded "
-        "spending in that category). Write 3 to 5 sentences: where most of the "
+        "dashboard. Below are total card spend and spend by category, with each "
+        "category's subcategories and the merchants under them, for one period "
+        "(amounts in INR; a negative amount means refunds exceeded spending "
+        "there). Write 3 to 5 sentences: where most of the "
         "money went, anything notable, and one practical, non-judgemental "
         "observation. Do not invent transactions, merchants, or causes. Do not "
         "use bullet points or headings.\n\n"
