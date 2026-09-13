@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from main import app
 from storage import aggregate as agg
-from storage.aggregate import PeriodError, aggregate_spend, resolve_period
+from storage.aggregate import DimensionsError, PeriodError, aggregate_spend, resolve_period
 from storage.cards import create_card
 from storage.categories import assign_categories
 from storage.db import get_connection, init_db
@@ -374,7 +374,7 @@ def test_endpoint_filters_and_unknown_values(client, ledger):
     assert body == {"period": {"start": "2026-01-01", "end": "2026-12-31"}, "total": 0.0, "categories": []}
 
 
-# --- depth="merchant" (Session 73) -------------------------------------------------
+# --- dimensions=["category", "subcategory", "merchant"] (Session 73) -------------------------------------------------
 
 
 @pytest.fixture
@@ -414,7 +414,7 @@ MAY = (date(2026, 5, 1), date(2026, 5, 31))
 def test_merchant_depth_groups_and_sorts_at_every_level(merchant_ledger):
     conn = get_connection()
     try:
-        result = aggregate_spend(conn, *MAY, depth="merchant")
+        result = aggregate_spend(conn, *MAY, dimensions=["category", "subcategory", "merchant"])
         cats = _by_cat(result)
         assert list(cats) == ["Food", "Uncategorized", "Gadgets"]  # 150, 8, -25
         food = cats["Food"]
@@ -444,7 +444,7 @@ def test_merchant_depth_groups_and_sorts_at_every_level(merchant_ledger):
 def test_merchant_depth_uncategorized_nests_at_all_three_levels(merchant_ledger):
     conn = get_connection()
     try:
-        cats = _by_cat(aggregate_spend(conn, *MAY, depth="merchant"))
+        cats = _by_cat(aggregate_spend(conn, *MAY, dimensions=["category", "subcategory", "merchant"]))
         unc = cats["Uncategorized"]
         assert unc["amount"] == 8.0 and unc["transaction_count"] == 2
         assert [sc["subcategory"] for sc in unc["subcategories"]] == ["Uncategorized"]
@@ -462,7 +462,7 @@ def test_merchant_depth_uncategorized_nests_at_all_three_levels(merchant_ledger)
 def test_merchant_depth_negative_merchant_net_is_not_clamped(merchant_ledger):
     conn = get_connection()
     try:
-        cats = _by_cat(aggregate_spend(conn, *MAY, depth="merchant"))
+        cats = _by_cat(aggregate_spend(conn, *MAY, dimensions=["category", "subcategory", "merchant"]))
         phones = cats["Gadgets"]["subcategories"][0]
         assert phones["subcategory"] == "Phones" and phones["amount"] == -25.0
         # Sorted descending: the positive merchant first, the negative one after.
@@ -480,7 +480,7 @@ def test_subcategory_depth_is_identical_explicit_or_default(ledger, merchant_led
     try:
         for period in [(date(2026, 4, 1), date(2026, 5, 15)), MAY, (date(2020, 1, 1), date(2020, 12, 31))]:
             default = aggregate_spend(conn, *period)
-            explicit = aggregate_spend(conn, *period, depth="subcategory")
+            explicit = aggregate_spend(conn, *period, dimensions=["category", "subcategory"])
             assert default == explicit
             # And the default shape has no merchants key anywhere.
             for c in default["categories"]:
@@ -488,7 +488,7 @@ def test_subcategory_depth_is_identical_explicit_or_default(ledger, merchant_led
                     assert "merchants" not in sc
         # Merchant depth agrees with the default at the levels they share.
         default = aggregate_spend(conn, *MAY)
-        deep = aggregate_spend(conn, *MAY, depth="merchant")
+        deep = aggregate_spend(conn, *MAY, dimensions=["category", "subcategory", "merchant"])
         strip = lambda r: [
             {**c, "subcategories": [{k: v for k, v in sc.items() if k != "merchants"} for sc in c["subcategories"]]}
             for c in r["categories"]
@@ -499,25 +499,37 @@ def test_subcategory_depth_is_identical_explicit_or_default(ledger, merchant_led
         conn.close()
 
 
-def test_invalid_depth_raises(merchant_ledger):
+@pytest.mark.parametrize(
+    "dimensions, fragment",
+    [
+        ([], "2 or 3"),
+        (["category"], "2 or 3"),
+        (["category", "subcategory", "merchant", "category"], "2 or 3"),
+        (["category", "transaction"], "unknown dimension"),
+        (["category", "category"], "must be distinct"),
+        (["merchant", "category", "merchant"], "must be distinct"),
+    ],
+)
+def test_invalid_dimensions_raise_with_a_clear_message(merchant_ledger, dimensions, fragment):
     conn = get_connection()
     try:
-        with pytest.raises(ValueError):
-            aggregate_spend(conn, *MAY, depth="transaction")
+        with pytest.raises(DimensionsError) as exc_info:
+            aggregate_spend(conn, *MAY, dimensions=dimensions)
+        assert fragment in str(exc_info.value)
     finally:
         conn.close()
 
 
-def test_endpoint_depth_param(client, merchant_ledger):
+def test_endpoint_dimensions_param(client, merchant_ledger):
     base = {"granularity": "month", "mode": "absolute", "month": "2026-05"}
     default = _get(client, **base).json()
-    explicit = _get(client, **base, depth="subcategory").json()
+    explicit = _get(client, **base, dimensions="category,subcategory").json()
     assert default == explicit
     for c in default["categories"]:
         for sc in c["subcategories"]:
             assert set(sc.keys()) == {"subcategory", "amount", "transaction_count"}
 
-    deep = _get(client, **base, depth="merchant")
+    deep = _get(client, **base, dimensions="category,subcategory,merchant")
     assert deep.status_code == 200
     body = deep.json()
     for c in body["categories"]:
@@ -530,6 +542,198 @@ def test_endpoint_depth_param(client, merchant_ledger):
         "merchant": "Bean Bar", "amount": 100.0, "transaction_count": 2,
     }
 
-    bad = _get(client, **base, depth="transaction")
-    assert bad.status_code == 422
-    assert "depth must be one of" in bad.json()["detail"]
+    for bad_value in ["category", "category,transaction", "category,category", "a,b,c,d"]:
+        bad = _get(client, **base, dimensions=bad_value)
+        assert bad.status_code == 422, bad_value
+        assert bad.json()["detail"]
+
+
+# --- arbitrary-order dimensions (Session 74) ---------------------------------------
+
+
+def _walk_sum(nodes, child_key):
+    """Every node's amount and count equal the sum of its children's."""
+    for n in nodes:
+        if child_key in n:
+            assert round(sum(c["amount"] for c in n[child_key]), 2) == n["amount"]
+            assert sum(c["transaction_count"] for c in n[child_key]) == n["transaction_count"]
+
+
+def test_three_level_merchant_first_ordering(merchant_ledger):
+    conn = get_connection()
+    try:
+        r = aggregate_spend(conn, *MAY, dimensions=["merchant", "category", "subcategory"])
+        assert set(r.keys()) == {"period", "total", "merchants"}
+        assert r["total"] == 133.0
+        merchants = r["merchants"]
+        # Level 1 sorted desc: Bean Bar 100, Uncategorized 33 (30+3), Corner
+        # Shop 20, Other Store 15, Lone Merchant 5, Gizmo -40.
+        assert [(m["merchant"], m["amount"]) for m in merchants] == [
+            ("Bean Bar", 100.0), ("Uncategorized", 33.0), ("Corner Shop", 20.0),
+            ("Other Store", 15.0), ("Lone Merchant", 5.0), ("Gizmo", -40.0),
+        ]
+        for m in merchants:
+            assert set(m.keys()) == {"merchant", "amount", "transaction_count", "categories"}
+            for c in m["categories"]:
+                assert set(c.keys()) == {"category", "amount", "transaction_count", "subcategories"}
+                for sc in c["subcategories"]:
+                    assert set(sc.keys()) == {"subcategory", "amount", "transaction_count"}
+        _walk_sum(merchants, "categories")
+        for m in merchants:
+            _walk_sum(m["categories"], "subcategories")
+        # The Uncategorized *merchant* spans two categories: Food/Cafe (30)
+        # and Uncategorized/Uncategorized (3).
+        unc = next(m for m in merchants if m["merchant"] == "Uncategorized")
+        assert [(c["category"], c["amount"]) for c in unc["categories"]] == [("Food", 30.0), ("Uncategorized", 3.0)]
+        assert unc["categories"][0]["subcategories"] == [{"subcategory": "Cafe", "amount": 30.0, "transaction_count": 1}]
+        assert unc["categories"][1]["subcategories"] == [{"subcategory": "Uncategorized", "amount": 3.0, "transaction_count": 1}]
+    finally:
+        conn.close()
+
+
+def test_three_level_subcategory_first_ordering(merchant_ledger):
+    conn = get_connection()
+    try:
+        r = aggregate_spend(conn, *MAY, dimensions=["subcategory", "merchant", "category"])
+        assert set(r.keys()) == {"period", "total", "subcategories"}
+        subs = r["subcategories"]
+        # Cafe 130, Uncategorized 28 (20 + 5 + 3), Phones -25.
+        assert [(x["subcategory"], x["amount"]) for x in subs] == [
+            ("Cafe", 130.0), ("Uncategorized", 28.0), ("Phones", -25.0),
+        ]
+        cafe = subs[0]
+        assert [(m["merchant"], m["amount"]) for m in cafe["merchants"]] == [("Bean Bar", 100.0), ("Uncategorized", 30.0)]
+        assert cafe["merchants"][0]["categories"] == [{"category": "Food", "amount": 100.0, "transaction_count": 2}]
+        unc = subs[1]  # the Uncategorized subcategory gathers rows from two categories
+        assert [(m["merchant"], m["amount"]) for m in unc["merchants"]] == [
+            ("Corner Shop", 20.0), ("Lone Merchant", 5.0), ("Uncategorized", 3.0),
+        ]
+        assert unc["merchants"][0]["categories"][0]["category"] == "Food"
+        assert unc["merchants"][1]["categories"][0]["category"] == "Uncategorized"
+        phones = subs[2]  # negative net survives at the deepest level
+        gizmo = next(m for m in phones["merchants"] if m["merchant"] == "Gizmo")
+        assert gizmo["amount"] == -40.0
+        assert gizmo["categories"] == [{"category": "Gadgets", "amount": -40.0, "transaction_count": 2}]
+        _walk_sum(subs, "merchants")
+    finally:
+        conn.close()
+
+
+def test_two_level_merchant_category_ordering(merchant_ledger):
+    conn = get_connection()
+    try:
+        r = aggregate_spend(conn, *MAY, dimensions=["merchant", "category"])
+        assert set(r.keys()) == {"period", "total", "merchants"}
+        for m in r["merchants"]:
+            assert set(m.keys()) == {"merchant", "amount", "transaction_count", "categories"}
+            for c in m["categories"]:
+                assert set(c.keys()) == {"category", "amount", "transaction_count"}  # innermost: no child key
+        bean = r["merchants"][0]
+        assert bean["merchant"] == "Bean Bar"
+        assert bean["categories"] == [{"category": "Food", "amount": 100.0, "transaction_count": 2}]
+        _walk_sum(r["merchants"], "categories")
+    finally:
+        conn.close()
+
+
+def test_every_ordering_is_a_renesting_of_the_same_leaves(merchant_ledger):
+    import itertools
+
+    conn = get_connection()
+    try:
+        def leaves(r, dims):
+            out = []
+
+            def rec(nodes, depth, path):
+                for n in nodes:
+                    p = {**path, dims[depth]: n[dims[depth]]}
+                    if depth + 1 < len(dims):
+                        rec(n[agg.PLURALS[dims[depth + 1]]], depth + 1, p)
+                    else:
+                        out.append((tuple(sorted(p.items())), n["amount"], n["transaction_count"]))
+
+            rec(r[agg.PLURALS[dims[0]]], 0, {})
+            return sorted(out)
+
+        results = {}
+        for dims in itertools.permutations(["category", "subcategory", "merchant"]):
+            r = aggregate_spend(conn, *MAY, dimensions=list(dims))
+            assert r["total"] == 133.0
+            results[dims] = leaves(r, dims)
+        first = next(iter(results.values()))
+        assert all(v == first for v in results.values())
+    finally:
+        conn.close()
+
+
+# --- label filters (Session 74) -----------------------------------------------------
+
+
+def test_label_filters_narrow_the_tree_under_two_orders(merchant_ledger):
+    conn = get_connection()
+    try:
+        r = aggregate_spend(conn, *MAY, category="Food")
+        assert [c["category"] for c in r["categories"]] == ["Food"]
+        assert r["total"] == 150.0
+        # Casing is normalised like the write path; works under a reordering.
+        r = aggregate_spend(conn, *MAY, category="food", dimensions=["merchant", "category", "subcategory"])
+        assert r["total"] == 150.0
+        assert all(c["category"] == "Food" for m in r["merchants"] for c in m["categories"])
+        assert [(m["merchant"], m["amount"]) for m in r["merchants"]] == [
+            ("Bean Bar", 100.0), ("Uncategorized", 30.0), ("Corner Shop", 20.0),
+        ]
+        r = aggregate_spend(conn, *MAY, subcategory="Cafe", merchant="Bean Bar")
+        assert r["total"] == 100.0
+        assert r["categories"][0]["subcategories"] == [{"subcategory": "Cafe", "amount": 100.0, "transaction_count": 2}]
+        r = aggregate_spend(conn, *MAY, bank="FAKE BANK A", category="Gadgets", subcategory="Phones", merchant="Gizmo")
+        assert r["total"] == -40.0
+        r = aggregate_spend(conn, *MAY, bank="NO SUCH BANK", category="Gadgets")
+        assert r["total"] == 0.0 and r["categories"] == []
+    finally:
+        conn.close()
+
+
+def test_uncategorized_filter_selects_null_at_each_label(merchant_ledger):
+    conn = get_connection()
+    try:
+        r = aggregate_spend(conn, *MAY, category="Uncategorized")  # merchant-only + fully unlabelled
+        assert r["total"] == 8.0
+        assert [c["category"] for c in r["categories"]] == ["Uncategorized"]
+        r = aggregate_spend(conn, *MAY, subcategory="uncategorized")  # + Food/Corner Shop
+        assert r["total"] == 28.0
+        r = aggregate_spend(conn, *MAY, merchant="Uncategorized", dimensions=["merchant", "subcategory"])
+        assert r["total"] == 33.0  # Food/Cafe/(none) 30 + fully unlabelled 3
+        assert [m["merchant"] for m in r["merchants"]] == ["Uncategorized"]
+        r = aggregate_spend(conn, *MAY, category="Uncategorized", subcategory="Uncategorized", merchant="Uncategorized")
+        assert r["total"] == 3.0
+    finally:
+        conn.close()
+
+
+def test_unknown_label_filter_values_return_empty(merchant_ledger):
+    conn = get_connection()
+    try:
+        for kwargs in [{"category": "Nothing"}, {"subcategory": "Nothing"}, {"merchant": "Nothing"}]:
+            r = aggregate_spend(conn, *MAY, **kwargs)
+            assert r == {"period": {"start": "2026-05-01", "end": "2026-05-31"}, "total": 0.0, "categories": []}
+    finally:
+        conn.close()
+
+
+def test_endpoint_dimension_orderings_and_label_filters(client, merchant_ledger):
+    base = {"granularity": "month", "mode": "absolute", "month": "2026-05"}
+    assert set(_get(client, **base).json().keys()) == {"period", "total", "categories"}  # omitted == default
+    r = _get(client, **base, dimensions="merchant,category,subcategory").json()
+    assert set(r.keys()) == {"period", "total", "merchants"}
+    assert "categories" in r["merchants"][0] and "subcategories" in r["merchants"][0]["categories"][0]
+    r = _get(client, **base, dimensions="subcategory,merchant").json()
+    assert set(r.keys()) == {"period", "total", "subcategories"}
+    assert set(r["subcategories"][0]["merchants"][0].keys()) == {"merchant", "amount", "transaction_count"}
+    assert _get(client, **base, dimensions=" merchant , category ").status_code == 200  # spaces tolerated
+
+    assert _get(client, **base, category="food").json()["total"] == 150.0
+    assert _get(client, **base, subcategory="Cafe", merchant="Bean Bar").json()["total"] == 100.0
+    r = _get(client, **base, category="Food", dimensions="merchant,subcategory").json()
+    assert [m["merchant"] for m in r["merchants"]] == ["Bean Bar", "Uncategorized", "Corner Shop"]
+    assert _get(client, **base, merchant="Uncategorized").json()["total"] == 33.0
+    assert _get(client, **base, category="Nothing").json()["categories"] == []

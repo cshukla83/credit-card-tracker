@@ -4,7 +4,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from storage.aggregate import DEPTHS, PeriodError, aggregate_spend, resolve_period
+from storage.aggregate import DimensionsError, PeriodError, aggregate_spend, resolve_period
 from storage.cards import list_cards_with_statements
 from storage.commentary import (
     CommentaryNotConfiguredError,
@@ -118,11 +118,16 @@ def read_aggregate(
     bank: str | None = None,
     card_id: int | None = None,
     card_type: str | None = None,
-    depth: str = "subcategory",
+    category: str | None = None,
+    subcategory: str | None = None,
+    merchant: str | None = None,
+    dimensions: str | None = None,
     conn=Depends(get_db),
 ):
-    # Spend by category / subcategory over a period (Session 65), optionally
-    # one level finer per merchant (depth=merchant, Session 73). The
+    # Spend over a period as a nested tree (Session 65; arbitrary-order
+    # 2- or 3-level `dimensions`, comma-separated, and combinable label
+    # filters since Session 74; default `category,subcategory` is the
+    # original shape). The
     # period is resolved server-side and echoed back as concrete dates, so a
     # client never re-derives them. Invalid period specs are 422 with the
     # reason; filters are the shared read-path set and, as on /transactions,
@@ -134,13 +139,14 @@ def read_aggregate(
         )
     except PeriodError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    if depth not in DEPTHS:
-        raise HTTPException(
-            status_code=422, detail=f"depth must be one of {', '.join(DEPTHS)}"
+    dims = [d.strip() for d in dimensions.split(",")] if dimensions is not None else None
+    try:
+        return aggregate_spend(
+            conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type,
+            dimensions=dims, category=category, subcategory=subcategory, merchant=merchant,
         )
-    return aggregate_spend(
-        conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type, depth=depth
-    )
+    except DimensionsError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @app.post("/analytics/commentary")
@@ -171,11 +177,11 @@ def write_commentary(
         )
     except PeriodError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    # Merchant depth (Session 73): the narrowed payload now carries labels
-    # down to merchant, amounts only.
+    # Full three-level tree (Session 73/74): the narrowed payload carries
+    # labels down to merchant, amounts only.
     aggregate = aggregate_spend(
         conn, start_date, end_date, bank=bank, card_id=card_id, card_type=card_type,
-        depth="merchant",
+        dimensions=["category", "subcategory", "merchant"],
     )
     signature = query_signature(start_date, end_date, bank=bank, card_id=card_id, card_type=card_type)
     try:
@@ -317,28 +323,15 @@ def read_clusters(body: ClusterRequest, conn=Depends(get_db)):
         raise HTTPException(status_code=404, detail=f"No such transaction(s): {e.missing_ids}")
 
 
-def normalize_category(value: str) -> str:
-    """The one place a category, subcategory, or merchant value is shaped before storage.
-
-    strip() then str.title(). NULL is the only representation of
-    "uncategorized", so an empty or whitespace-only category is rejected
-    rather than stored. Stripping keeps " Food" and "Food" from becoming
-    two catalog entries; title-casing keeps "food" and "Food" from doing
-    the same, whatever client sent them.
-
-    str.title() is a deliberately simple rule, not a smart title-caser:
-    it capitalises after any non-letter, so "mcdonald's" becomes
-    "Mcdonald'S" and "e-commerce" becomes "E-Commerce". Known and accepted
-    (Session 49) -- no special-casing until a real example causes a real
-    problem. Applied server-side so the stored form is consistent
-    regardless of what called the API; the Session 49 backfill applied the
-    same function to rows written before it existed. Subcategory (Session
-    53) uses this same function -- one rule, not a copy.
-    """
-    value = value.strip().title()
-    if not value:
-        raise ValueError("category must not be empty")
-    return value
+# The one place a category, subcategory, or merchant value is shaped before
+# storage -- strip() then Title Case, reject empty. NULL is the only
+# representation of "unset", so an empty or whitespace-only value is rejected
+# rather than stored; stripping keeps " Food" and "Food" from becoming two
+# catalog entries, title-casing keeps "food" and "Food" from doing the same.
+# Since Session 74 the rule itself lives in storage.normalize so the read-path
+# filters can apply the identical normalisation; this name is kept for the
+# validator and any caller that imports it from here.
+from storage.normalize import normalize_label as normalize_category  # noqa: E402
 
 
 class CategoryAssignment(BaseModel):

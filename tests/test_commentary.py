@@ -222,7 +222,7 @@ def test_payload_sent_to_gemini_is_the_narrowed_one(db_path, seeded, with_key, m
     monkeypatch.setattr(com, "_call_gemini", fake)
     conn = get_connection()
     try:
-        aggregate = agg.aggregate_spend(conn, date(2026, 5, 1), date(2026, 5, 31), depth="merchant")
+        aggregate = agg.aggregate_spend(conn, date(2026, 5, 1), date(2026, 5, 31), dimensions=["category", "subcategory", "merchant"])
         assert aggregate["categories"][0]["subcategories"][0]["merchants"]  # rich input
         generate_commentary(conn, aggregate, "sig")
     finally:

@@ -8258,3 +8258,132 @@ code.
 - `docs/STATE.md` has not been reconciled with this session and needs a
   pass: the commentary-payload description and the aggregate endpoint's
   shape have both moved.
+
+## Session 74 — 2026-09-13
+
+### Goal
+Backend only. Generalise Session 73's fixed-order aggregation into an
+arbitrary-order 2- or 3-dimension tree over category / subcategory /
+merchant, and add combinable category / subcategory / merchant filters to
+the shared filter set — the foundation for the dashboard's reorderable
+drill-down chart (Sessions 75–76), not the chart itself.
+
+### What happened
+
+Branch and state confirmed first: `feature/merchant-aggregation` at
+`fb50a6a`, clean, as Session 73 reported.
+
+**The normalisation rule moved down a layer.** `filter_sql` lives in
+`storage`, which cannot import `main` without a cycle, so the Title Case
+rule became `storage.normalize.normalize_label()`; `main.py` re-exports it
+under the existing name `normalize_category` for the validator and any
+importer. One rule, one place, now shared by write and read.
+
+**`filter_sql`: three label filters.** `category`, `subcategory`,
+`merchant` — columns on `transactions`, so they need no JOIN beyond
+reaching `transactions` from whatever anchor (the existing chain walk
+handles that). Each value is normalised with the same rule as the write
+path, so `food` matches `Food`; empty or whitespace-only values are
+ignored; all three combine with each other and with every existing
+filter. **The "Uncategorized" → `IS NULL` mapping, and why:** the
+aggregation output folds `NULL` labels to the word "Uncategorized" so a
+dashboard can show them as a bucket; the natural next gesture is to copy
+that bucket's name back into a filter and expect that bucket. Since
+"Uncategorized" is never a stored value (`NULL` is the only "unset"), a
+literal match would return nothing; mapping it to `IS NULL` makes the
+filter the exact inverse of the fold. The rule is documented at the
+constant `UNCATEGORIZED_FILTER` in `storage/reads.py` and in the branch
+that applies it, not only in tests.
+
+**`aggregate_spend(..., dimensions=)` replaces `depth=`.** `dimensions`
+is 2 or 3 distinct names from category / subcategory / merchant in the
+caller's order, default `["category", "subcategory"]`; `validate_dimensions`
+raises `DimensionsError` (the `PeriodError` pattern) naming what was wrong
+— count, unknown name, or duplicate. Internally it now **always** runs the
+one finest `GROUP BY category, subcategory, merchant`, folds `NULL` on
+all three, and builds a nested dict tree in the requested order, emitting
+`{<dimension>, amount, transaction_count, <plural of next>: [...]}` per
+node, no child key at the innermost level, sorted amount-descending at
+every level (stable, so equal amounts keep query order). The default
+two-level tree is the three-level result rolled up one level, which is
+why the Session 65 shape is reproduced byte for byte: **all 63 Session 65
+default-path tests passed unmodified**, as did every commentary test.
+Session 73's six `depth=` tests had their call sites converted to
+`dimensions=` with **no assertion changed**, and passed — which is itself
+the proof that `["category","subcategory","merchant"]` equals last
+session's `depth="merchant"` output.
+
+**Why replace rather than keep both.** Neither the function's `depth`
+parameter nor the endpoint's `depth` query param had any consumer outside
+this repository — the only caller was the commentary endpoint, changed in
+the same commit — so keeping `depth` alongside `dimensions` would have been
+two spellings of one thing with a translation layer between them and
+nothing to protect. This is the same reasoning as every prior in-place
+reshape (Sessions 42, 53, 55, 73): reshape while there is no compatibility
+cost, and stop doing so the day a second consumer appears. The Session 73
+merchant-path duplication is gone with it — one folder, not two.
+
+**Endpoint.** `GET /transactions/aggregate` gains `category`,
+`subcategory`, `merchant` (combinable with each other, with bank / card /
+card_type / period, and with `dimensions`) and `dimensions` as a
+comma-separated list (spaces tolerated), default `category,subcategory`;
+invalid → 422 with the `DimensionsError` message as detail.
+
+**Commentary: no behaviour change.** `write_commentary` now passes
+`dimensions=["category", "subcategory", "merchant"]`; `narrow_payload()`
+is untouched and its output is byte-identical (the three-level tree's keys
+are exactly the ones it already read). The one `depth=` call site in
+`tests/test_commentary.py` was renamed; no expected value changed.
+
+**Tests** — 14 new, 497 passing (483 + 14). Aggregate: merchant-first
+and subcategory-first three-level trees checked for key sets at every
+level, order, sums rolling up correctly (a `_walk_sum` helper), the
+Uncategorized merchant spanning two categories, and a −40 merchant
+inside a −25 subcategory; a two-level merchant/category tree; all six
+permutations agreeing on total and on the multiset of leaves; six invalid
+`dimensions` cases by message fragment; label filters alone, combined,
+with bank, under two orders, with casing normalised; "Uncategorized"
+selecting `NULL` at each label and all three together; unknown label
+values → empty; the endpoint's orderings, key names, tolerant parsing,
+four 422s, and the label filters including "Uncategorized". A
+`filter_sql` unit test pins the clause shapes, the no-parameter `IS NULL`
+form, ignored blanks, and the chain walk from `cards`.
+
+**Docs.** `docs/STATE.md`: **targeted correction only** — the `filter_sql`
+bullet gained the three label filters and the "Uncategorized"/`NULL`
+mapping, and, since no aggregation bullet existed to correct (Session 73
+did not touch STATE.md), one bullet describing `dimensions` was added
+where the brief expected the `depth` description to be; nothing else was
+reconciled. Vision and PRD: Module 3's aggregation bullet now notes the
+arbitrary-order tree and combinable label filters as of this session,
+frontend still to come. `docs/DATA_MODEL.md` needed nothing.
+
+### Outcome
+One aggregation function produces any 2- or 3-level nesting of the three
+labels from one query, the original shape provably unchanged; the shared
+filter set narrows by any combination of labels with "Uncategorized"
+meaning the unlabelled rows; both are on the public endpoint. Verified
+by the suite only.
+
+### In plain English
+The spending summary can now be arranged in any order — merchants first,
+then categories, then finer labels, or any other nesting — from a single
+pass over the data, and the arrangement the dashboard already uses is
+proven unchanged by its existing checks passing without edits. The shared
+filters can also narrow by category, finer label, or merchant, alone or
+together with each other and the existing bank and date filters; typing
+"Uncategorized" picks out the rows that have no label at all, mirroring
+how the summary already names them. Last session's simpler "one level
+deeper" switch was replaced rather than kept alongside, because nothing
+outside this project used it. The screens that will let a user reorder
+the chart and use the new filters are the next two sessions' work.
+
+### Next steps
+- **Session 75:** the Merchant / Category / Subcategory filter row, shared
+  across all three tabs, independently combinable (frontend).
+- **Session 76:** rework the chart's click-drill interaction to the
+  permutable three-level tree, with three "Level 1 / 2 / 3 =" order
+  selects (frontend).
+- `docs/STATE.md` received only a targeted correction this session, not a
+  full reconciliation; Sessions 61–73's changes there are still
+  outstanding.

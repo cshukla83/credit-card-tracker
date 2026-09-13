@@ -176,7 +176,25 @@ system font stack.
   `transactions`, joining only the tables the active filters need.
   `get_transactions()` and all three listing endpoints use it; each
   listing accepts every filter except the one dimension it *is*, so a
-  picker can never narrow itself.
+  picker can never narrow itself. Since Session 74 it also takes three
+  independently combinable label filters — `category`, `subcategory`,
+  `merchant` — columns on `transactions` (no extra JOIN), normalised with
+  the same Title Case rule as the write path (now
+  `storage.normalize.normalize_label`, re-exported by `main.py`), with
+  the value **"Uncategorized" meaning `IS NULL`** — the deliberate
+  inverse of aggregation's NULL → "Uncategorized" output folding.
+- **Aggregation is one query, any order of nesting** (Session 74):
+  `storage.aggregate.aggregate_spend(..., dimensions=[...])` always runs
+  the single finest `GROUP BY category, subcategory, merchant`, folds NULL
+  to "Uncategorized" on all three, and builds the tree in Python in the
+  caller's order — 2 or 3 distinct names, default
+  `["category", "subcategory"]` reproducing the Session 65 shape exactly.
+  Node keys adapt to the dimension at each level (`categories` /
+  `subcategories` / `merchants`); sort is amount-descending at every
+  level. This replaced Session 73's `depth` parameter outright rather than
+  alongside it — no external consumer of either, so reshaping in place
+  carried no compatibility cost. `GET /transactions/aggregate` exposes
+  `dimensions` as a comma-separated param and the three label filters.
 - **Fuzzy similarity has one definition**:
   `storage.categories.fuzzy_similarity()` (Session 50) — `difflib`
   `SequenceMatcher.ratio()` over casefolded strings. The category and

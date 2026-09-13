@@ -1,6 +1,13 @@
 import sqlite3
 
 from storage.dates import to_date_str
+from storage.normalize import normalize_label
+
+# Label filters (category, subcategory, merchant) accept this value to mean
+# "rows where that label is NULL" -- the deliberate inverse of the
+# aggregation output's NULL -> "Uncategorized" folding, so a value copied
+# from a dashboard bucket back into a filter selects exactly that bucket.
+UNCATEGORIZED_FILTER = "Uncategorized"
 
 # The three tables form a chain: cards -(card_id)- statements -(statement_id)-
 # transactions. Every read-path filter lives on exactly one of them, and a
@@ -23,6 +30,9 @@ def filter_sql(
     card_type: "str | None" = None,
     start_date=None,
     end_date=None,
+    category: "str | None" = None,
+    subcategory: "str | None" = None,
+    merchant: "str | None" = None,
     always_join: "tuple[str, ...]" = (),
 ) -> "tuple[str, str, list]":
     """Build the JOIN and WHERE clauses that narrow `anchor` by the given filters.
@@ -35,11 +45,18 @@ def filter_sql(
     objects or ISO strings.
 
     Which table each filter needs:
-      card_id, statement_month  -> statements
-      bank, card_type           -> cards
-      start_date, end_date      -> transactions
+      card_id, statement_month              -> statements
+      bank, card_type                       -> cards
+      start_date, end_date                  -> transactions
+      category, subcategory, merchant       -> transactions (Session 74)
     Intermediate tables on the way from `anchor` are joined too, so a cards
     query with a date range walks cards -> statements -> transactions.
+
+    The three label filters are normalised with the same Title Case rule
+    the write path applies (so "food" matches "Food"), are independently
+    combinable with each other and with every other filter, and treat the
+    value "Uncategorized" as `IS NULL` (see UNCATEGORIZED_FILTER). An
+    empty or whitespace-only value is ignored, as if not given.
 
     This is the single definition of the read-path filters; get_transactions
     and the three listing functions all use it, so "narrow by X" means the
@@ -73,6 +90,19 @@ def filter_sql(
         needed.add("transactions")
         conditions.append("transactions.txn_date <= ?")
         params.append(to_date_str(end_date))
+    for column, raw in (("category", category), ("subcategory", subcategory), ("merchant", merchant)):
+        if raw is None or not raw.strip():
+            continue
+        needed.add("transactions")
+        value = normalize_label(raw)
+        if value == UNCATEGORIZED_FILTER:
+            # "Uncategorized" is never stored (NULL is the only "unset"), so
+            # the filter selects the NULL rows -- the inverse of the folding
+            # aggregation applies on output.
+            conditions.append(f"transactions.{column} IS NULL")
+        else:
+            conditions.append(f"transactions.{column} = ?")
+            params.append(value)
 
     # Walk outward from the anchor in each direction along the chain, adding
     # a JOIN for every step until the farthest needed table in that

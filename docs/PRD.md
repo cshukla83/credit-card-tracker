@@ -215,6 +215,12 @@ it's last in the build sequence.
 **Module 3 — Analytics Dashboard.**
 
 - Spend by category, filterable by custom range, month, quarter, year.
+  As of 2026-09-13 (Session 74) the aggregation behind it returns a
+  nested tree over any 2 or 3 of category / subcategory / merchant in
+  the caller's chosen order, and accepts independently combinable
+  category / subcategory / merchant filters ("Uncategorized" selecting
+  the unlabelled rows); the frontend for both — a reorderable drill-down
+  chart and a shared filter row — is still to come.
 - Commentary is LLM-generated (e.g. a free-tier cloud API such as
   Gemini), not rule-based — a deliberate exception to the project's
   usual practice of never letting real financial data leave the machine.

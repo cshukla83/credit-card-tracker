@@ -4,21 +4,24 @@ Two pieces, kept apart so each is testable on its own:
 
 - resolve_period(): turns the API's granularity/mode parameters into one
   inclusive (start, end) date pair. Pure; "today" is injectable.
-- aggregate_spend(): nets debits against refund credits per category and
-  subcategory over a date range and the shared read-path filters. Payments
-  to the card (is_payment = 1) are excluded entirely.
+- aggregate_spend(): nets debits against refund credits over a date range
+  and the shared read-path filters, as a nested tree over any 2 or 3 of
+  category / subcategory / merchant in the caller's order (Session 74).
+  Payments to the card (is_payment = 1) are excluded entirely.
 """
 
 import calendar
 import re
 import sqlite3
 from datetime import date, timedelta
-from typing import Literal
+from typing import Iterable
 
 from storage.reads import filter_sql
 
 GRANULARITIES = ("week", "month", "quarter", "year", "custom")
-DEPTHS = ("subcategory", "merchant")
+DIMENSIONS = ("category", "subcategory", "merchant")
+PLURALS = {"category": "categories", "subcategory": "subcategories", "merchant": "merchants"}
+DEFAULT_DIMENSIONS = ("category", "subcategory")
 MODES = ("absolute", "relative")
 UNCATEGORIZED = "Uncategorized"
 
@@ -29,6 +32,10 @@ _YEAR_RE = re.compile(r"^(\d{4})$")
 
 class PeriodError(ValueError):
     """An invalid or incomplete period specification (the API maps it to 422)."""
+
+
+class DimensionsError(ValueError):
+    """An invalid `dimensions` list for aggregate_spend (the API maps it to 422)."""
 
 
 def _today() -> date:
@@ -128,6 +135,26 @@ def resolve_period(
     return date(y, 1, 1), date(y, 12, 31)
 
 
+def validate_dimensions(dimensions: "Iterable[str] | None") -> "tuple[str, ...]":
+    """2 or 3 distinct names from DIMENSIONS, in the caller's order; else
+    DimensionsError with a message naming what was wrong. None -> default."""
+    if dimensions is None:
+        return DEFAULT_DIMENSIONS
+    dims = tuple(dimensions)
+    if not 2 <= len(dims) <= 3:
+        raise DimensionsError(
+            f"dimensions must list 2 or 3 of {', '.join(DIMENSIONS)}; got {len(dims)}"
+        )
+    unknown = [d for d in dims if d not in DIMENSIONS]
+    if unknown:
+        raise DimensionsError(
+            f"unknown dimension(s) {unknown}; allowed: {', '.join(DIMENSIONS)}"
+        )
+    if len(set(dims)) != len(dims):
+        raise DimensionsError(f"dimensions must be distinct; got {list(dims)}")
+    return dims
+
+
 def aggregate_spend(
     conn: sqlite3.Connection,
     start_date: date,
@@ -135,42 +162,42 @@ def aggregate_spend(
     bank: "str | None" = None,
     card_id: "int | None" = None,
     card_type: "str | None" = None,
-    depth: Literal["subcategory", "merchant"] = "subcategory",
+    dimensions: "Iterable[str] | None" = None,
+    category: "str | None" = None,
+    subcategory: "str | None" = None,
+    merchant: "str | None" = None,
 ) -> dict:
-    """Net spend per category and subcategory over [start_date, end_date],
-    optionally one level finer, per merchant (Session 73).
+    """Net spend over [start_date, end_date] as a nested tree.
 
-    depth="subcategory" (default) is the Session 65 query and shape, kept
-    byte-identical and on its own code path below. depth="merchant" groups
-    one level further and adds a `merchants` list to each subcategory
-    (sorted by amount descending; NULL merchant -> "Uncategorized", so a
-    merchant-only row nests as Uncategorized/Uncategorized/<merchant>). The
-    finer grouping is done in SQL rather than by truncating a merchant-
-    level result down to subcategory: that keeps the default path
-    provably unchanged and means each depth pays only for what it asks.
+    `dimensions` (Session 74; replaced Session 73's `depth`) is 2 or 3
+    distinct names from category / subcategory / merchant in the caller's
+    order; default ("category", "subcategory") reproduces the Session 65
+    shape exactly. Level 1 groups by dimensions[0], nested under it by
+    dimensions[1], and by dimensions[2] if given. Keys adapt: each node is
+    {<dimension>: name, amount, transaction_count, <plural of next
+    dimension>: [...]} with no child key on the innermost level; the
+    top-level list key is the plural of dimensions[0].
+
+    Always one finest-grained query -- GROUP BY category, subcategory,
+    merchant -- with NULL folded to "Uncategorized" on all three raw values,
+    then the tree is built in Python in the requested order. The default
+    two-level tree is the three-level result with the merchant level rolled
+    up, which is why the default output is unchanged.
 
     In scope: every debit, plus every credit with is_payment = 0 (a refund).
-    Excluded entirely: credits with is_payment = 1 (payments to the card) --
-    they appear nowhere in the result, not even as a zero line.
+    Excluded entirely: credits with is_payment = 1 (payments to the card).
+    amount = sum(debits) - sum(refunds), never clamped; transaction_count
+    is the number of contributing rows. Sorted by amount descending at
+    every level (stable, so equal amounts keep query order). Amounts are
+    rounded to 2 places once, at the edge, after summing.
 
-    amount = sum(debits) - sum(refunds); it may go negative and is not
-    clamped. transaction_count is the number of contributing rows. A NULL
-    category is reported as "Uncategorized"; within each category a NULL
-    subcategory is likewise "Uncategorized". A row with a subcategory but
-    no category therefore contributes its subcategory under the
-    "Uncategorized" category (DATA_MODEL.md: the pair is not constrained).
-    Categories and subcategories are sorted by amount descending. total is
-    the sum of category amounts. Amounts are rounded to 2 places at the
-    edge, after summing.
-
-    Filtering is the shared read-path set (filter_sql), so bank / card_id /
-    card_type mean exactly what they do on /transactions. The period is
-    passed through the same helper as start_date / end_date.
+    Filtering is the shared read-path set (filter_sql): bank / card_id /
+    card_type / the period, and -- orthogonal to `dimensions` -- the label
+    filters category / subcategory / merchant, which narrow which rows are
+    included at all ("Uncategorized" selects NULL). Dimensions shape the
+    tree; filters shape its contents.
     """
-    if depth not in DEPTHS:
-        raise ValueError(f"depth must be one of {', '.join(DEPTHS)}")
-    if depth == "merchant":
-        return _aggregate_merchant_depth(conn, start_date, end_date, bank, card_id, card_type)
+    dims = validate_dimensions(dimensions)
 
     joins, where, params = filter_sql(
         "transactions",
@@ -179,74 +206,9 @@ def aggregate_spend(
         card_type=card_type,
         start_date=start_date,
         end_date=end_date,
-    )
-    scope = "(transactions.txn_type = 'debit' OR (transactions.txn_type = 'credit' AND transactions.is_payment = 0))"
-    where = (where + " AND " if where else " WHERE ") + scope
-    rows = conn.execute(
-        "SELECT transactions.category AS category, transactions.subcategory AS subcategory, "
-        "SUM(CASE WHEN transactions.txn_type = 'debit' THEN transactions.amount "
-        "ELSE -transactions.amount END) AS amount, "
-        "COUNT(*) AS n "
-        "FROM transactions" + joins + where + " GROUP BY transactions.category, transactions.subcategory",
-        params,
-    ).fetchall()
-
-    # NULL -> "Uncategorized" is done here, not with COALESCE in SQL, so the
-    # GROUP BY is on the real column values; a category literally named
-    # "Uncategorized" would merge with NULL in the output either way.
-    categories: "dict[str, dict]" = {}
-    for row in rows:
-        cat = row["category"] if row["category"] is not None else UNCATEGORIZED
-        sub = row["subcategory"] if row["subcategory"] is not None else UNCATEGORIZED
-        bucket = categories.setdefault(cat, {"amount": 0.0, "count": 0, "subs": {}})
-        bucket["amount"] += row["amount"]
-        bucket["count"] += row["n"]
-        s = bucket["subs"].setdefault(sub, {"amount": 0.0, "count": 0})
-        s["amount"] += row["amount"]
-        s["count"] += row["n"]
-
-    out = []
-    for cat, b in categories.items():
-        subs = [
-            {"subcategory": sub, "amount": round(v["amount"], 2), "transaction_count": v["count"]}
-            for sub, v in b["subs"].items()
-        ]
-        subs.sort(key=lambda x: x["amount"], reverse=True)
-        out.append(
-            {
-                "category": cat,
-                "amount": round(b["amount"], 2),
-                "transaction_count": b["count"],
-                "subcategories": subs,
-            }
-        )
-    out.sort(key=lambda x: x["amount"], reverse=True)
-    total = round(sum(b["amount"] for b in categories.values()), 2)
-    return {
-        "period": {"start": start_date.isoformat(), "end": end_date.isoformat()},
-        "total": total,
-        "categories": out,
-    }
-
-
-def _aggregate_merchant_depth(
-    conn: sqlite3.Connection,
-    start_date: date,
-    end_date: date,
-    bank: "str | None",
-    card_id: "int | None",
-    card_type: "str | None",
-) -> dict:
-    """depth="merchant": the same scope, netting, NULL folding, rounding and
-    ordering rules as the default path, grouped one level finer. Kept as
-    its own function so the default path's SQL and folding are untouched."""
-    joins, where, params = filter_sql(
-        "transactions",
-        card_id=card_id,
-        bank=bank,
-        card_type=card_type,
-        start_date=start_date,
-        end_date=end_date,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
     )
     scope = "(transactions.txn_type = 'debit' OR (transactions.txn_type = 'credit' AND transactions.is_payment = 0))"
     where = (where + " AND " if where else " WHERE ") + scope
@@ -261,51 +223,37 @@ def _aggregate_merchant_depth(
         params,
     ).fetchall()
 
-    categories: "dict[str, dict]" = {}
-    for row in rows:
-        cat = row["category"] if row["category"] is not None else UNCATEGORIZED
-        sub = row["subcategory"] if row["subcategory"] is not None else UNCATEGORIZED
-        mer = row["merchant"] if row["merchant"] is not None else UNCATEGORIZED
-        bucket = categories.setdefault(cat, {"amount": 0.0, "count": 0, "subs": {}})
-        bucket["amount"] += row["amount"]
-        bucket["count"] += row["n"]
-        s = bucket["subs"].setdefault(sub, {"amount": 0.0, "count": 0, "merchants": {}})
-        s["amount"] += row["amount"]
-        s["count"] += row["n"]
-        m = s["merchants"].setdefault(mer, {"amount": 0.0, "count": 0})
-        m["amount"] += row["amount"]
-        m["count"] += row["n"]
+    # Fold NULL -> "Uncategorized" here, not with COALESCE in SQL, so the
+    # GROUP BY is on the real column values.
+    def label(value):
+        return value if value is not None else UNCATEGORIZED
 
-    out = []
-    for cat, b in categories.items():
-        subs = []
-        for sub, v in b["subs"].items():
-            merchants = [
-                {"merchant": mer, "amount": round(mv["amount"], 2), "transaction_count": mv["count"]}
-                for mer, mv in v["merchants"].items()
-            ]
-            merchants.sort(key=lambda x: x["amount"], reverse=True)
-            subs.append(
-                {
-                    "subcategory": sub,
-                    "amount": round(v["amount"], 2),
-                    "transaction_count": v["count"],
-                    "merchants": merchants,
-                }
-            )
-        subs.sort(key=lambda x: x["amount"], reverse=True)
-        out.append(
-            {
-                "category": cat,
-                "amount": round(b["amount"], 2),
-                "transaction_count": b["count"],
-                "subcategories": subs,
-            }
-        )
-    out.sort(key=lambda x: x["amount"], reverse=True)
-    total = round(sum(b["amount"] for b in categories.values()), 2)
+    # Nested dict tree keyed by the chosen dimensions' values; leaves and
+    # inner nodes alike accumulate amount and count.
+    root: dict = {}
+    for row in rows:
+        names = {d: label(row[d]) for d in DIMENSIONS}
+        node = root
+        for dim in dims:
+            child = node.setdefault(names[dim], {"amount": 0.0, "count": 0, "children": {}})
+            child["amount"] += row["amount"]
+            child["count"] += row["n"]
+            node = child["children"]
+
+    def emit(level: dict, depth: int) -> list:
+        dim = dims[depth]
+        out = []
+        for name, node in level.items():
+            entry = {dim: name, "amount": round(node["amount"], 2), "transaction_count": node["count"]}
+            if depth + 1 < len(dims):
+                entry[PLURALS[dims[depth + 1]]] = emit(node["children"], depth + 1)
+            out.append(entry)
+        out.sort(key=lambda x: x["amount"], reverse=True)
+        return out
+
+    total = round(sum(node["amount"] for node in root.values()), 2)
     return {
         "period": {"start": start_date.isoformat(), "end": end_date.isoformat()},
         "total": total,
-        "categories": out,
+        PLURALS[dims[0]]: emit(root, 0),
     }

@@ -1087,3 +1087,30 @@ def test_transactions_rows_carry_their_card_id_and_bank(client, two_cards):
     assert {(r["card_id"], r["bank"]) for r in only_a} == {(card_a, "FAKE BANK A")}
     # The row's own id is the transaction's, not a joined table's.
     assert sorted(r["id"] for r in rows) == _ids(client)
+
+
+# --- filter_sql label filters (Session 74) ---------------------------------------
+
+
+def test_filter_sql_label_filters_normalise_combine_and_map_uncategorized_to_null():
+    from storage.reads import filter_sql
+
+    joins, where, params = filter_sql("transactions", category=" food ")
+    assert joins == "" and where == " WHERE transactions.category = ?" and params == ["Food"]
+    # Uncategorized -> IS NULL, no parameter.
+    joins, where, params = filter_sql("transactions", subcategory="uncategorized")
+    assert where == " WHERE transactions.subcategory IS NULL" and params == []
+    # All three together, with bank (cards join) and a date (no extra join).
+    joins, where, params = filter_sql(
+        "transactions", bank="B", start_date="2026-01-01", category="Food", subcategory="Cafe", merchant="Shop"
+    )
+    assert "JOIN statements" in joins and "JOIN cards" in joins and "transactions" not in joins.replace("transactions.", "")
+    assert where.count("transactions.category = ?") == 1
+    assert where.count("transactions.subcategory = ?") == 1
+    assert where.count("transactions.merchant = ?") == 1
+    assert params == ["B", "2026-01-01", "Food", "Cafe", "Shop"]
+    # Empty / whitespace values are ignored.
+    assert filter_sql("transactions", merchant="   ") == ("", "", [])
+    # From another anchor the label filter walks to transactions.
+    joins, where, _ = filter_sql("cards", merchant="Shop", always_join=("statements",))
+    assert "JOIN transactions" in joins and "transactions.merchant = ?" in where
