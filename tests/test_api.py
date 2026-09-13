@@ -1303,3 +1303,42 @@ def test_filter_sql_review_status_clauses():
     assert "JOIN transactions" in joins and "transactions.category IS NULL" in where
     with pytest.raises(ReviewStatusError):
         filter_sql("transactions", review_status="maybe")
+
+
+# --- Session 87: suggestions are not gated on the row's category --------------
+
+
+def test_batch_suggestions_serve_rows_that_already_have_a_category(client, db_path):
+    # The Review & Assign frontend once asked the engine only for rows with
+    # no category, so category-set rows missing a subcategory or merchant
+    # showed nothing (Session 87). The API never had that restriction: a
+    # categorized-but-incomplete row gets merchant and subcategory
+    # suggestions like any other. Pinned here so the contract is explicit.
+    conn = get_connection()
+    try:
+        card = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+        insert_statement(
+            conn, card, date(2026, 1, 1), date(2026, 1, 31),
+            [_txn(1, "SHOP ONE"), _txn(2, "SHOP ONE"), _txn(3, "SHOP TWO")],
+        )
+        target, peer, near = [r["id"] for r in conn.execute("SELECT id FROM transactions ORDER BY id")]
+    finally:
+        conn.close()
+    client.post("/transactions/category", json={"assignments": [
+        {"transaction_id": target, "category": "Food"},                       # category only
+        {"transaction_id": peer, "category": "Food", "subcategory": "Cafe", "merchant": "Bean Bar"},
+        {"transaction_id": near, "category": "Travel"},                       # category only
+    ]})
+    body = client.post("/transactions/suggestions", json={"transaction_ids": [target, near]}).json()
+    by_id = {s["transaction_id"]: s for s in body["suggestions"]}
+    # Exact description peer with a merchant and subcategory: both learned.
+    assert by_id[target]["merchant"] == {"value": "Bean Bar", "confidence": 1.0, "match_type": "exact"}
+    assert by_id[target]["subcategory"] == {"value": "Cafe", "confidence": 1.0, "match_type": "exact"}
+    # Different description and category: merchant fuzzy (no floor), subcategory falls back.
+    assert by_id[near]["merchant"]["match_type"] == "fuzzy"
+    assert by_id[near]["merchant"]["value"] == "Bean Bar"
+    assert 0.0 < by_id[near]["merchant"]["confidence"] < 1.0
+    assert by_id[near]["subcategory"]["match_type"] == "same_as_category"
+    # Category suggestions are still produced for both (the frontend ignores
+    # them for rows that already have a category; the API does not).
+    assert by_id[target]["category"]["match_type"] == "exact"

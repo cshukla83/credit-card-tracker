@@ -9405,3 +9405,101 @@ anything here. Not seen running.
 - Sessions 73–78's dashboard work: its own verification, `docs/STATE.md`
   reconciliation (now Sessions 61–86), and merge to `main`.
 - **Module 1** (upload UI with auto-detect) is the eventual next arc.
+
+## Session 87 — 2026-09-13
+
+### Goal
+Investigate two reports from manual verification: a "Fully labelled"
+group still appearing on Review & Assign, and merchant suggestions
+missing for some rows in the "Category set — subcategory or merchant
+missing" group. Fix what is a bug; explain with evidence what is not.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `1c0a956`, clean.
+Browser tooling: not available; traced, with the engine run read-only
+against the real database for issue 2's scores.
+
+**Issue 1 — the "Fully labelled" group: a deliberate exception, now
+removed.** Not a separate query. `buildGroups()` appended that group only
+when the "Needs review only" toggle was **off**, and in that state
+`loadReview()` deliberately sent no `review_status` — Session 81 kept a
+toggle-off "show everything" mode. So the fetch was the incomplete set
+whenever the toggle was on, and the group could appear only with it off
+(including via an old `uncategorized=0` bookmark, which Session 81 chose
+to keep honouring). Session 83's Reviewed tab made that mode redundant,
+and its continued presence contradicts Session 81's purpose. **Fix:**
+Review & Assign now always fetches `review_status=incomplete`; the toggle,
+its element references, URL keys (`needs_review`, `uncategorized`),
+change handler, and the "Fully labelled" group are removed, and the status
+line no longer prints a fully-labelled count that would always be zero.
+**Confirmation across every group:** all groups the grouped renderer
+builds — suggested-category, "No suggestion", "Category set — …", and the
+similarity clusters — are partitions of `review.transactions`, which on
+this tab is now populated solely by that one fetch; there is no other
+source of rows, so no group can hold a complete row.
+
+**Issue 2 — merchant suggestions missing: a real bug, and the deeper
+one.** `loadReview()` requested suggestions only for `isOpen` rows — rows
+with **no category** — a scope from Session 43, when a categorized row was
+"done" and left the view. Session 81 started keeping category-set rows in
+view but never widened that request, so every row in the partial group was
+simply never sent to the engine: no merchant suggestion, no subcategory
+suggestion, a bare dash. Not a threshold outcome — the engine has no fuzzy
+floor and always returns a merchant value — and not specific to those four
+rows: **every** row in that group was affected. The rows that showed a
+merchant (Zomato, Amazon) were saved values, as the brief noted.
+
+**Evidence, from running the engine read-only against the real database**
+(`mode=ro`; nothing written; values not reproduced here): all four
+reported rows have a category and neither a subcategory nor a merchant;
+209 rows in the database carry a merchant. Invoked directly, the engine
+returns for them — merchant: **exact at 1.0, fuzzy at 0.481, exact at 1.0,
+exact at 1.0**; subcategory: `same_as_category`, `same_as_category`,
+`exact` 1.0, `exact` 1.0. Three of the four have an identical-description
+merchant-bearing peer; the fourth has a best fuzzy candidate at 0.481,
+which the engine reports (no floor) and the screen would show with its
+percentage. There is no "correct absence" among them. **Fix:** the
+suggestion request now covers every row in view that is not complete
+(`!isComplete`), one batch call as before; on the Reviewed tab that is
+none. The rendering path needed no change — `renderLabelCell()` already
+shows a suggestion for any unset field — which is why the same code
+rendered fuzzy merchant suggestions correctly under "Suggested: …" groups:
+those rows had no category and so were in the old request.
+
+**Tests.** Both root causes are frontend fetch-scope decisions, so there
+is no backend defect to test; one backend test was added to pin the
+contract the frontend had been under-using: the batch suggestion endpoint
+serves merchant and subcategory suggestions (exact from an identical peer;
+fuzzy with no floor and `same_as_category` otherwise) for rows that
+already have a category. **509 passing** (508 + 1).
+
+**Verification — traced, plus the read-only engine run; not seen
+rendered.** Adds to the manual-verification backlog.
+
+**Docs.** `docs/STATE.md`: the Review & Assign description corrected
+(always-incomplete row set, toggle gone, suggestions for every incomplete
+row).
+
+### Outcome
+Review & Assign is exactly the rows needing review, in every group, and
+every one of them now carries whatever the engine can suggest for its
+missing labels.
+
+### In plain English
+Two findings from trying the screen by hand. First, a "fully labelled"
+group could still show up on the review screen — through an old switch
+that let it show everything, a leftover from before the "Reviewed" tab
+existed; that switch and the group are gone, so the review screen is now
+purely what still needs work. Second, rows that had a category but no
+merchant were showing no suggestion at all: the screen had only ever
+asked the suggestion engine about rows with no category, a rule from
+before such rows stayed in view. Running the engine on the reported rows
+directly showed strong matches for three of them and a weaker one for the
+fourth — so the suggestions were there to be had; the screen just never
+asked. It asks for every unfinished row now. Not seen running.
+
+### Next steps
+Unchanged from Session 86: manual re-verification (including these two
+fixes), Sessions 73–78's separate verification, STATE.md reconciliation
+(61–87), merge, then Module 1.

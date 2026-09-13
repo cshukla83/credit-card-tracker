@@ -104,14 +104,18 @@ case-insensitively, **unset values last whichever the direction**; the
 active sort is re-applied to whichever fetch wins the sequence race and
 round-trips in the URL (`sort`, `dir`); default order until a header is
 clicked.
-*Review & assign* shows, by default, the rows that still **need review —
-any of category, subcategory, or merchant unset** (`review_status=
-incomplete` on the server, Session 81; the toggle is "Needs review only",
-formerly "Uncategorized only", and a row now leaves the pending view only
-when all three labels are set); rows with a category but a missing
-subcategory or merchant sit in their own "Category set — subcategory or
-merchant missing" group; with the toggle off, fully labelled rows appear
-too. It groups rows either by suggested category (default) or by
+*Review & assign* shows **only** the rows that still need review — any
+of category, subcategory, or merchant unset (`review_status=incomplete`
+on the server, always; Session 81 introduced it behind a "Needs review
+only" toggle whose off state fetched everything, and Session 87 removed
+that toggle and the "Fully labelled" group it revealed, since the Reviewed
+tab is where complete rows live). A row leaves this view only when all
+three labels are set; rows with a category but a missing subcategory or
+merchant sit in their own "Category set — subcategory or merchant missing"
+group, and **suggestions are fetched for every incomplete row in view**
+(Session 87; previously only for rows with no category, which left that
+group without merchant or subcategory suggestions). It groups rows either
+by suggested category (default) or by
 description similarity at a chosen threshold; each row's three labels
 share **one inline editor (Session 82)**: a saved value shows as text, an
 unset field with a suggestion shows it as ghost text plus its badge and a

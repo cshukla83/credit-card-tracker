@@ -1013,10 +1013,6 @@
         End date
         <input type="date" id="end-filter">
       </label>
-      <label class="inline" id="uncategorized-only-label" style="display: none;">
-        <input type="checkbox" id="uncategorized-only-filter" checked>
-        Needs review only
-      </label>
     </div>
     <!-- Second row (Session 76): the three labels as independent peers.
          Each list always offers "Uncategorized" (the unlabelled rows), a
@@ -1270,8 +1266,6 @@
     const categoryFilterEl = document.getElementById("category-filter");
     const subcategoryFilterEl = document.getElementById("subcategory-filter");
     const merchantFilterEl = document.getElementById("merchant-filter");
-    const uncategorizedOnlyLabelEl = document.getElementById("uncategorized-only-label");
-    const uncategorizedOnlyEl = document.getElementById("uncategorized-only-filter");
 
     const tabAllEl = document.getElementById("tab-all");
     const tabReviewEl = document.getElementById("tab-review");
@@ -1412,7 +1406,6 @@
       const params = buildParams(filters);
       if (activeTab === "review") {
         params.set("tab", "review");
-        if (!uncategorizedOnlyEl.checked) params.set("needs_review", "0");
       } else if (activeTab === "reviewed") {
         params.set("tab", "reviewed");
       } else if (activeTab === "dashboard") {
@@ -1871,9 +1864,9 @@
       if (partial.length) {
         groups.push(makeGroup("partial", "Category set \u2014 subcategory or merchant missing", partial));
       }
-      if (!uncategorizedOnlyEl.checked && done.length) {
-        groups.push(makeGroup("done", "Fully labelled", done));
-      }
+      // No "fully labelled" group here (Session 87): Review & Assign's row
+      // set is always review_status=incomplete, so complete rows never
+      // arrive; the Reviewed tab is where they live.
       return { groups, openCount: open.length, partialCount: partial.length, doneCount: done.length };
     }
 
@@ -2114,11 +2107,12 @@
       const seq = ++requestSeq;
       activeReviewStatusEl().textContent = "Loading…";
 
-      // The toggle is a real row-set filter (Session 81): on, the server
-      // returns only rows with any label missing; off, every filtered row.
+      // Row set by tab (Session 87, closing Session 81's toggle-off
+      // exception): Review & Assign is ALWAYS review_status=incomplete --
+      // any label missing -- and Reviewed is always complete. There is no
+      // "show everything" mode on either; All Transactions is that.
       const reviewParams = buildParams(filters);
-      if (activeTab === "reviewed") reviewParams.set("review_status", "complete");
-      else if (uncategorizedOnlyEl.checked) reviewParams.set("review_status", "incomplete");
+      reviewParams.set("review_status", activeTab === "reviewed" ? "complete" : "incomplete");
       const transactionsP = fetchJSON(withParams("/transactions", reviewParams));
       const catalogP = fetchJSON("/categories");
       const merchantsP = fetchJSON("/merchants");
@@ -2126,13 +2120,16 @@
       const clustersP = transactionsP.then((transactions) =>
         review.mode === "similarity" ? fetchClusters(transactions) : review.clusters,
       );
-      // Suggestions are only asked for open (uncategorized) rows: those are
-      // the only ones the screen shows a suggestion for, and it's one batch
-      // call however many there are.
+      // Suggestions for every row that still has a label to fill -- one
+      // batch call. Until Session 87 this asked only for rows with no
+      // category (Session 43's scope, when "done" meant "has a category"),
+      // so rows with a category but a missing subcategory or merchant were
+      // never sent to the engine and showed a bare dash. On the Reviewed
+      // tab every row is complete, so nothing is asked for.
       const suggestionsP = transactionsP.then((transactions) => {
-        const openIds = transactions.filter(isOpen).map((t) => t.id);
-        if (openIds.length === 0) return { suggestions: [] };
-        return postJSON("/transactions/suggestions", { transaction_ids: openIds });
+        const wantIds = transactions.filter((t) => !isComplete(t)).map((t) => t.id);
+        if (wantIds.length === 0) return { suggestions: [] };
+        return postJSON("/transactions/suggestions", { transaction_ids: wantIds });
       });
 
       return Promise.all([transactionsP, suggestionsP, catalogP, merchantsP, subcategoriesP, clustersP])
@@ -2176,7 +2173,7 @@
     }
 
     function renderReviewGrouped() {
-      const { groups, openCount, partialCount, doneCount } = buildGroups();
+      const { groups, openCount, partialCount } = buildGroups();
       const total = review.transactions.length;
 
       reviewBodyEl.textContent = "";
@@ -2185,11 +2182,6 @@
 
       const similarity = review.mode === "similarity";
       thresholdLabelEl.style.display = similarity ? "" : "none";
-      // "Needs review only" is a row-set filter since Session 81, so it
-      // applies in both grouping modes (it used to be a client-side regroup
-      // that similarity mode ignored).
-      uncategorizedOnlyEl.disabled = false;
-      uncategorizedOnlyLabelEl.style.opacity = "";
 
       if (total === 0) {
         reviewStatusEl.textContent = "No transactions found.";
@@ -2198,11 +2190,10 @@
         return;
       }
 
-      const needsReview = openCount + partialCount;
+      // Every row here needs review by construction (Session 87).
       reviewStatusEl.textContent =
-        total + " transactions · " + needsReview + " need review" +
-        (partialCount ? " (" + partialCount + " with only category set)" : "") +
-        " · " + doneCount + " fully labelled";
+        total + " transactions need review" +
+        (partialCount ? " (" + partialCount + " with only category set)" : "");
 
       renderSelectionBar();
 
@@ -3659,7 +3650,6 @@
       panelReviewEl.style.display = isReview ? "" : "none";
       panelReviewedEl.style.display = isReviewed ? "" : "none";
       panelDashboardEl.style.display = isDashboard ? "" : "none";
-      uncategorizedOnlyLabelEl.style.display = isReview ? "" : "none";
       // Dashboard: period controls replace month/date filters; bank/card stay.
       statementMonthFieldEl.style.display = isDashboard ? "none" : "";
       startFieldEl.style.display = isDashboard ? "none" : "";
@@ -3830,9 +3820,8 @@
       readDashboardURLParams(params);
       readSortURLParams(params, "", allSort, tableEl);
       readSortURLParams(params, "r_", reviewedSort, reviewedTableEl);
-      // "needs_review" since Session 81; the old "uncategorized" key is still
-      // honoured so earlier bookmarks keep their meaning.
-      uncategorizedOnlyEl.checked = params.get("needs_review") !== "0" && params.get("uncategorized") !== "0";
+      // Session 87: the "needs review only" toggle is gone (Review & Assign
+      // is always the incomplete set); its old URL keys are simply ignored.
 
       startFilterEl.value = urlStart;
       endFilterEl.value = urlEnd;
@@ -3950,15 +3939,6 @@
     categoryFilterEl.addEventListener("change", onFilterChange);
     subcategoryFilterEl.addEventListener("change", onFilterChange);
     merchantFilterEl.addEventListener("change", onFilterChange);
-    // "Needs review only" is a row-set filter (review_status=incomplete on
-    // the server) since Session 81, so flipping it refetches. The URL is
-    // updated so a reload keeps it.
-    uncategorizedOnlyEl.addEventListener("change", () => {
-      const filters = currentFilters();
-      updateURL(filters);
-      review.editing = null;
-      loadReview(filters);
-    });
     // Grouping mode: switching changes only how rows are grouped (and, in
     // similarity mode, which are shown) -- filters and selection are left
     // alone. Into similarity: cluster what is already loaded. Back to
