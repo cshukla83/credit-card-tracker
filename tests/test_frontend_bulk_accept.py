@@ -154,3 +154,53 @@ def test_step_highlight_empty_menu_and_other_keys():
         [-1, "ArrowDown", 0], [-1, "ArrowUp", 0], [1, "ArrowDown", 0],  # nothing to land on
         [1, "Enter", 3], [-1, "a", 3],                                    # not an arrow: unchanged
     ]) == [-1, -1, -1, 1, -1]
+
+
+# --- subcategory gating and bulk skip (Session 92) ----------------------------
+
+GATE_FUNCTIONS = ("isOpen", "canEditSubcategory", "partitionSubcategoryTargets", "skipSummary")
+
+
+def _gate(expr):
+    script = "".join(_lift(n) for n in GATE_FUNCTIONS) + f"\nprint(JSON.stringify({expr}));\n"
+    return json.loads(_js(script))
+
+
+def test_can_edit_subcategory_follows_category_presence():
+    assert _gate('[{category: null}, {category: undefined}, {}, {category: "Food"}, {category: ""}]'
+                 '.map(canEditSubcategory)') == [False, False, False, True, True]
+
+
+def test_bulk_partition_mixed_selection_and_summary():
+    txns = '[{id: 1, category: "Food"}, {id: 2, category: null}, {id: 3, category: "Food"}, '\
+           '{id: 4, category: null}, {id: 5, category: "Travel"}, {id: 6, category: "Food"}, {id: 7, category: null}]'
+    assert _gate(f"partitionSubcategoryTargets({txns})") == {"eligible": [1, 3, 5, 6], "skipped": [2, 4, 7]}
+    assert _gate("skipSummary(4, 3)") == "Updated subcategory for 4 of 7 selected rows \u2014 3 skipped (no category set)"
+
+
+def test_bulk_partition_all_category_set_is_unchanged_behaviour():
+    # Regression: every row eligible, nothing skipped, and no notice at all
+    # -- assign() is then called exactly as it was before Session 92.
+    txns = '[{id: 1, category: "Food"}, {id: 2, category: "Travel"}, {id: 3, category: "Food"}]'
+    assert _gate(f"partitionSubcategoryTargets({txns})") == {"eligible": [1, 2, 3], "skipped": []}
+    assert _gate("skipSummary(3, 0)") == ""
+
+
+def test_gate_lifts_as_soon_as_the_row_object_carries_a_category():
+    # The predicate is evaluated per render from the row object; once the
+    # reload after a category write carries the value, the pencil is built
+    # enabled. This pins the predicate half; the rebuild itself is DOM.
+    assert _gate('(() => { const t = {id: 1, category: null}; const before = canEditSubcategory(t); '
+                 't.category = "Food"; return [before, canEditSubcategory(t)]; })()') == [False, True]
+
+
+def test_category_less_row_has_no_subcategory_suggestion_to_ghost():
+    # The engine returns null for a row without a category (Session 43);
+    # subSuggestionFor passes that through as null, so the gated cell can
+    # only ever be the dash, never a ghost value.
+    script = _lift("hasSubcategory") + _lift("subSuggestionFor") + """
+    const review = { suggestions: new Map([[1, { subcategory: null }], [2, {}]]) };
+    print(JSON.stringify([subSuggestionFor({id: 1, subcategory: null}), subSuggestionFor({id: 2, subcategory: null}),
+                          subSuggestionFor({id: 3, subcategory: null})]));
+    """
+    assert json.loads(_js(script)) == [None, None, None]

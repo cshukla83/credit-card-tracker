@@ -935,6 +935,10 @@
     color: var(--accent-ink);
     background: var(--accent-wash);
   }
+  td.label-cell .edit-icon:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
   td.label-cell .inline-editor {
     position: relative;
     display: inline-block;
@@ -1079,6 +1083,7 @@
     <div id="review-status">Loading…</div>
     <div id="review-mode-note" class="mode-note" style="display: none;"></div>
     <div id="review-error" class="error" style="display: none;"></div>
+    <div id="review-notice" class="mode-note" role="status" style="display: none;"></div>
     <div id="selection-bar-sentinel" aria-hidden="true"></div>
     <div id="selection-bar" class="selection-bar" style="display: none;"></div>
     <div id="nothing-left" class="nothing-left" style="display: none;"></div>
@@ -1105,6 +1110,7 @@
   <div id="panel-reviewed" style="display: none;">
     <div id="reviewed-status" class="dash-status">Loading…</div>
     <div id="reviewed-error" class="error" style="display: none;"></div>
+    <div id="reviewed-notice" class="mode-note" role="status" style="display: none;"></div>
     <div id="reviewed-selection-bar" class="selection-bar" style="display: none;"></div>
     <table id="reviewed-table" style="display: none;">
       <thead>
@@ -1277,6 +1283,7 @@
     const panelReviewedEl = document.getElementById("panel-reviewed");
     const reviewedStatusEl = document.getElementById("reviewed-status");
     const reviewedErrorEl = document.getElementById("reviewed-error");
+    const reviewedNoticeEl = document.getElementById("reviewed-notice");
     const reviewedSelectionBarEl = document.getElementById("reviewed-selection-bar");
     const reviewedTableEl = document.getElementById("reviewed-table");
     const reviewedBodyEl = document.getElementById("reviewed-body");
@@ -1292,6 +1299,7 @@
     const thresholdLabelEl = document.getElementById("threshold-label");
     const thresholdInputEl = document.getElementById("threshold-input");
     const reviewErrorEl = document.getElementById("review-error");
+    const reviewNoticeEl = document.getElementById("review-notice");
     const selectionBarEl = document.getElementById("selection-bar");
     const selectionBarSentinelEl = document.getElementById("selection-bar-sentinel");
     const nothingLeftEl = document.getElementById("nothing-left");
@@ -1975,6 +1983,22 @@
       }
     }
 
+    // A non-error outcome line (Session 92: the bulk subcategory skip
+    // summary), same shape as setError: written to the showing tab, both
+    // cleared on any reset. assign() clears it at the start of every write
+    // and sets it, if asked, after the reload that follows a successful one.
+    function setNotice(message) {
+      const target = activeTab === "reviewed" ? reviewedNoticeEl : reviewNoticeEl;
+      for (const el of [reviewNoticeEl, reviewedNoticeEl]) {
+        el.textContent = "";
+        el.style.display = "none";
+      }
+      if (message) {
+        target.textContent = message;
+        target.style.display = "";
+      }
+    }
+
     function activeReviewStatusEl() {
       return activeTab === "reviewed" ? reviewedStatusEl : reviewStatusEl;
     }
@@ -1993,9 +2017,11 @@
     // category-only accept keeps it in view (in the partial group).
     function assign(pairs, options) {
       const keepSelection = Boolean(options && options.keepSelection);
+      const notice = (options && options.notice) || "";
       if (review.busy || pairs.length === 0) return Promise.resolve();
       review.busy = true;
       setError("");
+      setNotice("");
       return postJSON("/transactions/category", { assignments: pairs })
         .then(() => {
           if (!keepSelection) {
@@ -2005,7 +2031,9 @@
           // busy is cleared *before* the reload renders, otherwise every
           // button would be rebuilt disabled and stay that way.
           review.busy = false;
-          return loadReview(currentFilters(), { skipPrune: keepSelection });
+          return loadReview(currentFilters(), { skipPrune: keepSelection }).then(() => {
+            if (notice) setNotice(notice);
+          });
         })
         .catch((error) => {
           review.busy = false;
@@ -2675,6 +2703,7 @@
       review.busy = true;
       review.rowError = null;
       setError("");
+      setNotice("");
       postJSON("/transactions/category", {
         assignments: [{ transaction_id: txn.id, is_payment: wanted }],
       })
@@ -2757,12 +2786,55 @@
       return [txn.id];
     }
 
+    // Subcategory needs a category (Session 92): the editor's pencil is
+    // disabled on a category-less row, and a bulk apply skips such rows.
+    // Both close the door on the subcategory-without-category state that
+    // crashed Session 91. `canEditSubcategory` is the one predicate; the
+    // partition and its summary are pure so tests can run them under jsc.
+    function canEditSubcategory(txn) {
+      return !isOpen(txn);
+    }
+
+    // Split bulk-apply targets for a subcategory write into rows that can
+    // take it (category set) and rows that cannot. Order preserved.
+    function partitionSubcategoryTargets(txns) {
+      const eligible = [];
+      const skipped = [];
+      for (const t of txns) (canEditSubcategory(t) ? eligible : skipped).push(t.id);
+      return { eligible, skipped };
+    }
+
+    // The outcome line after a bulk subcategory apply with skips; empty
+    // when nothing was skipped (the ordinary case needs no announcement).
+    function skipSummary(eligibleCount, skippedCount) {
+      if (!skippedCount) return "";
+      const total = eligibleCount + skippedCount;
+      return (
+        "Updated subcategory for " + eligibleCount + " of " + total + " selected rows \u2014 " +
+        skippedCount + " skipped (no category set)"
+      );
+    }
+
     function saveLabel(txn, field, value) {
       const trimmed = String(value || "").trim();
       if (!trimmed) return;
       const spec = LABEL_FIELDS[field];
       review.editing = null;
-      assign(spec.pairs(saveTargets(txn), trimmed));
+      const targets = saveTargets(txn);
+      if (field === "subcategory" && targets.length > 1) {
+        const txns = targets.map((id) => review.transactions.find((t) => t.id === id)).filter(Boolean);
+        const { eligible, skipped } = partitionSubcategoryTargets(txns);
+        if (eligible.length === 0) {
+          // Unreachable through the UI (the edited row's own pencil is
+          // enabled only when it has a category), kept for safety.
+          setNotice(skipSummary(0, skipped.length));
+          renderReview();
+          return;
+        }
+        assign(spec.pairs(eligible, trimmed), { notice: skipSummary(eligible.length, skipped.length) });
+        return;
+      }
+      assign(spec.pairs(targets, trimmed));
     }
 
     function renderLabelCell(txn, field, isEditing) {
@@ -2828,20 +2900,29 @@
         none.className = "unset";
         none.textContent = "\u2014";
         if (field === "subcategory" && isOpen(txn)) {
-          none.title = "Set a category first to get a subcategory suggestion";
+          none.title = "Set category first";
         }
         cell.appendChild(none);
       }
 
+      // Session 92: no subcategory edit until the row has a category. The
+      // suggestion engine already returns null for such a row (Session 43),
+      // so the cell above is the dash; the pencil is disabled, and the
+      // reason is on the pencil, the dash, and the cell so it shows on
+      // hover anywhere in the cell. The next reload after a category write
+      // rebuilds the cell enabled -- no special-casing needed.
+      const gated = field === "subcategory" && !canEditSubcategory(txn);
       const edit = document.createElement("button");
       edit.type = "button";
       edit.className = "edit-icon";
-      edit.setAttribute("aria-label", "Edit " + spec.label);
-      edit.title = "Edit " + spec.label;
+      edit.setAttribute("aria-label", gated ? "Set category first" : "Edit " + spec.label);
+      edit.title = gated ? "Set category first" : "Edit " + spec.label;
       edit.textContent = "\u270e";
-      edit.disabled = review.busy;
+      edit.disabled = review.busy || gated;
+      if (gated) cell.title = "Set category first";
       edit.addEventListener("click", (event) => {
         event.stopPropagation();
+        if (gated) return;
         review.editing = { id: txn.id, field };
         renderReview();
       });
@@ -2889,10 +2970,20 @@
       const targets = saveTargets(txn);
       if (targets.length > 1) {
         // Unambiguous before commit: say how many rows, and the selected
-        // rows are already highlighted by their .selected class.
+        // rows are already highlighted by their .selected class. For
+        // subcategory, say up front how many will be skipped (Session 92).
         const note = document.createElement("span");
         note.className = "bulk-note";
-        note.textContent = "Applies to " + targets.length + " selected rows";
+        let text = "Applies to " + targets.length + " selected rows";
+        if (field === "subcategory") {
+          const txns = targets.map((id) => review.transactions.find((t) => t.id === id)).filter(Boolean);
+          const { eligible, skipped } = partitionSubcategoryTargets(txns);
+          if (skipped.length) {
+            text = "Applies to " + eligible.length + " of " + targets.length +
+              " selected rows (" + skipped.length + " skipped: no category set)";
+          }
+        }
+        note.textContent = text;
         wrap.appendChild(note);
       }
 

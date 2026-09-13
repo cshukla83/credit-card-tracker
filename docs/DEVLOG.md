@@ -9825,3 +9825,103 @@ whether that should be allowed, or gated the way suggestions are; (2)
 `_suggest_subcategory_from` now walks the pool twice (peers, then
 precedents) — fine at 295 rows, could be one pass. Then the Session 88
 backlog.
+
+## Session 92 — 2026-09-13
+
+### Goal
+Gate the inline editor's subcategory field on the row having a
+category, and make a mixed-selection bulk subcategory apply skip
+category-less rows with a visible summary. Closes the "noted for later"
+item (1) from Session 91's Next steps: the pencil path that produced the
+crashing row. The existing category-NULL/subcategory-set row in the real
+database is deliberately left untouched.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `5964354`, clean.
+Browser tooling: the Chrome extension was not connected, so the DOM
+behaviour is traced, not seen; the app was run on a scratchpad copy of
+the database only to confirm the page serves the new code, then stopped
+and the real file confirmed byte-identical.
+
+**Single-row gate.** One predicate, `canEditSubcategory(txn)` (=
+`!isOpen(txn)`, i.e. category set). In `renderLabelCell()` the
+subcategory pencil is built `disabled` when it is false, with the
+reason "Set category first" as the pencil's title and aria-label, on
+the dash, and on the cell itself (so it shows on hover anywhere in the
+cell; disabled controls do not reliably show their own tooltip). The
+click handler also returns early if gated, belt and braces. Confirmed,
+not assumed, that such a cell can only be the dash: the engine returns
+`subcategory: null` for a row with no category (Session 43;
+`test_subcategory_suggestion_is_none_until_category_is_set` re-run) and
+`subSuggestionFor()` passes that null through — pinned under jsc. The
+live enable needs no special code: every write goes through `assign()`
+→ `loadReview()` → re-render, and the pencil is rebuilt from the fresh
+row, so a category set by pencil, ghost-accept, or bulk enables the
+subcategory pencil on that same reload. A disabled pencil is styled
+`cursor: not-allowed; opacity: .45` — the only CSS added.
+
+**Bulk apply with mixed category state.** `saveLabel()` for subcategory
+with 2+ targets partitions them with the pure
+`partitionSubcategoryTargets(txns)` → `{eligible, skipped}` and sends
+only the eligible ids; skipped rows are never in the request. The
+summary is the pure `skipSummary(eligible, skipped)` → "Updated
+subcategory for 4 of 7 selected rows — 3 skipped (no category set)",
+or "" when nothing was skipped. It is passed to `assign()` as
+`options.notice` and shown after the reload on a new per-tab notice
+line (`#review-notice`, `#reviewed-notice`, `.mode-note` styling,
+`role=status`), by `setNotice()`, the twin of `setError()`; every write
+clears it first. The editor's pre-commit "Applies to N selected rows"
+note also says up front "Applies to 4 of 7 selected rows (3 skipped: no
+category set)" so the skip is announced before and after. The
+all-eligible case is byte-for-byte the old call: same ids, no notice.
+The all-skipped case is unreachable through the UI (the edited row's own
+pencil is only enabled with a category) and is handled anyway.
+
+**Reviewed tab — traced.** It fetches `review_status=complete`, so every
+row there has a category: `canEditSubcategory` is always true, the
+pencil is never gated, the partition is always `{eligible: all, skipped:
+[]}`, and the summary is "" — so `assign()` is called exactly as before.
+The notice element exists on that tab for symmetry and stays hidden.
+
+**Existing data.** The one row with subcategory set and category NULL
+(Session 91) was not modified, migrated, or touched. On Review & Assign
+it now shows its saved subcategory with a disabled pencil ("Set
+category first"); setting its category re-enables the pencil.
+
+**Tests.** No frontend suite for DOM-level behaviour, per convention;
+five jsc tests in `tests/test_frontend_bulk_accept.py` lift the pure
+pieces from index.html: the predicate over null/undefined/missing/set
+category; the mixed partition and its exact summary text; the
+all-category-set selection as the unchanged case (all eligible, no
+skips, empty notice); the predicate flipping the moment the row object
+carries a category; and the no-ghost guarantee via `subSuggestionFor`.
+The pencil's disabled attribute, the tooltip, the rebuild after reload,
+and the notice rendering are DOM and are on the manual list. No backend
+change. **532 passing** (527 + 5). Script parsed under jsc.
+
+**Docs.** STATE.md: the editor paragraph gains the gating rule and the
+bulk skip behaviour.
+
+### Outcome
+The inline editor can no longer create a subcategory on a row without a
+category, singly or in bulk, and a bulk apply that skips rows says so.
+
+### In plain English
+You can't give a transaction a finer label until it has a main category
+— the little pencil on that cell is greyed out and says "Set category
+first" until you do; it wakes up as soon as the category is saved. If
+you apply a finer label to a batch of ticked rows and some of them have
+no category yet, those are left alone and the screen tells you how many
+were updated and how many were skipped, and why. The one old row that
+already had this problem was left exactly as it was. Not seen running
+(browser extension not connected).
+
+### Next steps
+Named, not fixed here: the API itself (`POST /transactions/category`)
+still accepts a subcategory-only assignment for a row with no category
+(Session 53's "any single field" contract), so a raw call can still
+produce the state; the engine is now None-safe against it (Session 91),
+so it is a data-hygiene question, not a crash. Manual verification of
+this session's four points when the browser is available. Then the
+Session 88 backlog.

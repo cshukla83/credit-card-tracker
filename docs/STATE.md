@@ -131,7 +131,14 @@ replaces it (Session 89), over the column's existing values — picking an
 option saves at once (by mouse, or by Up/Down arrows to a highlight then
 Enter; no wrap at the ends, typing clears the highlight — Session 90),
 typed text saves on Enter (a new value is just text not in the list),
-Escape/blur cancels. If the edited row is checked and
+Escape/blur cancels. **Subcategory needs a category** (Session 92): on a
+row with no category the subcategory pencil is disabled with the reason
+"Set category first" (the cell is the dash — the engine suggests nothing
+for such a row), and it comes back enabled on the reload after the
+category is written; a bulk subcategory apply writes only to selected
+rows that have a category, skips the rest untouched, and reports
+"Updated subcategory for N of M selected rows — K skipped (no category
+set)" on the tab's notice line (silent when nothing was skipped). If the edited row is checked and
 2+ rows are checked, the save applies to every checked row's same column
 (the bulk apply), with a count shown before commit; editing an unchecked
 row is never bulk. Payment rows' cascade-set labels are editable the same
