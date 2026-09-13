@@ -128,8 +128,10 @@ single click on the ghost accepts it, an unset field with none shows a
 dash; a small edit icon opens a combo box pre-filled with the saved value
 (else the suggestion), that pre-fill selected whole on open so typing
 replaces it (Session 89), over the column's existing values — picking an
-option saves at once, typed text saves on Enter (a new value is just text
-not in the list), Escape/blur cancels. If the edited row is checked and
+option saves at once (by mouse, or by Up/Down arrows to a highlight then
+Enter; no wrap at the ends, typing clears the highlight — Session 90),
+typed text saves on Enter (a new value is just text not in the list),
+Escape/blur cancels. If the edited row is checked and
 2+ rows are checked, the save applies to every checked row's same column
 (the bulk apply), with a count shown before commit; editing an unchecked
 row is never bulk. Payment rows' cascade-set labels are editable the same

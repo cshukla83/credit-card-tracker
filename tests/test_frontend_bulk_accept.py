@@ -12,6 +12,11 @@ What this pins down (the Session 88 item-2 question): eligibility is
 "exclude same_as_category by name", not an allowlist of tiers -- so the
 merchant_category tier is bulk-acceptable without being named anywhere in
 the frontend, and so is any future learned tier.
+
+Session 90 reuses the same harness for the inline editor's pure
+arrow-key step function, `stepHighlight`; the DOM-bound parts of that
+feature (class toggling, Enter dispatch) stay on the manual-verification
+list.
 """
 
 import json
@@ -120,3 +125,32 @@ def test_precedent_badge_text_shows_agreeing_count_share_and_percent():
         "precedent 3/4 · 75%",
         "precedent 3/5 · 60%",
     ]
+
+
+# --- inline editor: arrow-key highlight step (Session 90) ---------------------
+
+
+def _steps(cases):
+    """stepHighlight(current, key, count) for each (current, key, count)."""
+    script = _lift("stepHighlight") + f"""
+    print(JSON.stringify({json.dumps(cases)}.map(([c, k, n]) => stepHighlight(c, k, n))));
+    """
+    return json.loads(_js(script))
+
+
+def test_step_highlight_first_press_lands_on_first_or_last():
+    assert _steps([[-1, "ArrowDown", 3], [-1, "ArrowUp", 3]]) == [0, 2]
+
+
+def test_step_highlight_moves_one_and_stops_at_the_ends_without_wrapping():
+    assert _steps([
+        [0, "ArrowDown", 3], [1, "ArrowDown", 3], [2, "ArrowDown", 3],  # 0->1->2, stays 2
+        [2, "ArrowUp", 3], [1, "ArrowUp", 3], [0, "ArrowUp", 3],        # 2->1->0, stays 0
+    ]) == [1, 2, 2, 1, 0, 0]
+
+
+def test_step_highlight_empty_menu_and_other_keys():
+    assert _steps([
+        [-1, "ArrowDown", 0], [-1, "ArrowUp", 0], [1, "ArrowDown", 0],  # nothing to land on
+        [1, "Enter", 3], [-1, "a", 3],                                    # not an arrow: unchanged
+    ]) == [-1, -1, -1, 1, -1]

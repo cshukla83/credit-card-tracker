@@ -9670,3 +9670,63 @@ clearing the old one first. Not seen running.
 Manual verification: click a pencil on each tab and confirm the
 pre-filled text is selected whole before typing. Then the Session 88
 backlog.
+
+## Session 90 — 2026-09-13
+
+### Goal
+Arrow-key navigation in the inline editor's dropdown: Up/Down move a
+highlight through the filtered list, Enter saves the highlighted option
+as a click would; no highlight on open, typing clears it, no wrap.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `a6e1664`, clean.
+Browser tooling: not used; traced, with the pure part tested.
+
+**The change, all inside `renderInlineEditor()` plus one helper.** A
+top-level pure function `stepHighlight(current, key, count)`: -1 means
+none; Down from none → 0, Up from none → last; otherwise one step clamped
+at the ends; an empty list always → -1; any other key → unchanged. The
+editor keeps `matches` (the currently filtered list, already computed by
+`renderMenu()`) and a `highlighted` index. `renderMenu()` sets
+`highlighted = -1` at its top — it runs once on open and once per
+keystroke via the existing `input` listener, which is exactly items 2
+and 3 (nothing highlighted on open; typing clears it) with no extra
+plumbing. Arrow keys `preventDefault` (otherwise the caret jumps to the
+input's ends), step, and `applyHighlight()` toggles an `.active` class
+on the menu buttons and `scrollIntoView({block: "nearest"})` on the
+active one for long lists. **Enter** now commits `matches[highlighted]`
+when one is highlighted — the same `commit()` the mousedown pick calls —
+and `input.value` otherwise, unchanged. Escape is untouched. Both tabs
+share the editor (Session 86), so both get it.
+
+**Visual.** `.menu button.active` joins the existing `:hover, :focus`
+rule — the hover treatment, by class; no new pattern.
+
+**Tests.** No frontend suite, per convention. `stepHighlight` is pure
+and was extracted for that reason; three tests in
+`tests/test_frontend_bulk_accept.py` lift it out of index.html and run
+it under `jsc` (first press lands on first/last; one step and clamp at
+both ends; empty menu and non-arrow keys). The DOM parts — class
+toggling, Enter dispatch — are not extractable meaningfully and are on
+the manual list. No backend change. **525 passing** (522 + 3). Script
+parsed under `jsc`.
+
+**Docs.** `docs/STATE.md`: one clause on the editor sentence.
+
+### Outcome
+The dropdown is a keyboard combobox: arrows to highlight, Enter to pick,
+typing to refilter, Escape to leave — on both tabs.
+
+### In plain English
+In the label editor you can now press the down or up arrow to move
+through the list of existing values and hit Enter to pick one, instead
+of reaching for the mouse. Nothing is pre-selected when the list opens,
+typing more resets the highlight because the list changes, and the
+highlight stops at the top and bottom rather than looping. Not seen
+running.
+
+### Next steps
+Manual verification: Down/Up movement, stops at both ends, highlight
+clears on typing, Enter with and without a highlight. Then the
+Session 88 backlog.

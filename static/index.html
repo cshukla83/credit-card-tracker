@@ -769,7 +769,7 @@
     cursor: pointer;
     white-space: nowrap;
   }
-  .menu button:hover, .menu button:focus {
+  .menu button:hover, .menu button:focus, .menu button.active {
     background: var(--accent-wash);
     color: var(--accent-ink);
     outline: none;
@@ -2862,6 +2862,18 @@
       if (typeof target.select === "function") target.select();
     }
 
+    // Arrow-key step over a menu of `count` options (Session 90). `current`
+    // is the highlighted index or -1 for none. Down from none lands on the
+    // first option, Up from none on the last; otherwise one step, clamped
+    // at the ends -- no wrap-around. An empty menu always yields -1. Pure,
+    // so tests/test_frontend_bulk_accept.py can run it under jsc.
+    function stepHighlight(current, key, count) {
+      if (count <= 0) return -1;
+      if (key === "ArrowDown") return current < 0 ? 0 : Math.min(current + 1, count - 1);
+      if (key === "ArrowUp") return current < 0 ? count - 1 : Math.max(current - 1, 0);
+      return current;
+    }
+
     // The combo editor: an input pre-filled with the saved value, else the
     // suggestion text (so accept-with-a-tweak needs no retyping), else
     // empty; a typeahead menu of the column's existing values. Picking an
@@ -2910,15 +2922,32 @@
         }
       };
 
+      // Keyboard highlight (Session 90): index into `matches`, -1 for
+      // none. Every renderMenu() -- the initial one and each keystroke's
+      // re-filter -- resets it, so the menu opens with nothing highlighted
+      // and typing after an arrow press clears the highlight, because the
+      // list just changed under it.
+      let matches = [];
+      let highlighted = -1;
+      const applyHighlight = () => {
+        const buttons = menu.querySelectorAll("button");
+        buttons.forEach((b, i) => b.classList.toggle("active", i === highlighted));
+        const active = buttons[highlighted];
+        if (active && typeof active.scrollIntoView === "function") {
+          active.scrollIntoView({ block: "nearest" });
+        }
+      };
+
       const renderMenu = () => {
         menu.textContent = "";
+        highlighted = -1;
         const q = input.value.trim().toLowerCase();
         // The whole list, untyped or filtered -- never capped. A cap here
         // (Session 82 shipped .slice(0, 8), inherited from the old bar
         // typeahead) hid every value past the first eight with nothing to
         // scroll to; the menu's own max-height + overflow-y provides the
         // scrolling, exactly as the filter-bar selects show every value.
-        const matches = spec.options().filter((v) => !q || v.toLowerCase().includes(q));
+        matches = spec.options().filter((v) => !q || v.toLowerCase().includes(q));
         for (const v of matches) {
           const b = document.createElement("button");
           b.type = "button";
@@ -2941,9 +2970,17 @@
       renderMenu();
       input.addEventListener("input", renderMenu);
       input.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          // preventDefault keeps the caret from jumping to the input's
+          // start/end, which is what the arrows do in a text field.
           event.preventDefault();
-          commit(input.value);
+          highlighted = stepHighlight(highlighted, event.key, matches.length);
+          applyHighlight();
+        } else if (event.key === "Enter") {
+          event.preventDefault();
+          // A highlighted option is the mouse-pick path (saves that value);
+          // none highlighted is the typed-text path, unchanged.
+          commit(highlighted >= 0 ? matches[highlighted] : input.value);
         } else if (event.key === "Escape") {
           event.preventDefault();
           cancel();
