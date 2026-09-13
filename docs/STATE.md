@@ -97,7 +97,14 @@ single column expresses: `incomplete` (any of the three labels `NULL`) or
 `GET /transactions` and `GET /transactions/aggregate`, not on the listing
 endpoints. *All
 transactions* lists rows read-only with merchant/category/subcategory.
-*Review & assign* groups rows either by suggested category (default) or by
+*Review & assign* shows, by default, the rows that still **need review —
+any of category, subcategory, or merchant unset** (`review_status=
+incomplete` on the server, Session 81; the toggle is "Needs review only",
+formerly "Uncategorized only", and a row now leaves the pending view only
+when all three labels are set); rows with a category but a missing
+subcategory or merchant sit in their own "Category set — subcategory or
+merchant missing" group; with the toggle off, fully labelled rows appear
+too. It groups rows either by suggested category (default) or by
 description similarity at a chosen threshold; each row shows its
 suggestions with accept/change for all three labels (one-click dropdown,
 spread-to-group, add-new); a sticky multi-select bar offers typed bulk

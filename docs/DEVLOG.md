@@ -8909,3 +8909,82 @@ screen will switch to this next session.
 
 ### Next steps
 Session 81: Review & Assign uses `review_status=incomplete`; then 82–83.
+
+## Session 81 — 2026-09-13
+
+### Goal
+Frontend only. Stop rows vanishing from Review & Assign the moment their
+category is set: the pending view is now defined by Session 80's
+`review_status=incomplete` — a row stays until category, subcategory,
+**and** merchant are all set.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `363cb81`, clean.
+Browser tooling: not available; traced.
+
+**Where the row set was decided, and what changed.** Review & Assign
+fetched every row for the filter bar and split them client-side on
+`category IS NULL` ("open" versus "done"), with the "Uncategorized only"
+toggle hiding the "done" group. Setting a category alone therefore moved a
+row into the hidden group. Now the toggle is a **server-side row-set
+filter**: on (the default), `loadReview()` adds `review_status=incomplete`
+to its `/transactions` request; off, it fetches every filtered row.
+Flipping it refetches rather than regroups. Its URL key is `needs_review`
+(`=0` when off); the old `uncategorized` key is still honoured on load so
+earlier bookmarks keep their meaning.
+
+**A third bucket.** With the row set now "anything missing", rows that have
+a category but lack a subcategory or merchant need a home that stays
+visible. `isComplete(txn)` (all three set) was added beside `isOpen(txn)`
+(no category — still the rule for whether a *category* suggestion is
+shown, which has not changed). Grouping is now: suggested-category groups
+and "No suggestion" for open rows, as before; a **"Category set —
+subcategory or merchant missing"** group (kind `partial`, no accept-all,
+per-row controls only) for rows with a category but incomplete; and, only
+with the toggle off, a "Fully labelled" group (formerly "Already
+categorized") for complete rows. The status line reads `N transactions ·
+M need review (k with only category set) · D fully labelled`; the
+"Nothing left to review" state triggers when open + partial is zero.
+
+**Wording.** "Uncategorized only" → **"Needs review only"**; "Already
+categorized" → **"Fully labelled"**; the done group's meta now says "all
+three labels set". Chosen to match the screen's plain, verb-led tone and
+to stop implying that a category alone finishes a row.
+
+**Similarity mode.** The toggle used to be disabled there (the old
+regroup was meaningless for clusters). As a row-set filter it applies in
+both modes, so it is enabled everywhere; clusters are computed over
+whatever the fetch returned.
+
+**Grouping unchanged, by trace.** `buildGroups()`'s suggested-category and
+similarity branches were not modified beyond the new `partial` bucket;
+`visibleIds()`, the selection prune, and Session 57's keep-selection
+behaviour work over the new groups. A category-only bulk accept now keeps
+its rows in view (in the partial group) instead of hiding them, which is
+the intended fix.
+
+**Tests.** No backend change; backend suite run for the record: **508
+passing**. No frontend suite, per convention.
+
+**Verification — traced, not seen.** Adds to the manual-verification
+backlog.
+
+### Outcome
+Review & Assign now means "rows still needing any label"; a partially
+labelled row stays visible in its own group until all three labels are set.
+
+### In plain English
+Rows used to disappear from the review screen as soon as they were given a
+category, even with the finer label and merchant still blank. The screen
+now asks the server for "anything with a label still missing", so such
+rows stay put — in a group of their own that says what's missing — and
+only leave once all three labels are filled in. The toggle that hides
+finished rows is now called "Needs review only". Not seen running.
+
+### Next steps
+- **Session 82:** inline editing replaces the button-based editors.
+- **Session 83:** the Reviewed tab.
+- Manual browser verification backlog now covers Sessions 79–81 as well;
+  Sessions 73–78's dashboard work is still separately pending its own
+  verification, STATE.md reconciliation, and merge to `main`.

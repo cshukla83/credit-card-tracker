@@ -1004,7 +1004,7 @@
       </label>
       <label class="inline" id="uncategorized-only-label" style="display: none;">
         <input type="checkbox" id="uncategorized-only-filter" checked>
-        Uncategorized only
+        Needs review only
       </label>
     </div>
     <!-- Second row (Session 76): the three labels as independent peers.
@@ -1371,7 +1371,7 @@
       const params = buildParams(filters);
       if (activeTab === "review") {
         params.set("tab", "review");
-        if (!uncategorizedOnlyEl.checked) params.set("uncategorized", "0");
+        if (!uncategorizedOnlyEl.checked) params.set("needs_review", "0");
       } else if (activeTab === "dashboard") {
         params.set("tab", "dashboard");
       }
@@ -1582,6 +1582,14 @@
       return txn.category === null || txn.category === undefined;
     }
 
+    // A row is reviewed only when all three labels are set (Session 81 --
+    // the server's review_status=complete). isOpen() stays "no category":
+    // it decides whether a *category* suggestion is shown, not whether the
+    // row is finished.
+    function isComplete(txn) {
+      return [txn.category, txn.subcategory, txn.merchant].every((v) => v !== null && v !== undefined);
+    }
+
     function fmtAmount(n) {
       return "₹" + Number(n).toLocaleString("en-IN", {
         minimumFractionDigits: 2,
@@ -1644,7 +1652,12 @@
 
     function buildGroups() {
       const open = review.transactions.filter(isOpen);
-      const done = review.transactions.filter((t) => !isOpen(t));
+      // Category set but subcategory and/or merchant still missing: these
+      // rows stay in view (Session 81) in their own group rather than
+      // falling into the hidden "done" bucket as they did when "done" meant
+      // "has a category".
+      const partial = review.transactions.filter((t) => !isOpen(t) && !isComplete(t));
+      const done = review.transactions.filter(isComplete);
 
       if (review.mode === "similarity") {
         // One group per cluster the endpoint returned, in its order, each
@@ -1680,7 +1693,7 @@
         // Groups needing action first; Array.prototype.sort is stable, so
         // the endpoint's order is kept within each of the two buckets.
         groups.sort((a, b) => Number(a.openCount === 0) - Number(b.openCount === 0));
-        return { groups, openCount: open.length, doneCount: done.length };
+        return { groups, openCount: open.length, partialCount: partial.length, doneCount: done.length };
       }
 
       const byCategory = new Map();
@@ -1705,10 +1718,13 @@
       if (noSuggestion.length) {
         groups.push(makeGroup("none", "No suggestion", noSuggestion));
       }
-      if (!uncategorizedOnlyEl.checked && done.length) {
-        groups.push(makeGroup("done", "Already categorized", done));
+      if (partial.length) {
+        groups.push(makeGroup("partial", "Category set \u2014 subcategory or merchant missing", partial));
       }
-      return { groups, openCount: open.length, doneCount: done.length };
+      if (!uncategorizedOnlyEl.checked && done.length) {
+        groups.push(makeGroup("done", "Fully labelled", done));
+      }
+      return { groups, openCount: open.length, partialCount: partial.length, doneCount: done.length };
     }
 
     function makeGroup(kind, title, txns, key) {
@@ -1719,7 +1735,9 @@
       );
       let meta = txnLabel(txns.length) + " · " + fmtAmount(total);
       if (kind === "done") {
-        meta = txnLabel(txns.length) + " · select any of these to re-assign in bulk";
+        meta = txnLabel(txns.length) + " · all three labels set; select any to re-assign in bulk";
+      } else if (kind === "partial") {
+        meta += " · accept or set the missing labels per row";
       } else if (kind === "cluster") {
         // A cluster has no single suggested category to accept, so no
         // methods line and (below) no accept-all; the per-row controls
@@ -1807,9 +1825,10 @@
     // selection (a row you just labelled is done with). The bar's two bulk
     // accepts pass keepSelection so the same selection is still there for
     // the *other* button afterwards -- and the reload then skips its
-    // prune-to-visible, because under "Uncategorized only" the rows just
-    // categorized leave the visible groups yet must stay selectable for a
-    // following merchant accept (Session 57).
+    // prune-to-visible so rows that moved between groups stay selectable
+    // for a following accept (Session 57). Since Session 81 a row leaves
+    // the "needs review" fetch only when all three labels are set, so a
+    // category-only accept keeps it in view (in the partial group).
     function assign(pairs, options) {
       const keepSelection = Boolean(options && options.keepSelection);
       if (review.busy || pairs.length === 0) return Promise.resolve();
@@ -1940,7 +1959,11 @@
       const seq = ++requestSeq;
       reviewStatusEl.textContent = "Loading…";
 
-      const transactionsP = fetchJSON(transactionsURL(filters));
+      // The toggle is a real row-set filter (Session 81): on, the server
+      // returns only rows with any label missing; off, every filtered row.
+      const reviewParams = buildParams(filters);
+      if (uncategorizedOnlyEl.checked) reviewParams.set("review_status", "incomplete");
+      const transactionsP = fetchJSON(withParams("/transactions", reviewParams));
       const catalogP = fetchJSON("/categories");
       const merchantsP = fetchJSON("/merchants");
       const subcategoriesP = fetchJSON("/subcategories");
@@ -1986,7 +2009,7 @@
     }
 
     function renderReview() {
-      const { groups, openCount, doneCount } = buildGroups();
+      const { groups, openCount, partialCount, doneCount } = buildGroups();
       const total = review.transactions.length;
 
       reviewBodyEl.textContent = "";
@@ -1995,11 +2018,11 @@
 
       const similarity = review.mode === "similarity";
       thresholdLabelEl.style.display = similarity ? "" : "none";
-      // "Uncategorized only" does not apply to similarity groups (every row
-      // in view is clustered regardless of category state); it keeps its
-      // value, so switching back restores exactly the previous view.
-      uncategorizedOnlyEl.disabled = similarity;
-      uncategorizedOnlyLabelEl.style.opacity = similarity ? "0.5" : "";
+      // "Needs review only" is a row-set filter since Session 81, so it
+      // applies in both grouping modes (it used to be a client-side regroup
+      // that similarity mode ignored).
+      uncategorizedOnlyEl.disabled = false;
+      uncategorizedOnlyLabelEl.style.opacity = "";
 
       if (total === 0) {
         reviewStatusEl.textContent = "No transactions found.";
@@ -2008,8 +2031,11 @@
         return;
       }
 
+      const needsReview = openCount + partialCount;
       reviewStatusEl.textContent =
-        total + " transactions · " + openCount + " uncategorized · " + doneCount + " done";
+        total + " transactions · " + needsReview + " need review" +
+        (partialCount ? " (" + partialCount + " with only category set)" : "") +
+        " · " + doneCount + " fully labelled";
 
       renderSelectionBar();
 
@@ -2028,7 +2054,7 @@
             "Lower the threshold to find looser matches.";
           nothingLeftEl.style.display = "";
         }
-      } else if (openCount === 0) {
+      } else if (openCount + partialCount === 0) {
         nothingLeftEl.textContent = "Nothing left to review for these filters.";
         nothingLeftEl.style.display = "";
       }
@@ -3752,7 +3778,9 @@
       const urlTabRaw = params.get("tab");
       const urlTab = urlTabRaw === "review" || urlTabRaw === "dashboard" ? urlTabRaw : "all";
       readDashboardURLParams(params);
-      uncategorizedOnlyEl.checked = params.get("uncategorized") !== "0";
+      // "needs_review" since Session 81; the old "uncategorized" key is still
+      // honoured so earlier bookmarks keep their meaning.
+      uncategorizedOnlyEl.checked = params.get("needs_review") !== "0" && params.get("uncategorized") !== "0";
 
       startFilterEl.value = urlStart;
       endFilterEl.value = urlEnd;
@@ -3870,14 +3898,14 @@
     categoryFilterEl.addEventListener("change", onFilterChange);
     subcategoryFilterEl.addEventListener("change", onFilterChange);
     merchantFilterEl.addEventListener("change", onFilterChange);
-    // "Uncategorized only" is a view toggle, not an API filter: the data is
-    // already loaded, so it only re-groups. The URL is updated so a reload
-    // keeps it.
+    // "Needs review only" is a row-set filter (review_status=incomplete on
+    // the server) since Session 81, so flipping it refetches. The URL is
+    // updated so a reload keeps it.
     uncategorizedOnlyEl.addEventListener("change", () => {
-      updateURL(currentFilters());
-      pruneSelectionToVisible();
+      const filters = currentFilters();
+      updateURL(filters);
       review.editing = null;
-      renderReview();
+      loadReview(filters);
     });
     // Grouping mode: switching changes only how rows are grouped (and, in
     // similarity mode, which are shown) -- filters and selection are left
