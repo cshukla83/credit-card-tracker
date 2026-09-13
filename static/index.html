@@ -1105,6 +1105,29 @@
   </div>
 
   <!-- Dashboard (Session 66) -->
+  <!-- Reviewed (Session 83; flat sortable table since Session 86) -->
+  <div id="panel-reviewed" style="display: none;">
+    <div id="reviewed-status" class="dash-status">Loading…</div>
+    <div id="reviewed-error" class="error" style="display: none;"></div>
+    <div id="reviewed-selection-bar" class="selection-bar" style="display: none;"></div>
+    <table id="reviewed-table" style="display: none;">
+      <thead>
+        <tr>
+          <th class="select"></th>
+          <th class="num" data-sort="txn_date">date</th>
+          <th data-sort="description">description</th>
+          <th class="type" data-sort="txn_type">type</th>
+          <th class="num amount" data-sort="amount">amount</th>
+          <th data-sort="merchant">merchant</th>
+          <th data-sort="category">category</th>
+          <th data-sort="subcategory">subcategory</th>
+          <th class="payment" data-sort="is_payment">card payment</th>
+        </tr>
+      </thead>
+      <tbody id="reviewed-body"></tbody>
+    </table>
+  </div>
+
   <div id="panel-dashboard" style="display: none;">
     <div id="period-bar" class="period-bar">
       <label class="period-field">
@@ -1257,6 +1280,12 @@
     const panelAllEl = document.getElementById("panel-all");
     const panelReviewEl = document.getElementById("panel-review");
     const panelDashboardEl = document.getElementById("panel-dashboard");
+    const panelReviewedEl = document.getElementById("panel-reviewed");
+    const reviewedStatusEl = document.getElementById("reviewed-status");
+    const reviewedErrorEl = document.getElementById("reviewed-error");
+    const reviewedSelectionBarEl = document.getElementById("reviewed-selection-bar");
+    const reviewedTableEl = document.getElementById("reviewed-table");
+    const reviewedBodyEl = document.getElementById("reviewed-body");
     // The shared filter bar's month and date fields are hidden on the
     // dashboard, whose period controls supersede them; bank/card stay.
     const statementMonthFieldEl = statementMonthFilterEl.closest("label");
@@ -1395,6 +1424,7 @@
       for (const [key, value] of Object.entries(dashboardURLParams())) params.set(key, value);
       // Table sorts (Session 85), likewise namespaced and omitted when unset.
       for (const [key, value] of Object.entries(sortURLParams("", allSort))) params.set(key, value);
+      for (const [key, value] of Object.entries(sortURLParams("r_", reviewedSort))) params.set(key, value);
       window.history.replaceState(null, "", withParams(window.location.pathname, params));
     }
 
@@ -1431,7 +1461,7 @@
     // stance the rest of the app takes), header wiring with an arrow and
     // aria-sort, and URL round-trip under a per-table prefix.
     // ------------------------------------------------------------------
-    const NUMERIC_SORT_KEYS = new Set(["amount"]);
+    const NUMERIC_SORT_KEYS = new Set(["amount", "is_payment"]);
 
     function makeSort() {
       return { key: null, dir: "asc" };
@@ -1841,8 +1871,8 @@
       if (partial.length) {
         groups.push(makeGroup("partial", "Category set \u2014 subcategory or merchant missing", partial));
       }
-      if ((activeTab === "reviewed" || !uncategorizedOnlyEl.checked) && done.length) {
-        groups.push(makeGroup("done", activeTab === "reviewed" ? "Reviewed" : "Fully labelled", done));
+      if (!uncategorizedOnlyEl.checked && done.length) {
+        groups.push(makeGroup("done", "Fully labelled", done));
       }
       return { groups, openCount: open.length, partialCount: partial.length, doneCount: done.length };
     }
@@ -1916,7 +1946,7 @@
       // filtered set, not just the rows above threshold: a threshold or
       // mode change must not change selection state (Session 51 brief).
       const shown =
-        review.mode === "similarity"
+        review.mode === "similarity" || activeTab === "reviewed"
           ? new Set(selectableIds(review.transactions))
           : new Set(Array.from(visibleIds()).filter((id) => {
               const t = review.transactions.find((x) => x.id === id);
@@ -1927,14 +1957,22 @@
       }
     }
 
+    // The two label-editing tabs each have an error line; write to the one
+    // that is showing (Session 86) and clear both on reset.
     function setError(message) {
-      if (message) {
-        reviewErrorEl.textContent = message;
-        reviewErrorEl.style.display = "";
-      } else {
-        reviewErrorEl.textContent = "";
-        reviewErrorEl.style.display = "none";
+      const target = activeTab === "reviewed" ? reviewedErrorEl : reviewErrorEl;
+      for (const el of [reviewErrorEl, reviewedErrorEl]) {
+        el.textContent = "";
+        el.style.display = "none";
       }
+      if (message) {
+        target.textContent = message;
+        target.style.display = "";
+      }
+    }
+
+    function activeReviewStatusEl() {
+      return activeTab === "reviewed" ? reviewedStatusEl : reviewStatusEl;
     }
 
     // One assign call, a list of per-field-optional entries. After a
@@ -2074,7 +2112,7 @@
     function loadReview(filters, options) {
       const skipPrune = Boolean(options && options.skipPrune);
       const seq = ++requestSeq;
-      reviewStatusEl.textContent = "Loading…";
+      activeReviewStatusEl().textContent = "Loading…";
 
       // The toggle is a real row-set filter (Session 81): on, the server
       // returns only rows with any label missing; off, every filtered row.
@@ -2119,14 +2157,25 @@
         })
         .catch((error) => {
           if (seq !== requestSeq) return;
-          reviewStatusEl.textContent = "Error loading transactions: " + error.message;
+          activeReviewStatusEl().textContent = "Error loading transactions: " + error.message;
           reviewTableEl.style.display = "none";
+          reviewedTableEl.style.display = "none";
+          reviewedSelectionBarEl.style.display = "none";
           selectionBarEl.style.display = "none";
           nothingLeftEl.style.display = "none";
         });
     }
 
+    // Both label-editing tabs share the review state and its load; only
+    // the view differs (Session 86): Review & Assign is the grouped panel,
+    // Reviewed is a flat sortable table. Every caller keeps calling
+    // renderReview().
     function renderReview() {
+      if (activeTab === "reviewed") renderReviewed();
+      else renderReviewGrouped();
+    }
+
+    function renderReviewGrouped() {
       const { groups, openCount, partialCount, doneCount } = buildGroups();
       const total = review.transactions.length;
 
@@ -2143,20 +2192,17 @@
       uncategorizedOnlyLabelEl.style.opacity = "";
 
       if (total === 0) {
-        reviewStatusEl.textContent = activeTab === "reviewed"
-          ? "No fully labelled transactions for these filters."
-          : "No transactions found.";
+        reviewStatusEl.textContent = "No transactions found.";
         reviewTableEl.style.display = "none";
         selectionBarEl.style.display = "none";
         return;
       }
 
       const needsReview = openCount + partialCount;
-      reviewStatusEl.textContent = activeTab === "reviewed"
-        ? total + " fully labelled transactions"
-        : total + " transactions · " + needsReview + " need review" +
-          (partialCount ? " (" + partialCount + " with only category set)" : "") +
-          " · " + doneCount + " fully labelled";
+      reviewStatusEl.textContent =
+        total + " transactions · " + needsReview + " need review" +
+        (partialCount ? " (" + partialCount + " with only category set)" : "") +
+        " · " + doneCount + " fully labelled";
 
       renderSelectionBar();
 
@@ -2175,7 +2221,7 @@
             "Lower the threshold to find looser matches.";
           nothingLeftEl.style.display = "";
         }
-      } else if (activeTab !== "reviewed" && openCount + partialCount === 0) {
+      } else if (openCount + partialCount === 0) {
         nothingLeftEl.textContent = "Nothing left to review for these filters.";
         nothingLeftEl.style.display = "";
       }
@@ -2456,6 +2502,111 @@
       tr.appendChild(renderLabelCell(txn, "subcategory", editingField === "subcategory"));
       tr.appendChild(renderPaymentCell(txn));
       return tr;
+    }
+
+    // --- Reviewed tab: flat sortable table (Session 86) --------------------
+    // Session 85's sort module over the same review state: rows are
+    // review.transactions (fetched under review_status=complete), sorted by
+    // this tab's own reviewedSort, each row built from the same cells the
+    // grouped panel uses -- checkbox via isSelectable, the inline label
+    // editor for all three labels, the card-payment cell. No grouping, no
+    // suggestion-accept controls: every row here is fully labelled, so
+    // there is nothing for them to act on.
+    const reviewedSort = makeSort();
+
+    function renderReviewed() {
+      reviewedBodyEl.textContent = "";
+      const total = review.transactions.length;
+      if (total === 0) {
+        reviewedStatusEl.textContent = "No fully labelled transactions for these filters.";
+        reviewedTableEl.style.display = "none";
+        reviewedSelectionBarEl.style.display = "none";
+        return;
+      }
+      reviewedStatusEl.textContent = total + " fully labelled transactions";
+      renderReviewedSelectionBar();
+      renderSortIndicators(reviewedTableEl, reviewedSort);
+
+      for (const txn of sortRows(review.transactions, reviewedSort)) {
+        const tr = document.createElement("tr");
+        const isSelected = review.selected.has(txn.id);
+        const editingField =
+          review.editing !== null && review.editing.id === txn.id ? review.editing.field : null;
+        if (editingField !== null) tr.className = "editing";
+        else if (isSelected) tr.className = "selected";
+
+        const selectCell = document.createElement("td");
+        selectCell.className = "select";
+        if (isSelectable(txn)) {
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.checked = isSelected;
+          cb.addEventListener("change", () => {
+            if (cb.checked) review.selected.add(txn.id);
+            else review.selected.delete(txn.id);
+            renderReview();
+          });
+          selectCell.appendChild(cb);
+        } else {
+          selectCell.title = "Credits are not bulk-selectable";
+        }
+        tr.appendChild(selectCell);
+
+        const dateCell = document.createElement("td");
+        dateCell.className = "num";
+        dateCell.textContent = txn.txn_date;
+        tr.appendChild(dateCell);
+        const descCell = document.createElement("td");
+        descCell.textContent = txn.description;
+        tr.appendChild(descCell);
+        tr.appendChild(typeCell(txn));
+        const amountCell = document.createElement("td");
+        amountCell.className = "num amount " + txn.txn_type;
+        amountCell.textContent = fmtAmount(txn.amount);
+        tr.appendChild(amountCell);
+
+        tr.appendChild(renderLabelCell(txn, "merchant", editingField === "merchant"));
+        tr.appendChild(renderLabelCell(txn, "category", editingField === "category"));
+        tr.appendChild(renderLabelCell(txn, "subcategory", editingField === "subcategory"));
+        tr.appendChild(renderPaymentCell(txn));
+        reviewedBodyEl.appendChild(tr);
+      }
+      reviewedTableEl.style.display = "";
+
+      if (review.editing) {
+        const target = reviewedBodyEl.querySelector("[data-autofocus]");
+        if (target) target.focus();
+      }
+    }
+
+    // Count, total, and clear only. The per-field "accept suggestions"
+    // buttons and the Category / Sub Category / Merchant toggle are
+    // deliberately absent: accepting applies to unset fields, of which this
+    // tab has none, so the controls would be permanently inert. Bulk apply
+    // still works through the inline editor (Session 82's saveTargets).
+    function renderReviewedSelectionBar() {
+      reviewedSelectionBarEl.textContent = "";
+      const selectedTxns = review.transactions.filter((t) => review.selected.has(t.id));
+      if (selectedTxns.length === 0) {
+        reviewedSelectionBarEl.style.display = "none";
+        return;
+      }
+      const amount = selectedTxns.reduce((n, t) => n + Number(t.amount), 0);
+      const label = document.createElement("span");
+      label.className = "label";
+      label.textContent = selectedTxns.length + " selected \u00b7 " + fmtAmount(amount) +
+        " \u2014 editing any selected row's label applies to all of them";
+      reviewedSelectionBarEl.appendChild(label);
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.className = "link";
+      clear.textContent = "clear selection";
+      clear.addEventListener("click", () => {
+        review.selected.clear();
+        renderReview();
+      });
+      reviewedSelectionBarEl.appendChild(clear);
+      reviewedSelectionBarEl.style.display = "";
     }
 
     // --- card payment cell (Session 62) -------------------------------------
@@ -3505,7 +3656,8 @@
       tabReviewedEl.classList.toggle("active", isReviewed);
       tabDashboardEl.classList.toggle("active", isDashboard);
       panelAllEl.style.display = isReview || isReviewed || isDashboard ? "none" : "";
-      panelReviewEl.style.display = isReview || isReviewed ? "" : "none";
+      panelReviewEl.style.display = isReview ? "" : "none";
+      panelReviewedEl.style.display = isReviewed ? "" : "none";
       panelDashboardEl.style.display = isDashboard ? "" : "none";
       uncategorizedOnlyLabelEl.style.display = isReview ? "" : "none";
       // Dashboard: period controls replace month/date filters; bank/card stay.
@@ -3677,6 +3829,7 @@
       const urlTab = ["review", "reviewed", "dashboard"].includes(urlTabRaw) ? urlTabRaw : "all";
       readDashboardURLParams(params);
       readSortURLParams(params, "", allSort, tableEl);
+      readSortURLParams(params, "r_", reviewedSort, reviewedTableEl);
       // "needs_review" since Session 81; the old "uncategorized" key is still
       // honoured so earlier bookmarks keep their meaning.
       uncategorizedOnlyEl.checked = params.get("needs_review") !== "0" && params.get("uncategorized") !== "0";
@@ -3844,6 +3997,10 @@
     wireSortableHeaders(tableEl, allSort, () => {
       updateURL(currentFilters());
       renderTransactionsSorted();
+    });
+    wireSortableHeaders(reviewedTableEl, reviewedSort, () => {
+      updateURL(currentFilters());
+      renderReviewed(); // re-sorts the last-won rows; no fetch
     });
     tabReviewedEl.addEventListener("click", () => setTab("reviewed", true));
     tabDashboardEl.addEventListener("click", () => setTab("dashboard", true));

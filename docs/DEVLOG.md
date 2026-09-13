@@ -9317,3 +9317,91 @@ change and is kept in the page address. Not seen running.
 
 ### Next steps
 Session 86: the Reviewed tab drops grouping for this sortable table.
+
+## Session 86 — 2026-09-13
+
+### Goal
+Frontend only. The Reviewed tab drops the grouped review panel it reused
+in Session 83 — grouping exists to resolve ambiguous suggestions, which
+fully labelled rows do not have — for the flat, sortable table built in
+Session 85, keeping Session 82's inline editor and bulk apply. Review &
+Assign's own grouped view is unchanged.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `5a19b0a`, clean.
+Browser tooling: not available; traced.
+
+**A panel of its own, the same state underneath.** `panel-reviewed` holds
+a status line, an error line, a selection bar, and `reviewed-table` with
+`data-sort` headers for the nine columns it shows (select, date,
+description, type, amount, merchant, category, subcategory, card payment
+— `is_payment` sorts numerically). `renderReview()` became a two-line
+dispatcher: Reviewed → `renderReviewed()`, otherwise the grouped
+`renderReviewGrouped()` (the former body, unchanged). That keeps every
+existing caller — editor open and cancel, the post-save reload in
+`assign()`, checkbox changes — landing on the right renderer with no
+duplication. Session 83's branches inside the grouped renderer and
+`buildGroups()` (the "Reviewed" group title, the status and empty-state
+wording, the "always show done") were removed, since that panel no longer
+serves this tab; `loadReview()`'s `review_status=complete` pin and the
+tab plumbing stay.
+
+**Sorting, reused.** `reviewedSort` is a second `makeSort()`; headers are
+wired with the same `wireSortableHeaders`, rows rendered via
+`sortRows(review.transactions, reviewedSort)` — same comparator, same
+NULL-last rule — and the sort round-trips as `r_sort` / `r_dir`,
+independent of All Transactions' `sort` / `dir`, so switching tabs carries
+nothing across. `renderReviewed()` runs only after `loadReview()`'s
+`seq !== requestSeq` check, so the sort applies to the winning fetch; a
+header click re-sorts the last-won rows with no fetch.
+
+**Editor, checkboxes, bulk apply — confirmed by trace, not assumed.**
+Rows are built from the very cells the grouped panel uses:
+`renderLabelCell()` ×3, the `isSelectable()`-gated checkbox, and
+`renderPaymentCell()`. In `renderLabelCell()` the suggestion is looked up
+only when the saved value is null (`const s = saved === null ?
+spec.suggestion(txn) : null`); under `review_status=complete` every row
+has all three saved, so the ghost branch is unreachable here and each
+field is saved text plus the edit icon. `saveTargets()` reads
+`review.selected`, which the checkbox and prune populate through
+`isSelectable()` — credit rows excluded, bulk apply intact. The prune
+treats every fetched selectable row as visible on this tab.
+
+**No inert controls.** The Reviewed selection bar shows count, total, a
+note that editing a selected row applies to all selected, and clear —
+no per-field accept buttons and no field toggle, since accepting applies
+only to unset fields and this tab has none by definition.
+
+**Status and error routing.** `loadReview()`'s "Loading…" and error text,
+and `setError()`, now write to whichever of the two panels is showing;
+previously they would have written into the hidden grouped panel from
+this tab.
+
+**Tests.** No frontend suite exists; no backend change. Backend suite
+for the record: **508 passing**.
+
+**Verification — traced, not seen.** Adds to the manual-verification
+backlog.
+
+### Outcome
+Reviewed is a plain, sortable, in-place-editable table of finished
+transactions; Review & Assign keeps its grouped workflow; both share one
+state, one editor, one selection rule.
+
+### In plain English
+The "Reviewed" tab no longer arranges finished transactions into
+suggestion groups — there is nothing to suggest for rows that are fully
+labelled — and instead shows them as a simple table that can be sorted by
+any column, with the same in-place editing and tick-several-rows-to-change-
+together behaviour as before, and without buttons that could never do
+anything here. Not seen running.
+
+### Next steps
+- Re-verify by hand the items still open from earlier reports: item P
+  (the review screens, now including sorting on All Transactions and
+  Reviewed) and the group "accept all" / credit-row question left open
+  from Session 79's verification.
+- Sessions 73–78's dashboard work: its own verification, `docs/STATE.md`
+  reconciliation (now Sessions 61–86), and merge to `main`.
+- **Module 1** (upload UI with auto-detect) is the eventual next arc.

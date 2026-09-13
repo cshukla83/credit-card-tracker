@@ -135,14 +135,18 @@ set is heterogeneous — a refund's labels are the user's, a payment's are
 the cascade's — and does not belong in one bulk apply; the rule lives in
 one predicate that gates the row checkbox, the group checkbox, and the
 selection prune, so every bulk action inherits it.
-*Reviewed* (Session 83) is a fourth tab: the same review panel — same
-filter bar (both rows), same rows, same inline editor and multi-select
-with the same credit-row exclusion — with its row set pinned to
-`review_status=complete` (not exposed as a user choice; it is what
-defines the tab) and the "Needs review only" toggle hidden. Fully
-labelled rows render as saved text plus the edit icon (no ghost
-suggestions apply), so a finished transaction can be corrected in place.
-*All transactions* remains read-only.
+*Reviewed* (Session 83; reshaped in Session 86) is a fourth tab: a
+**flat, sortable table** — Session 85's sort module, its own independent
+sort state (`r_sort`, `r_dir` in the URL), the same NULL-last rule — over
+the rows with all three labels set (`review_status=complete`, pinned; not
+a user choice), under the same shared filter bar. No grouping and no
+suggestion-accept controls (grouping exists to resolve suggestions, and
+every row here is fully labelled); the multi-select bar shows count, total,
+and clear only. Each row carries Session 82's inline editor for the three
+labels — every field renders as saved text plus the edit icon, since a
+ghost suggestion only appears for an unset field — the checkbox under
+Session 79's credit exclusion, Session 82's bulk apply via the editor,
+and the card-payment cell. *All transactions* remains read-only.
 *Dashboard* (Sessions 65–69, 73–77): period controls (week / month /
 quarter / year / custom, relative or absolute), the resolved period and
 total echoed from the API, a Chart.js bar chart, a collapsible table, and
