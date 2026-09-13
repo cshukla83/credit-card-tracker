@@ -966,6 +966,7 @@
   <div id="tabs">
     <button type="button" id="tab-all" class="active">All transactions</button>
     <button type="button" id="tab-review">Review &amp; assign</button>
+    <button type="button" id="tab-reviewed">Reviewed</button>
     <button type="button" id="tab-dashboard">Dashboard</button>
   </div>
 
@@ -1238,6 +1239,7 @@
 
     const tabAllEl = document.getElementById("tab-all");
     const tabReviewEl = document.getElementById("tab-review");
+    const tabReviewedEl = document.getElementById("tab-reviewed");
     const tabDashboardEl = document.getElementById("tab-dashboard");
     const panelAllEl = document.getElementById("panel-all");
     const panelReviewEl = document.getElementById("panel-review");
@@ -1369,6 +1371,8 @@
       if (activeTab === "review") {
         params.set("tab", "review");
         if (!uncategorizedOnlyEl.checked) params.set("needs_review", "0");
+      } else if (activeTab === "reviewed") {
+        params.set("tab", "reviewed");
       } else if (activeTab === "dashboard") {
         params.set("tab", "dashboard");
       }
@@ -1718,8 +1722,8 @@
       if (partial.length) {
         groups.push(makeGroup("partial", "Category set \u2014 subcategory or merchant missing", partial));
       }
-      if (!uncategorizedOnlyEl.checked && done.length) {
-        groups.push(makeGroup("done", "Fully labelled", done));
+      if ((activeTab === "reviewed" || !uncategorizedOnlyEl.checked) && done.length) {
+        groups.push(makeGroup("done", activeTab === "reviewed" ? "Reviewed" : "Fully labelled", done));
       }
       return { groups, openCount: open.length, partialCount: partial.length, doneCount: done.length };
     }
@@ -1956,7 +1960,8 @@
       // The toggle is a real row-set filter (Session 81): on, the server
       // returns only rows with any label missing; off, every filtered row.
       const reviewParams = buildParams(filters);
-      if (uncategorizedOnlyEl.checked) reviewParams.set("review_status", "incomplete");
+      if (activeTab === "reviewed") reviewParams.set("review_status", "complete");
+      else if (uncategorizedOnlyEl.checked) reviewParams.set("review_status", "incomplete");
       const transactionsP = fetchJSON(withParams("/transactions", reviewParams));
       const catalogP = fetchJSON("/categories");
       const merchantsP = fetchJSON("/merchants");
@@ -2019,17 +2024,20 @@
       uncategorizedOnlyLabelEl.style.opacity = "";
 
       if (total === 0) {
-        reviewStatusEl.textContent = "No transactions found.";
+        reviewStatusEl.textContent = activeTab === "reviewed"
+          ? "No fully labelled transactions for these filters."
+          : "No transactions found.";
         reviewTableEl.style.display = "none";
         selectionBarEl.style.display = "none";
         return;
       }
 
       const needsReview = openCount + partialCount;
-      reviewStatusEl.textContent =
-        total + " transactions · " + needsReview + " need review" +
-        (partialCount ? " (" + partialCount + " with only category set)" : "") +
-        " · " + doneCount + " fully labelled";
+      reviewStatusEl.textContent = activeTab === "reviewed"
+        ? total + " fully labelled transactions"
+        : total + " transactions · " + needsReview + " need review" +
+          (partialCount ? " (" + partialCount + " with only category set)" : "") +
+          " · " + doneCount + " fully labelled";
 
       renderSelectionBar();
 
@@ -2048,7 +2056,7 @@
             "Lower the threshold to find looser matches.";
           nothingLeftEl.style.display = "";
         }
-      } else if (openCount + partialCount === 0) {
+      } else if (activeTab !== "reviewed" && openCount + partialCount === 0) {
         nothingLeftEl.textContent = "Nothing left to review for these filters.";
         nothingLeftEl.style.display = "";
       }
@@ -3361,15 +3369,21 @@
     // ------------------------------------------------------------------
     // Tabs
     // ------------------------------------------------------------------
+    // "Reviewed" (Session 83) is the review panel with its row set pinned
+    // to review_status=complete: same filter bar, same rows, same inline
+    // editor and multi-select -- only the fetch's status differs and the
+    // "Needs review only" toggle is hidden (it is what defines the tab).
     function setTab(tab, load) {
       activeTab = tab;
       const isReview = tab === "review";
+      const isReviewed = tab === "reviewed";
       const isDashboard = tab === "dashboard";
-      tabAllEl.classList.toggle("active", !isReview && !isDashboard);
+      tabAllEl.classList.toggle("active", !isReview && !isReviewed && !isDashboard);
       tabReviewEl.classList.toggle("active", isReview);
+      tabReviewedEl.classList.toggle("active", isReviewed);
       tabDashboardEl.classList.toggle("active", isDashboard);
-      panelAllEl.style.display = isReview || isDashboard ? "none" : "";
-      panelReviewEl.style.display = isReview ? "" : "none";
+      panelAllEl.style.display = isReview || isReviewed || isDashboard ? "none" : "";
+      panelReviewEl.style.display = isReview || isReviewed ? "" : "none";
       panelDashboardEl.style.display = isDashboard ? "" : "none";
       uncategorizedOnlyLabelEl.style.display = isReview ? "" : "none";
       // Dashboard: period controls replace month/date filters; bank/card stay.
@@ -3386,7 +3400,7 @@
     }
 
     function loadActiveTab(filters) {
-      if (activeTab === "review") loadReview(filters);
+      if (activeTab === "review" || activeTab === "reviewed") loadReview(filters);
       else if (activeTab === "dashboard") loadDashboard(filters);
       else fetchTransactions(filters);
     }
@@ -3538,7 +3552,7 @@
         merchant: params.get("merchant") || "",
       };
       const urlTabRaw = params.get("tab");
-      const urlTab = urlTabRaw === "review" || urlTabRaw === "dashboard" ? urlTabRaw : "all";
+      const urlTab = ["review", "reviewed", "dashboard"].includes(urlTabRaw) ? urlTabRaw : "all";
       readDashboardURLParams(params);
       // "needs_review" since Session 81; the old "uncategorized" key is still
       // honoured so earlier bookmarks keep their meaning.
@@ -3704,6 +3718,7 @@
 
     tabAllEl.addEventListener("click", () => setTab("all", true));
     tabReviewEl.addEventListener("click", () => setTab("review", true));
+    tabReviewedEl.addEventListener("click", () => setTab("reviewed", true));
     tabDashboardEl.addEventListener("click", () => setTab("dashboard", true));
 
     initFromURL();

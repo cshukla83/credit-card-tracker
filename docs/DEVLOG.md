@@ -9082,3 +9082,76 @@ running.
 - **Session 83:** the Reviewed tab, reusing this editor.
 - Manual verification backlog now covers this session too (Sessions 73–82
   in total, with 73–78 also awaiting STATE.md reconciliation and merge).
+
+## Session 83 — 2026-09-13
+
+### Goal
+Frontend only. A fourth tab, "Reviewed": transactions with all three
+labels set (`review_status=complete`, Session 80), using Session 82's
+inline editor unchanged, so a fully labelled transaction can be corrected
+without leaving the screen. All Transactions stays read-only.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `5336256`, clean.
+Browser tooling: not available; traced. Session 82's entry and code were
+re-read first: the structure the brief assumed — a shared row renderer
+(`renderRow` → `renderLabelCell`), a save path through `assign()`, and a
+`saveTargets()` bulk rule — is what exists, so no adaptation was needed.
+
+**One panel, two row sets.** Rather than a second table and a second
+copy of the row logic, the Reviewed tab **is the review panel** with its
+fetch pinned: `setTab("reviewed")` shows `panel-review`, and
+`loadReview()` sends `review_status=complete` when that tab is active
+(else the toggle's `incomplete`, else nothing). The "Needs review only"
+toggle is hidden on this tab — the status is what defines it, not a user
+choice — and the shared filter bar (both rows, Sessions 75–76) applies as
+everywhere. In grouping, complete rows all fall into the `done` bucket,
+which on this tab is always shown and titled "Reviewed"; the status line
+reads "N fully labelled transactions" and the empty state "No fully
+labelled transactions for these filters." The "Nothing left to review"
+message is suppressed here. `tab=reviewed` round-trips in the URL.
+
+**The editor degrades as intended, by construction.** Every row here has
+all three labels saved, so `renderLabelCell()` takes its saved-value
+branch for each: plain text plus the edit icon, no ghost text and no
+badge (a suggestion is only shown for an unset field). The edit icon
+opens the same combo, pre-filled with the saved value; pick saves at once,
+Enter saves typed text, Escape/blur cancels. After a save the row is
+refetched under `complete` and stays — a label can be changed but not
+unset from here.
+
+**Multi-select and bulk apply, reused not reimplemented.** The row
+checkbox, the group checkbox, and the prune all run through Session 79's
+`isSelectable()`, so credit rows are excluded here exactly as on Review &
+Assign; editing a checked row with 2+ checked applies to all of them via
+the same `saveTargets()`. The bar's per-field bulk accepts appear but are
+disabled, since fully labelled rows carry no displayed suggestions.
+
+**Tests.** No backend change; no frontend suite exists and none was
+invented. Backend suite for the record: **508 passing**.
+
+**Verification — traced, not seen.** Adds to the manual-verification
+backlog.
+
+### Outcome
+Finished transactions have a home where they can still be corrected with
+the same gestures as unfinished ones; the review panel serves both sets
+from one implementation.
+
+### In plain English
+A new "Reviewed" tab lists the transactions that are fully labelled, so a
+mistake on a finished row can be fixed without hunting for it elsewhere.
+It is the same screen as the review tab — same filters, same in-place
+editing, same ticking of several rows to change them together — just
+showing the finished rows instead of the unfinished ones. Not seen
+running.
+
+### Next steps
+- This closes the Review & Assign UX round (Sessions 79–83).
+- The manual browser verification backlog now covers all of Sessions
+  79–83; Sessions 73–78's dashboard work is still separately pending its
+  own verification, the `docs/STATE.md` reconciliation (61–83 now), and
+  merge to `main`.
+- **Module 1** (upload UI with auto-detect) is the next arc once both
+  rounds are verified.
