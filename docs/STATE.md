@@ -105,10 +105,20 @@ when all three labels are set); rows with a category but a missing
 subcategory or merchant sit in their own "Category set — subcategory or
 merchant missing" group; with the toggle off, fully labelled rows appear
 too. It groups rows either by suggested category (default) or by
-description similarity at a chosen threshold; each row shows its
-suggestions with accept/change for all three labels (one-click dropdown,
-spread-to-group, add-new); a sticky multi-select bar offers typed bulk
-assign and per-field bulk accept for category, subcategory (Session 79),
+description similarity at a chosen threshold; each row's three labels
+share **one inline editor (Session 82)**: a saved value shows as text, an
+unset field with a suggestion shows it as ghost text plus its badge and a
+single click on the ghost accepts it, an unset field with none shows a
+dash; a small edit icon opens a combo box pre-filled with the saved value
+(else the suggestion) over the column's existing values — picking an
+option saves at once, typed text saves on Enter (a new value is just text
+not in the list), Escape/blur cancels. If the edited row is checked and
+2+ rows are checked, the save applies to every checked row's same column
+(the bulk apply), with a count shown before commit; editing an unchecked
+row is never bulk. Payment rows' cascade-set labels are editable the same
+way. The old accept / change / spread-to-group / add-new buttons and the
+bar's typed bulk assign are gone; a sticky multi-select bar offers
+per-field bulk accept for category, subcategory (Session 79),
 and merchant — each excluding its fallback tier from bulk (merchant's
 `from_description`, subcategory's `same_as_category`), since a default
 confidence is not evidence — behind a Category / Sub Category / Merchant
@@ -365,17 +375,16 @@ system font stack.
   by tests. Nothing outside this repository consumes them, so no
   versioning was added; if a second consumer ever appears, that is the
   moment to stop reshaping in place.
-- **Review & assign inline editing.** The category, subcategory, and
-  merchant editors on the Review & assign screen rely on several buttons
-  per row — accept, a change dropdown, spread-to-group inside it, add-new
-  — plus the sticky multi-select bar's bulk actions, and the result has
-  been flagged as too cluttered. A future session should scope an
-  inline-edit interaction (for example, click-to-edit on the cell) to
-  replace or reduce that button surface. Not yet scoped, and not to be
-  guessed at here: how inline editing would coexist with the suggestion
-  badges, with the multi-select bar, and with the card-payment cascade
-  (Session 62), all of which currently depend on the button-based
-  interaction. Recorded so it isn't lost; nothing decided.
+- ~~**Review & assign inline editing.** The category, subcategory, and
+  merchant editors rely on several buttons per row — accept, a change
+  dropdown, spread-to-group, add-new — plus the bar's bulk actions, and
+  the result has been flagged as too cluttered.~~ **Closed in Session
+  82:** one click-to-edit inline editor replaced all of them (see *Current
+  state*). The coexistence questions resolved as: suggestion badges stay
+  beside ghost text and one click on the ghost accepts; the multi-select
+  bar keeps only per-field bulk accepts, while "apply one value to many"
+  became a property of editing a checked row; the card-payment cascade
+  is untouched and its labels remain editable like any other.
 - **Table header not sticky.** The column header row (date, description,
   type, and so on) on both the Review & assign and All transactions
   tables scrolls out of view, whereas the multi-select bar (made sticky

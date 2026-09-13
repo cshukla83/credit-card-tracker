@@ -8988,3 +8988,97 @@ finished rows is now called "Needs review only". Not seen running.
 - Manual browser verification backlog now covers Sessions 79–81 as well;
   Sessions 73–78's dashboard work is still separately pending its own
   verification, STATE.md reconciliation, and merge to `main`.
+
+## Session 82 — 2026-09-13
+
+### Goal
+Frontend only. Replace Review & Assign's button-based label editors —
+accept, change dropdown, spread-to-group, add-new — with one click-to-edit
+inline interaction for category, subcategory, and merchant, and fold the
+bar's typed bulk assign into it. A replacement, not an addition.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `8271045`, clean.
+Browser tooling: not available; traced.
+
+**One renderer for three cells.** `renderLabelCell(txn, field, isEditing)`
+replaces the separate merchant, category, and subcategory cell code; a
+`LABEL_FIELDS` table gives each field its suggestion accessor, its option
+list (the catalogs already loaded: `/categories`, unscoped
+`/subcategories`, `/merchants`), its pair builder for the assign endpoint,
+and its fallback match type with the words to show for it. The design
+decisions from scoping, as built:
+
+- **Display state.** Saved value → plain text. Unset with a suggestion →
+  the suggested value in **ghost styling** (muted, italic, dotted
+  underline) with the same badge as before (`exact · NN%`, `fuzzy · NN%`,
+  or the words "same as category" / "from description" for the fallback
+  tiers). Unset with no suggestion → a dash. A small **edit icon** (✎)
+  sits right of the field in all three states.
+- **One-click accept.** Clicking the ghost text calls the assign endpoint
+  with exactly the displayed value for that one row — the old accept
+  button, gone.
+- **Edit mode.** The icon opens a combo box: the input is **pre-filled
+  with the saved value, else the suggestion text, else empty**, so
+  accept-with-a-tweak needs no retyping; beneath it a typeahead menu of
+  the column's existing values filtered by what is typed. **Picking an
+  option saves immediately** (wired on `mousedown` with `preventDefault`
+  so the input does not blur first). **Typed text saves on Enter** —
+  a value not in the list is simply a new value; there is no separate
+  add-new control. **Escape, blur, or tabbing away cancels** and nothing
+  is saved (blur cancel is deferred one tick so a pick that has already
+  committed is not undone); the menu says "Enter saves “…” as a new
+  <field>" when nothing matches.
+- **Bulk apply, replacing the typed bulk assign.** `saveTargets(txn)`:
+  if the edited row is checked and 2+ rows are checked, a save (pick or
+  Enter) applies to **every checked row's same column**; otherwise only
+  that row. Editing an unchecked row is never implicitly bulk, whatever
+  else is checked. Before commit the editor shows **"Applies to N selected
+  rows"** in a bold amber note, and the checked rows are already
+  highlighted by their selected class. The bar's typeahead and its
+  `buildTypeahead` helper, query state, and resets are removed; the bar's
+  **per-field bulk accept buttons are unchanged** (a different action:
+  each row keeps its own suggestion).
+- **Payment rows.** No special-casing: a row whose labels the `is_payment`
+  cascade set edits like any other; the payment checkbox and its modal
+  are untouched.
+- **Similarity badge** stays in the category cell.
+
+**Removed.** `renderMerchantCell`, `renderSubcategoryCell`, `openEditor`,
+`renderEditor`, the per-row accept/change buttons, spread-to-group, the
+add-new input, the bar's typed assign, and the dead `.editor` CSS. The
+scoped per-row `GET /subcategories?category=` call went with the old
+editor: the new one offers the column's distinct values, as the brief
+specified, so Session 76's "two call sites" note now has one.
+
+**Tests.** No backend change; no frontend suite exists and none was
+invented. The assign endpoint the editor calls keeps its Session 53/55
+coverage; backend suite for the record: **508 passing**.
+
+**Verification — traced, not seen.** Script parsed; the three states,
+the pre-fill order, mousedown-pick vs blur-cancel ordering, the target
+rule, and the payment-row path were checked by reading the code. Adds to
+the manual-verification backlog; the blur/pick timing in particular wants
+a real browser.
+
+### Outcome
+Every label on the review screen is edited in place — click a suggestion
+to take it, click the pencil to change it, type to add — with one clear
+rule for when a change fans out to a selection, and no button row left.
+
+### In plain English
+The review screen's rows are much quieter: instead of a cluster of buttons
+per label there is the value (or a faint suggested value you can click to
+accept) and a small pencil. The pencil turns the field into a box, already
+holding the current or suggested text, with a list of values used before;
+choosing one saves straight away, typing something new and pressing Enter
+saves that, and pressing Escape or clicking elsewhere leaves things as
+they were. If you have ticked several rows and edit one of them, the
+change applies to all of them, and the box says so first. Not seen
+running.
+
+### Next steps
+- **Session 83:** the Reviewed tab, reusing this editor.
+- Manual verification backlog now covers this session too (Sessions 73–82
+  in total, with 73–78 also awaiting STATE.md reconciliation and merge).
