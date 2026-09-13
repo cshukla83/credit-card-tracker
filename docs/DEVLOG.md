@@ -8573,3 +8573,115 @@ unavailable, so this joins the list of screen work awaiting a manual look.
   "Level 1 / 2 / 3 =" order selects.
 - The `docs/STATE.md` reconciliation backlog from Sessions 61–75 (now 76)
   is still outstanding; this session made only a targeted correction.
+
+## Session 77 — 2026-09-13
+
+### Goal
+Frontend only. Replace the dashboard's fixed category → subcategory
+click-drill with a permutable three-level tree over Merchant / Category /
+Subcategory, driven by three "Level 1/2/3 =" selects, with a bar click
+setting the matching Session 76 filter instead of keeping separate drill
+state. The last piece of Module 3's aggregation/dashboard arc.
+
+### What happened
+
+State confirmed first: `feature/merchant-aggregation` at `da4c512`,
+clean. Browser tooling was checked before any code and was **not
+available**; the work was traced (see below).
+
+**Order selects.** Three selects above the chart, each offering the three
+labels, default Merchant → Category → Subcategory. A valid permutation is
+kept by **swap-on-conflict**: changing one select to a value another level
+holds swaps the two levels' values — a direct swap, not shrinking option
+lists, which for exactly three positions is the simpler and clearer rule.
+`dash.order` holds the permutation; the dashboard's `aggregateParams()`
+always sends `dimensions=<l1>,<l2>,<l3>` — this tab's fetch only; every
+other caller of the endpoint keeps its two-level default. The order
+round-trips in the URL as `d_order` (omitted when default), replacing
+Session 67's `d_category`. Changing the order clears any shown insight,
+refetches, and leaves every active label filter alone.
+
+**The display-level rule.** The chart shows Level *(1 + n)*, where *n* is
+the number of contiguous levels, counting from Level 1 in the current
+order, whose dimension has an active filter — capped at Level 3. No filters
+→ Level 1. Only Level 3's dimension filtered → still Level 1, narrowed by
+that filter (the response already is). Levels 1 and 2 filtered → Level 3.
+All three filtered → Level 3's single node. Both scoping examples fall
+out: under the default order, filtering only the subcategory shows
+Merchant bars narrowed by it; filtering only the category shows the same
+pattern (Merchant bars narrowed by the category) — the filter simply
+doesn't sit at Level 1.
+
+**Rendering.** `nodesAtDisplayLevel()` walks the returned tree from the
+top, taking the single node at each already-filtered level and descending
+by the next level's plural key, until it reaches the display level, and
+renders that level's array as bars labelled with the dimension occupying
+it (a caption states "Bars: <Dimension>" and the pinned parents). Level 1
+and 2 bars are clickable; Level 3 bars are inert — nothing further to
+drill into. The chart function is unchanged apart from taking an
+`onBarClick` callback; destroy-before-rebuild stands.
+
+**Why a click sets a filter.** Clicking a bar sets that dimension's
+Session 76 dropdown to the bar's value and calls the ordinary
+`onFilterChange()` — full-mesh recompute, refetch, URL update, insight
+cleared. "Back" is clearing that dropdown. Session 67's separate drill
+state, back link, and `d_category` are gone: with the filter row in place
+there would have been two mechanisms doing overlapping jobs — a drill
+stack and three filters — that had to be kept consistent with each other,
+with "which one wins?" questions at every filter change. One mechanism,
+the filters, needs no reconciliation; and the three dropdowns, now showing
+their selected values, already convey the current position, so no
+breadcrumb was built.
+
+**Table.** Reworked from the fixed two-level shape to the full three-level
+tree in the current order, rendered recursively, collapsible at levels 1
+and 2 (leaves have nothing to open), collapsed by default per the existing
+group convention; expansion state is keyed by the node's path so it
+survives re-renders and resets naturally when the order changes. The
+header names the order ("merchant › category › subcategory"). The table
+always shows the whole tree for the current filters — it does not follow
+the chart's display level. Rows are not clickable; only bars set filters.
+
+**Tests.** No backend code changed; the backend suite was run for the
+record: **500 passing**. No frontend tests exist or were added, per this
+project's convention.
+
+**Verification — traced, not seen.** Script parsed with the system
+JavaScriptCore; the display-level arithmetic, the tree walk, the swap
+rule, the click → filter path, and the URL round-trip were checked by
+reading the code. **This session adds to the manual-verification backlog
+rather than closing any of it**: none of Sessions 73–77's dashboard work
+— merchant depth, arbitrary orders, the filter row, or this drill — has
+been seen in a live browser, and Chart.js's click hit-testing in
+particular remains traced against its documentation only.
+
+### Outcome
+The dashboard chart drills through Merchant / Category / Subcategory in
+any order the user chooses, one click per level, with the filter row as
+the single source of truth for where the user is; the table shows the
+whole tree beneath it. Module 3's aggregation/dashboard arc is built,
+pending manual verification.
+
+### In plain English
+The dashboard's chart can now be explored in whatever order suits the
+question — merchants first, then categories, then finer labels, or any
+other arrangement, set with three small "Level 1 / 2 / 3" choosers.
+Clicking a bar simply selects that value in the matching filter above,
+which narrows everything and shows the next level down; to step back,
+clear that filter. There is no separate "back" button or trail to keep in
+sync, because the filters themselves show where you are. The table
+underneath always lays out the complete picture in the chosen order, each
+level folding open. Not seen running: the browser tooling was again
+unavailable, so this joins the growing list of dashboard work awaiting a
+manual look.
+
+### Next steps
+- **Manual browser verification**, now spanning Sessions 73–77 entirely
+  untested live (plus the earlier frontend backlog): default order
+  rendering, a click-drill through all three levels with the dropdowns
+  reflecting each click, clearing a filter to go back, reordering
+  mid-session, the three-level table, the filter row's mesh, and the
+  insight button against the live model.
+- The `docs/STATE.md` full reconciliation backlog, Sessions 61–77.
+- **Module 1** (upload UI with auto-detect) is the next arc, once that
+  verification has happened.

@@ -1,7 +1,7 @@
 # PRD: Credit Card Statement Tracker
 
 ## 0. Document Control
-Version 1.3 — 13 Sep 2026 — Owner: Chandra — Consolidated from
+Version 1.4 — 13 Sep 2026 — Owner: Chandra — Consolidated from
 STATE.md, PRODUCT_VISION.md, EXPENSE_ANALYTICS_VISION.md, CONVENTIONS.md.
 This document is re-consolidated by hand whenever any of those source
 docs change materially — it is not maintained independently of them.
@@ -57,7 +57,7 @@ aggregators).
 |---|---|---|---|---|
 | P0 | 1 | Categorization data model + suggestion engines (category, subcategory, merchant) | **Built** (Sessions 41–55) | EXPENSE_ANALYTICS_VISION.md, Module 2 |
 | P0 | 2 | Categorization review/assign screen, incl. multi-select bulk actions and two grouping modes | **Built, awaiting manual browser verification** (Sessions 43–58) | Module 2 |
-| P0 | 3 | Aggregation endpoint + dashboard (filters + LLM commentary) | Not started | Module 3 |
+| P0 | 3 | Aggregation endpoint + dashboard (filters + LLM commentary) | **Built, awaiting manual browser verification** (Sessions 65–69, 73–77) | Module 3 |
 | P0 | 4 | Upload UI with bank/card auto-detect | Not started | Module 1 |
 | P1 | 5 | Parser config schema (prerequisite for all remaining tiers) | Not started | PRODUCT_VISION.md |
 | P1 | 6 | Tier 4 — LLM auto-learn parser generation | Not started | PRODUCT_VISION.md |
@@ -215,12 +215,20 @@ it's last in the build sequence.
 **Module 3 — Analytics Dashboard.**
 
 - Spend by category, filterable by custom range, month, quarter, year.
-  As of 2026-09-13 (Session 74) the aggregation behind it returns a
-  nested tree over any 2 or 3 of category / subcategory / merchant in
-  the caller's chosen order, and accepts independently combinable
-  category / subcategory / merchant filters ("Uncategorized" selecting
-  the unlabelled rows); the frontend for both — a reorderable drill-down
-  chart and a shared filter row — is still to come.
+  **Built (Sessions 65–69, 73–77), and grew well beyond this bullet's
+  single-dimension scope** — recorded here the way Module 2's growth was:
+  the aggregation returns a nested tree over any 2 or 3 of category /
+  subcategory / merchant in the caller's chosen order (not category
+  alone); it accepts independently combinable category / subcategory /
+  merchant filters, "Uncategorized" selecting the unlabelled rows; the
+  filter bar carries those three as a second row on every tab, in the same
+  bidirectional-narrowing mesh as bank / card / month / dates; and the
+  dashboard chart is a permutable three-level drill (Merchant / Category /
+  Subcategory in any order, chosen with three level selects) in which
+  clicking a bar sets the matching filter rather than keeping separate
+  drill state. Refunds are netted, card payments excluded. Complete as of
+  2026-09-13 (Session 77), pending the manual browser verification noted
+  in STATE.md's open flags.
 - Commentary is LLM-generated (e.g. a free-tier cloud API such as
   Gemini), not rule-based — a deliberate exception to the project's
   usual practice of never letting real financial data leave the machine.
@@ -242,7 +250,7 @@ it's last in the build sequence.
 2. Categorization review/assign screen, including bulk-apply (frontend)
    — **done**, pending manual browser verification
 3. Aggregation endpoint + dashboard with filters and LLM commentary —
-   next
+   **done**, pending manual browser verification
 4. Upload UI with auto-detect (Module 1)
 
 ## 8. Non-Functional / Technical Constraints
@@ -353,3 +361,4 @@ scoped):
 | 1.1 | 08 Sep 2026 | Sourced from reconciled STATE.md/PRODUCT_VISION.md; removed source-currency note and staleness entry |
 | 1.2 | 12 Sep 2026 | Module 2 reconciled with what was built (Sessions 41–58): three labels, three suggestion engines, multi-select bulk actions in place of merchant-keyed bulk-apply, two grouping modes; requirements 1–2 marked built; verification gap recorded |
 | 1.3 | 13 Sep 2026 | Commentary payload scope corrected: labels to merchant depth with amounts only (Session 73 reversal), in 7.3 and 9 |
+| 1.4 | 13 Sep 2026 | Module 3 aggregation/dashboard marked built with its growth beyond scope (Sessions 73–77); requirement 3 status updated |

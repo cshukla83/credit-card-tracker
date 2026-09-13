@@ -282,15 +282,40 @@
   .dash-total-text.negative {
     color: var(--credit);
   }
-  .dash-drill {
+  .dash-order {
     display: flex;
-    align-items: baseline;
-    gap: 1rem;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem 1.1rem;
     margin-bottom: 0.6rem;
-    font-size: 0.92rem;
+    font-size: 0.9rem;
   }
-  .dash-drill-title {
+  .dash-order .period-field {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--muted);
+  }
+  .dash-order-label {
+    color: var(--muted);
+  }
+  .dash-showing {
+    margin-left: auto;
+    color: var(--ink);
     font-weight: 600;
+  }
+  #dash-table tr.depth-1 td {
+    background: #fafafb;
+  }
+  #dash-table tr.depth-1 td:nth-child(2) {
+    padding-left: 2.4rem;
+  }
+  #dash-table tr.depth-2 td {
+    background: #f4f5f7;
+    color: var(--muted);
+  }
+  #dash-table tr.depth-2 td:nth-child(2) {
+    padding-left: 4rem;
   }
   .dash-chart-wrap canvas.clickable {
     cursor: pointer;
@@ -367,13 +392,6 @@
     padding: 1rem 1.25rem;
     margin-bottom: 1.25rem;
     position: relative;
-  }
-  #dash-table tr.dash-sub td {
-    background: #fafafb;
-    color: var(--muted);
-  }
-  #dash-table tr.dash-sub td:nth-child(2) {
-    padding-left: 2.4rem;
   }
   #dash-table td.negative {
     color: var(--credit);
@@ -1116,12 +1134,24 @@
       <p id="dash-insight-text" class="dash-insight-text"></p>
     </div>
 
-    <div id="dash-drill" class="dash-drill" style="display: none;">
-      <button type="button" id="dash-back" class="link">&larr; Back to categories</button>
-      <span id="dash-drill-title" class="dash-drill-title"></span>
+    <!-- Level order (Session 77): a permutation of the three labels; the
+         chart shows the first level not yet pinned by a filter, the table
+         shows the whole tree in this order. -->
+    <div id="dash-order" class="dash-order">
+      <span class="dash-order-label">Drill order</span>
+      <label class="period-field">Level 1 =
+        <select id="dash-level-1" class="dash-level" data-level="0"></select>
+      </label>
+      <label class="period-field">Level 2 =
+        <select id="dash-level-2" class="dash-level" data-level="1"></select>
+      </label>
+      <label class="period-field">Level 3 =
+        <select id="dash-level-3" class="dash-level" data-level="2"></select>
+      </label>
+      <span id="dash-showing" class="dash-showing"></span>
     </div>
     <div id="dash-chart-wrap" class="dash-chart-wrap" style="display: none;">
-      <canvas id="dash-chart" aria-label="Spend by category" role="img"></canvas>
+      <canvas id="dash-chart" aria-label="Spend by label" role="img"></canvas>
     </div>
     <div id="dash-chart-note" class="mode-note" style="display: none;"></div>
 
@@ -1129,7 +1159,7 @@
       <thead>
         <tr>
           <th class="select"></th>
-          <th>category</th>
+          <th id="dash-table-head">label</th>
           <th class="num amount">amount</th>
           <th class="num">transactions</th>
         </tr>
@@ -2764,9 +2794,9 @@
     const dashPeriodTextEl = document.getElementById("dash-period-text");
     const dashTotalTextEl = document.getElementById("dash-total-text");
     const dashChartWrapEl = document.getElementById("dash-chart-wrap");
-    const dashDrillEl = document.getElementById("dash-drill");
-    const dashBackEl = document.getElementById("dash-back");
-    const dashDrillTitleEl = document.getElementById("dash-drill-title");
+    const dashLevelEls = Array.from(document.querySelectorAll("select.dash-level"));
+    const dashShowingEl = document.getElementById("dash-showing");
+    const dashTableHeadEl = document.getElementById("dash-table-head");
     const dashChartEl = document.getElementById("dash-chart");
     const dashChartNoteEl = document.getElementById("dash-chart-note");
     const dashTableEl = document.getElementById("dash-table");
@@ -2793,8 +2823,12 @@
     };
     const dash = {
       ...DASH_DEFAULTS,
-      expanded: new Set(), // category names whose subcategories are open (in-memory)
-      drill: null,          // category name the chart is drilled into, or null (Session 67)
+      expanded: new Set(), // table node paths ("L1 name" / "L1 name\u241f L2 name") open (in-memory)
+      // Drill order (Session 77): a permutation of the three labels. The
+      // chart shows the first level whose dimension has no active filter;
+      // clicking a bar sets that dimension's filter (Session 76 row), so
+      // there is no separate drill state -- the filters ARE the drill.
+      order: ["merchant", "category", "subcategory"],
       // On-demand commentary (Session 69): null, or {state: "loading" |
       // "fresh" | "cached" | "unconfigured" | "unavailable" | "failed",
       // text, generatedAt}. In memory only -- never in the URL, never
@@ -2805,11 +2839,15 @@
     };
 
     const UNIT_LABELS = { week: "weeks", month: "months", quarter: "quarters", year: "years" };
+    const DASH_DIMS = ["merchant", "category", "subcategory"];
+    const DASH_DEFAULT_ORDER = ["merchant", "category", "subcategory"];
+    const DIM_LABEL = { merchant: "Merchant", category: "Category", subcategory: "Subcategory" };
+    const DIM_PLURAL = { merchant: "merchants", category: "categories", subcategory: "subcategories" };
 
     // --- URL (d_ namespace) ---
     function dashboardURLParams() {
       const out = {};
-      if (dash.drill) out.d_category = dash.drill;
+      if (dash.order.join(",") !== DASH_DEFAULT_ORDER.join(",")) out.d_order = dash.order.join(",");
       if (dash.granularity !== DASH_DEFAULTS.granularity) out.d_granularity = dash.granularity;
       if (dash.granularity === "custom") {
         if (dash.start) out.d_start = dash.start;
@@ -2852,9 +2890,12 @@
       if (st) dash.start = st;
       if (en) dash.end = en;
       if (dash.granularity === "week") dash.mode = "relative"; // week is relative-only
-      const drill = params.get("d_category");
-      if (drill) dash.drill = drill; // validated against the response when it arrives
+      const order = (params.get("d_order") || "").split(",").map((x) => x.trim());
+      if (order.length === 3 && new Set(order).size === 3 && order.every((d) => DASH_DIMS.includes(d))) {
+        dash.order = order;
+      }
       syncPeriodControls();
+      syncOrderControls();
     }
 
     // --- controls <-> state ---
@@ -2920,6 +2961,9 @@
       if (filters.bank) params.set("bank", filters.bank);
       if (filters.cardId) params.set("card_id", filters.cardId);
       for (const key of LABEL_FILTERS) if (filters[key]) params.set(key, filters[key]);
+      // This tab always asks for the full three-level tree in the chosen
+      // order; other callers of the endpoint keep its 2-level default.
+      params.set("dimensions", dash.order.join(","));
       return { params };
     }
 
@@ -2969,64 +3013,105 @@
       dashTotalTextEl.classList.toggle("negative", data.total < 0);
       dashSummaryEl.style.display = "";
 
-      // Drill state is checked against every fresh response: if the drilled
-      // category is still present, stay drilled with the new numbers; if it
-      // is gone (filters or period moved), fall back to the category view
-      // and drop the URL param rather than show a stale or empty drill.
-      if (dash.drill && !data.categories.some((c) => c.category === dash.drill)) {
-        dash.drill = null;
-        updateURL(currentFilters());
-      }
       renderDashboardView();
     }
 
-    // Both views come from the one payload already in hand (dash.data);
-    // drilling in or out never refetches.
-    function renderDashboardView() {
-      const categories = dash.data.categories;
-      const drilled = dash.drill
-        ? categories.find((c) => c.category === dash.drill) || null
-        : null;
-      if (drilled) {
-        dashDrillTitleEl.textContent = drilled.category + " \u00b7 subcategories";
-        dashDrillEl.style.display = "";
-        renderDashboardChart(
-          drilled.subcategories.map((s) => ({
-            label: s.subcategory,
-            amount: s.amount,
-            transaction_count: s.transaction_count,
-          })),
-          { clickable: false, emptyText: "No subcategory data for " + drilled.category + "." },
-        );
-      } else {
-        dashDrillEl.style.display = "none";
-        renderDashboardChart(
-          categories.map((c) => ({
-            label: c.category,
-            amount: c.amount,
-            transaction_count: c.transaction_count,
-          })),
-          { clickable: true, emptyText: "No spend in this period." },
-        );
+    // The display level: 1 + the number of contiguous levels, from Level 1
+    // in the current order, whose dimension has an active filter. No
+    // filters -> Level 1. Only Level 3's dimension filtered -> still Level
+    // 1, narrowed by it. Levels 1 and 2 filtered -> Level 3. All three
+    // filtered -> Level 3 (its single node). Zero-based here.
+    function displayLevelIndex(filters) {
+      let n = 0;
+      while (n < 3 && filters[dash.order[n]]) n += 1;
+      return Math.min(n, 2);
+    }
+
+    // Walk the returned tree down to the display level: every level above
+    // it has an active filter, so the response holds exactly one node
+    // there; take it and descend. Returns the array of nodes to chart, or
+    // [] if the tree runs out (no data under the filters).
+    function nodesAtDisplayLevel(data, levelIndex) {
+      let nodes = data[DIM_PLURAL[dash.order[0]]] || [];
+      for (let i = 0; i < levelIndex; i += 1) {
+        if (!nodes.length) return [];
+        nodes = nodes[0][DIM_PLURAL[dash.order[i + 1]]] || [];
       }
-      renderDashboardTable(categories);
+      return nodes;
+    }
+
+    // Both the chart and the table come from the one payload in hand.
+    function renderDashboardView() {
+      const filters = currentFilters();
+      const levelIndex = displayLevelIndex(filters);
+      const dim = dash.order[levelIndex];
+      const nodes = nodesAtDisplayLevel(dash.data, levelIndex);
+      const pinned = dash.order
+        .slice(0, levelIndex)
+        .map((d) => DIM_LABEL[d] + ": " + filters[d])
+        .join(" \u203a ");
+      dashShowingEl.textContent =
+        "Bars: " + DIM_LABEL[dim] + (pinned ? " (within " + pinned + ")" : "");
+      renderDashboardChart(
+        nodes.map((n) => ({ label: n[dim], amount: n.amount, transaction_count: n.transaction_count })),
+        {
+          // Level 3 is the leaf: nothing further to drill into.
+          clickable: levelIndex < 2,
+          emptyText: "No spend in this period for the current filters.",
+          onBarClick: (label) => setLabelFilter(dim, label),
+        },
+      );
+      renderDashboardTable(dash.data);
       renderInsight();
     }
 
-    function drillInto(category) {
-      if (dash.drill === category) return;
-      dash.drill = category;
-      clearInsight(); // the view changed; no stale commentary lingers
-      updateURL(currentFilters());
-      renderDashboardView();
+    // Clicking a bar sets that dimension's filter dropdown (Session 76) and
+    // goes through the ordinary filter-change path -- the full mesh refetch
+    // and URL update. "Back" is clearing that dropdown. One mechanism (the
+    // filters) instead of two doing overlapping jobs (filters plus a drill
+    // stack that would have to be kept consistent with them).
+    function setLabelFilter(dim, value) {
+      const el = { category: categoryFilterEl, subcategory: subcategoryFilterEl, merchant: merchantFilterEl }[dim];
+      if (!Array.from(el.options).some((o) => o.value === value)) {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        el.appendChild(option);
+      }
+      el.value = value;
+      onFilterChange();
     }
 
-    function drillOut() {
-      if (!dash.drill) return;
-      dash.drill = null;
-      clearInsight();
-      updateURL(currentFilters());
-      renderDashboardView();
+    // --- order selects: swap-on-conflict keeps a valid permutation ---------
+    function syncOrderControls() {
+      dashLevelEls.forEach((el, i) => {
+        if (!el.options.length) {
+          for (const d of DASH_DIMS) {
+            const o = document.createElement("option");
+            o.value = d;
+            o.textContent = DIM_LABEL[d];
+            el.appendChild(o);
+          }
+        }
+        el.value = dash.order[i];
+      });
+    }
+
+    for (const el of dashLevelEls) {
+      el.addEventListener("change", () => {
+        const i = Number(el.dataset.level);
+        const wanted = el.value;
+        const j = dash.order.indexOf(wanted);
+        if (j === i) return;
+        // Direct swap: the level that held `wanted` takes this level's old value.
+        dash.order[j] = dash.order[i];
+        dash.order[i] = wanted;
+        syncOrderControls();
+        clearInsight(); // the view changed shape
+        const filters = currentFilters();
+        updateURL(filters);
+        loadDashboard(filters); // dimensions changed -> refetch; filters untouched
+      });
     }
 
     // --- insight (LLM commentary), explicit click only ---------------------
@@ -3113,14 +3198,12 @@
 
     dashInsightBtnEl.addEventListener("click", requestInsight);
 
-    dashBackEl.addEventListener("click", drillOut);
-
     // Draws one bar per item ({label, amount, transaction_count}) in the
-    // order given -- the API's order at either level, never re-sorted. The
-    // previous instance is always destroyed first, so drilling in and out
-    // repeatedly never stacks canvases. `clickable` wires a bar click to
-    // drillInto() for the category view only.
-    function renderDashboardChart(items, { clickable, emptyText }) {
+    // order given -- the API's order at any level, never re-sorted. The
+    // previous instance is always destroyed first, so redrawing repeatedly
+    // never stacks canvases. `clickable` wires a bar click to onBarClick
+    // (Level 1 and 2 bars); leaf bars are inert.
+    function renderDashboardChart(items, { clickable, emptyText, onBarClick }) {
       if (dash.chart) {
         dash.chart.destroy();
         dash.chart = null;
@@ -3165,7 +3248,7 @@
           animation: false,
           onClick: (_event, elements) => {
             if (!clickable || !elements.length) return;
-            drillInto(items[elements[0].index].label);
+            onBarClick(items[elements[0].index].label);
           },
           onHover: (event, elements) => {
             if (!clickable) return;
@@ -3178,7 +3261,7 @@
                 label: (ctx) => {
                   const c = items[ctx.dataIndex];
                   return fmtAmount(c.amount) + " \u00b7 " + txnLabel(c.transaction_count) +
-                    (clickable ? " \u00b7 click to drill in" : "");
+                    (clickable ? " \u00b7 click to filter by this" : "");
                 },
               },
             },
@@ -3194,75 +3277,69 @@
       });
     }
 
-    function renderDashboardTable(categories) {
+    // The whole tree for the current filters, in the current order, every
+    // level collapsible; collapsed by default at levels 1 and 2 (the
+    // existing group convention), leaves have nothing to open. The table
+    // does not follow the chart's display level -- it always shows all of
+    // it. Rows are not clickable; only chart bars set filters.
+    function renderDashboardTable(data) {
       dashBodyEl.textContent = "";
-      // Drilled in: only that category's row, shown open. dash.expanded is
-      // not touched, so drilling back out restores every row's own state.
-      const drilled = dash.drill;
-      const shown = drilled ? categories.filter((c) => c.category === drilled) : categories;
-      if (shown.length === 0) {
+      dashTableHeadEl.textContent =
+        dash.order.map((d) => DIM_LABEL[d].toLowerCase()).join(" \u203a ");
+      const top = data[DIM_PLURAL[dash.order[0]]] || [];
+      if (top.length === 0) {
         dashTableEl.style.display = "none";
         return;
       }
-      for (const c of shown) {
-        const isOpen = drilled ? true : dash.expanded.has(c.category);
-        const tr = document.createElement("tr");
-        tr.className = "dash-cat" + (isOpen ? " expanded" : "");
+      const SEP = "\u241f";
 
-        const toggleCell = document.createElement("td");
-        toggleCell.className = "select";
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "toggle";
-        toggle.setAttribute("aria-expanded", String(isOpen));
-        toggle.setAttribute(
-          "aria-label",
-          (isOpen ? "Hide" : "Show") + " subcategories of " + c.category,
-        );
-        toggle.disabled = Boolean(drilled); // the drilled row stays open
-        toggle.addEventListener("click", () => {
-          if (isOpen) dash.expanded.delete(c.category);
-          else dash.expanded.add(c.category);
-          renderDashboardTable(dash.data.categories);
-        });
-        toggleCell.appendChild(toggle);
-        tr.appendChild(toggleCell);
+      const renderLevel = (nodes, depth, pathPrefix) => {
+        const dim = dash.order[depth];
+        const childKey = depth < 2 ? DIM_PLURAL[dash.order[depth + 1]] : null;
+        for (const n of nodes) {
+          const path = pathPrefix + n[dim];
+          const children = childKey ? n[childKey] || [] : [];
+          const canOpen = children.length > 0;
+          const isOpen = canOpen && dash.expanded.has(path);
+          const tr = document.createElement("tr");
+          tr.className = "depth-" + depth + (isOpen ? " expanded" : "");
 
-        const name = document.createElement("td");
-        name.textContent = c.category;
-        tr.appendChild(name);
+          const toggleCell = document.createElement("td");
+          toggleCell.className = "select";
+          if (canOpen) {
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "toggle";
+            toggle.setAttribute("aria-expanded", String(isOpen));
+            toggle.setAttribute("aria-label", (isOpen ? "Hide" : "Show") + " " + childKey + " of " + n[dim]);
+            toggle.addEventListener("click", () => {
+              if (isOpen) dash.expanded.delete(path);
+              else dash.expanded.add(path);
+              renderDashboardTable(dash.data);
+            });
+            toggleCell.appendChild(toggle);
+          }
+          tr.appendChild(toggleCell);
 
-        const amount = document.createElement("td");
-        amount.className = "num amount" + (c.amount < 0 ? " negative" : "");
-        amount.textContent = fmtAmount(c.amount);
-        tr.appendChild(amount);
+          const name = document.createElement("td");
+          name.textContent = n[dim];
+          tr.appendChild(name);
 
-        const count = document.createElement("td");
-        count.className = "num";
-        count.textContent = String(c.transaction_count);
-        tr.appendChild(count);
-        dashBodyEl.appendChild(tr);
+          const amount = document.createElement("td");
+          amount.className = "num amount" + (n.amount < 0 ? " negative" : "");
+          amount.textContent = fmtAmount(n.amount);
+          tr.appendChild(amount);
 
-        if (!isOpen) continue;
-        // Subcategories in the API's order (already amount-descending).
-        for (const sub of c.subcategories) {
-          const str = document.createElement("tr");
-          str.className = "dash-sub";
-          str.appendChild(document.createElement("td"));
-          const sname = document.createElement("td");
-          sname.textContent = sub.subcategory;
-          str.appendChild(sname);
-          const samount = document.createElement("td");
-          samount.className = "num amount" + (sub.amount < 0 ? " negative" : "");
-          samount.textContent = fmtAmount(sub.amount);
-          str.appendChild(samount);
-          const scount = document.createElement("td");
-          scount.className = "num";
-          scount.textContent = String(sub.transaction_count);
-          str.appendChild(scount);
-          dashBodyEl.appendChild(str);
+          const count = document.createElement("td");
+          count.className = "num";
+          count.textContent = String(n.transaction_count);
+          tr.appendChild(count);
+          dashBodyEl.appendChild(tr);
+
+          if (isOpen) renderLevel(children, depth + 1, path + SEP);
         }
-      }
+      };
+      renderLevel(top, 0, "");
       dashTableEl.style.display = "";
     }
 

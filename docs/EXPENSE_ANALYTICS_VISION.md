@@ -72,12 +72,20 @@ describe what was built, with the original intent noted where it changed.
 
 ### Module 3 — Analytics Dashboard
 - Spend by category, filterable by custom range, month, quarter, year.
-  As of 2026-09-13 (Session 74) the aggregation behind it returns a
-  nested tree over any 2 or 3 of category / subcategory / merchant in
-  the caller's chosen order, and accepts independently combinable
-  category / subcategory / merchant filters ("Uncategorized" selecting
-  the unlabelled rows); the frontend for both — a reorderable drill-down
-  chart and a shared filter row — is still to come.
+  **Built (Sessions 65–69, 73–77), and grew well beyond this bullet's
+  single-dimension scope** — recorded here the way Module 2's growth was:
+  the aggregation returns a nested tree over any 2 or 3 of category /
+  subcategory / merchant in the caller's chosen order (not category
+  alone); it accepts independently combinable category / subcategory /
+  merchant filters, "Uncategorized" selecting the unlabelled rows; the
+  filter bar carries those three as a second row on every tab, in the same
+  bidirectional-narrowing mesh as bank / card / month / dates; and the
+  dashboard chart is a permutable three-level drill (Merchant / Category /
+  Subcategory in any order, chosen with three level selects) in which
+  clicking a bar sets the matching filter rather than keeping separate
+  drill state. Refunds are netted, card payments excluded. Complete as of
+  2026-09-13 (Session 77), pending the manual browser verification noted
+  in STATE.md's open flags.
 - Commentary is LLM-generated (e.g. a free-tier cloud API such as
   Gemini), not rule-based — a deliberate exception to the project's
   usual practice of never letting real financial data leave the machine.
@@ -108,7 +116,9 @@ describe what was built, with the original intent noted where it changed.
    (frontend)~~ — **complete** (Sessions 43–48, 51–52, 54, 56–58);
    API-tested, awaiting the manual browser walk recorded in STATE.md's
    open flags.
-3. Aggregation endpoint + dashboard with filters and LLM commentary
+3. ~~Aggregation endpoint + dashboard with filters and LLM commentary~~ —
+   **complete** (Sessions 65–69, 73–77), pending the manual browser
+   verification recorded in STATE.md's open flags.
 4. Upload UI with auto-detect (Module 1)
 
 ## Open questions (to be answered when each module is scoped)

@@ -98,6 +98,22 @@ suggestions with accept/change for all three labels (one-click dropdown,
 spread-to-group, add-new); a sticky multi-select bar offers typed bulk
 assign and per-field bulk accept for category and merchant (merchant bulk
 excludes `from_description`), with a Category/Merchant display toggle.
+*Dashboard* (Sessions 65–69, 73–77): period controls (week / month /
+quarter / year / custom, relative or absolute), the resolved period and
+total echoed from the API, a Chart.js bar chart, a collapsible table, and
+an on-demand LLM "insight" with fresh / cached / unavailable states. **As
+of Session 77 the chart is a permutable three-level drill** over Merchant
+/ Category / Subcategory: three "Level 1/2/3 =" selects hold a permutation
+(swap-on-conflict; default Merchant → Category → Subcategory), the tab
+always fetches `dimensions=<level1>,<level2>,<level3>`, and the bars shown
+are the first level whose dimension has no active filter — computed as
+1 + the count of contiguous filtered levels from Level 1. Clicking a bar
+**sets that dimension's filter dropdown** (Session 76's row) and goes
+through the ordinary filter-change path; "back" is clearing the dropdown.
+There is no separate drill state or breadcrumb — the filters are the
+drill. The table below always shows the whole three-level tree in the
+current order, collapsible at every level. Order round-trips in the URL
+(`d_order`).
 Groups are collapsible; the visual system is CSS-variable based with a
 system font stack.
 
