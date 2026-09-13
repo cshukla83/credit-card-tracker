@@ -125,6 +125,10 @@
   .filter-row input[type="date"]:hover {
     border-color: #b6bcc4;
   }
+  .filter-row-labels {
+    border-top: 1px solid var(--rule);
+    padding-top: 0.9rem;
+  }
   .filter-row label.inline {
     flex-direction: row;
     align-items: center;
@@ -951,6 +955,29 @@
         Uncategorized only
       </label>
     </div>
+    <!-- Second row (Session 76): the three labels as independent peers.
+         Each list always offers "Uncategorized" (the unlabelled rows), a
+         synthetic option the API does not emit. -->
+    <div class="filter-row filter-row-labels">
+      <label>
+        Category
+        <select id="category-filter">
+          <option value="">All categories</option>
+        </select>
+      </label>
+      <label>
+        Subcategory
+        <select id="subcategory-filter">
+          <option value="">All subcategories</option>
+        </select>
+      </label>
+      <label>
+        Merchant
+        <select id="merchant-filter">
+          <option value="">All merchants</option>
+        </select>
+      </label>
+    </div>
   </div>
 
   <!-- All transactions -->
@@ -1137,6 +1164,9 @@
     const statementMonthFilterEl = document.getElementById("statement-month-filter");
     const startFilterEl = document.getElementById("start-filter");
     const endFilterEl = document.getElementById("end-filter");
+    const categoryFilterEl = document.getElementById("category-filter");
+    const subcategoryFilterEl = document.getElementById("subcategory-filter");
+    const merchantFilterEl = document.getElementById("merchant-filter");
     const uncategorizedOnlyLabelEl = document.getElementById("uncategorized-only-label");
     const uncategorizedOnlyEl = document.getElementById("uncategorized-only-filter");
 
@@ -1221,6 +1251,9 @@
         statementMonth: statementMonthFilterEl.value,
         start: startFilterEl.value,
         end: endFilterEl.value,
+        category: categoryFilterEl.value,
+        subcategory: subcategoryFilterEl.value,
+        merchant: merchantFilterEl.value,
       };
     }
 
@@ -1238,7 +1271,24 @@
       }
       if (filters.start && !skip.has("start")) params.set("start", filters.start);
       if (filters.end && !skip.has("end")) params.set("end", filters.end);
+      // The three labels (Session 76). "Uncategorized" is sent literally; the
+      // API maps it to IS NULL.
+      if (filters.category && !skip.has("category")) params.set("category", filters.category);
+      if (filters.subcategory && !skip.has("subcategory")) params.set("subcategory", filters.subcategory);
+      if (filters.merchant && !skip.has("merchant")) params.set("merchant", filters.merchant);
       return params;
+    }
+
+    const LABEL_FILTERS = ["category", "subcategory", "merchant"];
+    const UNCATEGORIZED = "Uncategorized";
+
+    // Options for a label picker: the API's distinct values plus the
+    // synthetic "Uncategorized" entry, always offered so the unlabelled rows
+    // are reachable whatever the current data returns.
+    function labelOptions(values) {
+      const opts = values.map((v) => ({ value: v, label: v }));
+      if (!values.includes(UNCATEGORIZED)) opts.push({ value: UNCATEGORIZED, label: UNCATEGORIZED });
+      return opts;
     }
 
     function withParams(path, params) {
@@ -2869,6 +2919,7 @@
       }
       if (filters.bank) params.set("bank", filters.bank);
       if (filters.cardId) params.set("card_id", filters.cardId);
+      for (const key of LABEL_FILTERS) if (filters[key]) params.set(key, filters[key]);
       return { params };
     }
 
@@ -3367,8 +3418,19 @@
     // own. Card is subordinate to Bank, so Bank's options also leave Card
     // out (otherwise choosing a card would pin the bank list to one entry
     // and the user could never switch banks without clearing the card).
+    //
+    // Session 76: the three label pickers join the mesh. Each is narrowed
+    // by bank / card / month / dates but NOT by the other two labels --
+    // they are independent peers, not a cascade -- so their fetches omit
+    // all three label filters; and the first row's pickers are narrowed by
+    // the labels in return (buildParams sends them by default).
     function recomputeOptions(filters) {
       const seq = ++optionsSeq;
+      const categoriesP = fetchJSON(withParams("/categories", buildParams(filters, LABEL_FILTERS)));
+      // Unscoped call (no category=): the review editor's scoped call to the
+      // same endpoint is a different concern and stays where it is.
+      const subcategoriesP = fetchJSON(withParams("/subcategories", buildParams(filters, LABEL_FILTERS)));
+      const merchantsP = fetchJSON(withParams("/merchants", buildParams(filters, LABEL_FILTERS)));
 
       const banksP = fetchJSON(
         withParams("/card-types", buildParams(filters, ["bank", "cardId"])),
@@ -3384,10 +3446,13 @@
         ? fetchJSON(withParams("/transactions", buildParams(filters, ["start", "end"])))
         : Promise.resolve(null);
 
-      return Promise.all([banksP, cardsP, monthsP, boundsP])
-        .then(([cardTypes, cards, months, undated]) => {
+      return Promise.all([banksP, cardsP, monthsP, boundsP, categoriesP, subcategoriesP, merchantsP])
+        .then(([cardTypes, cards, months, undated, categories, subcategories, merchants]) => {
           if (seq !== optionsSeq) return; // a newer filter set has since been issued
           rememberCards(cards);
+          setOptions(categoryFilterEl, "All categories", labelOptions(categories), filters.category);
+          setOptions(subcategoryFilterEl, "All subcategories", labelOptions(subcategories), filters.subcategory);
+          setOptions(merchantFilterEl, "All merchants", labelOptions(merchants), filters.merchant);
           const banks = Array.from(new Set(cardTypes.map((p) => p.bank)));
           setOptions(
             bankFilterEl,
@@ -3431,6 +3496,11 @@
       const urlStatementMonth = params.get("statement_month") || "";
       const urlStart = params.get("start") || "";
       const urlEnd = params.get("end") || "";
+      const urlLabels = {
+        category: params.get("category") || "",
+        subcategory: params.get("subcategory") || "",
+        merchant: params.get("merchant") || "",
+      };
       const urlTabRaw = params.get("tab");
       const urlTab = urlTabRaw === "review" || urlTabRaw === "dashboard" ? urlTabRaw : "all";
       readDashboardURLParams(params);
@@ -3458,9 +3528,22 @@
             statementMonth: statementMonths.includes(urlStatementMonth) ? urlStatementMonth : "",
             start: urlStart,
             end: urlEnd,
+            ...urlLabels,
           };
           // Seed the selects with the resolved values so currentFilters()
           // reads them back; recomputeOptions() then fills in the options.
+          // Label values are not validated against a list here: any value is
+          // a legitimate exact-match filter, and a value with no data shows
+          // as "(no matching data)" after the recompute, like any picker.
+          const labelPickers = [
+            ["category", categoryFilterEl, "All categories"],
+            ["subcategory", subcategoryFilterEl, "All subcategories"],
+            ["merchant", merchantFilterEl, "All merchants"],
+          ];
+          for (const [key, el, allLabel] of labelPickers) {
+            const v = urlLabels[key];
+            setOptions(el, allLabel, v ? [{ value: v, label: v }] : [], v);
+          }
           setOptions(bankFilterEl, "All banks", bank ? [{ value: bank, label: bank }] : [], bank);
           setOptions(
             cardFilterEl,
@@ -3536,6 +3619,9 @@
     statementMonthFilterEl.addEventListener("change", onFilterChange);
     startFilterEl.addEventListener("input", onDateInput);
     endFilterEl.addEventListener("input", onDateInput);
+    categoryFilterEl.addEventListener("change", onFilterChange);
+    subcategoryFilterEl.addEventListener("change", onFilterChange);
+    merchantFilterEl.addEventListener("change", onFilterChange);
     // "Uncategorized only" is a view toggle, not an API filter: the data is
     // already loaded, so it only re-groups. The URL is updated so a reload
     // keeps it.

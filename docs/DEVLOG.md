@@ -8482,3 +8482,94 @@ one choice limits the next. The dropdowns themselves arrive next session.
 - **Session 77:** the permutable three-level chart drill-down with the
   "Level 1 / 2 / 3 =" order selects.
 - `docs/STATE.md` still awaits its full reconciliation (Sessions 61–75).
+
+## Session 76 — 2026-09-13
+
+### Goal
+Frontend only. A second filter-bar row with Category, Subcategory, and
+Merchant single-selects on all three tabs, wired to Session 75's
+endpoints as full members of the bidirectional-narrowing mesh; the three
+labels travel with every data fetch and the URL. No chart changes.
+
+### What happened
+
+State confirmed first: `feature/merchant-aggregation` at `87effd0`,
+clean. The browser extension was checked before any code and was **not
+available**, so per the brief no server was started and the work was
+traced through code (see the verification note below).
+
+**Row.** A `filter-row filter-row-labels` div beneath the existing row,
+same label/select markup and CSS variables as the first row, a hairline
+rule above it. It is not hidden on the Dashboard (unlike month/dates,
+which the dashboard's period controls supersede): the labels apply to all
+three tabs.
+
+**State, params, URL.** `currentFilters()` reads the three selects;
+`buildParams()` sends `category` / `subcategory` / `merchant` by default
+(the literal value "Uncategorized" included — the API maps it to `IS
+NULL`), so every existing consumer of it — `/transactions` for both table
+tabs, the date-bounds fetch, the URL writer — carries them with no further
+change. The dashboard's `aggregateParams()` adds the same three;
+`dimensions` is untouched (still the default). `initFromURL()` reads the
+three params and seeds the selects; unlike card and month they are not
+validated against a list on load, because any value is a legitimate
+exact-match filter — one with no data shows as "(no matching data)" after
+the recompute, the existing kept-and-flagged convention.
+
+**Mesh.** `recomputeOptions()` now fetches seven lists under the one
+`optionsSeq` guard. The three label lists come from `/categories`,
+`/subcategories`, `/merchants` with `buildParams(filters, LABEL_FILTERS)`
+— every filter except all three labels, so a label picker is narrowed by
+bank / card / month / dates and never by the other two labels. The first
+row's fetches (`/card-types`, `/cards`, `/statement-months`) and the date
+bounds use the default `buildParams`, which now includes the labels — so
+picking a category narrows the banks, cards, months, and date bounds in
+return. `labelOptions()` appends the synthetic "Uncategorized" entry to
+each list when the API did not return a real value of that name.
+
+**One endpoint, two call sites, by design.** The Review & assign row
+editor (Session 54) calls `GET /subcategories?category=<row's category>`
+to offer subcategories already used under that row's category — a scoping
+tied to the row being edited. The filter bar's new call to the same
+endpoint deliberately omits `category=` and passes only the mesh params:
+the filter row's three labels are independent peers that must not narrow
+each other (Session 75's rule). The two coexist because they answer
+different questions — "what fits this row?" versus "what exists under the
+current view?" — and the endpoint's `category=` scope was kept for the
+first while the mesh params were added for the second.
+
+**Tests.** No backend code changed. This project's automated tests are
+backend/API-level (CONVENTIONS.md); there is no frontend suite and none
+was invented. The backend suite was run for the record: **500 passing**,
+unchanged.
+
+**Verification — traced, not seen.** Script parsed with the system
+JavaScriptCore; the mesh omissions, the two `/subcategories` call sites,
+and the URL round-trip were checked by reading the code. **This session
+adds to the manual-verification backlog** recorded in STATE.md's open
+flags: the second row's rendering on all three tabs, the seven-way
+narrowing (both directions), the synthetic "Uncategorized" option, the
+"(no matching data)" state for a URL-supplied label, and the labels
+reaching the dashboard's aggregate have not been seen in a browser.
+
+### Outcome
+Every tab can be narrowed by category, subcategory, and merchant, alone or
+together, with the other pickers narrowing to match and the URL carrying
+the choice — on the API's contract, verified by trace.
+
+### In plain English
+The filter bar has a second row: category, finer label, and merchant, on
+every screen. Choosing any of them narrows what the tables and the
+dashboard show, and the bank, card, and month lists shrink to match — just
+as choosing a bank already shrinks the card list; the three new lists
+themselves are narrowed by bank, card, and dates but never by each other,
+so they can be combined freely. Each always offers "Uncategorized" for the
+rows with no label. The choice is kept in the page address, so a filtered
+view can be bookmarked. Not seen running: the browser tooling was again
+unavailable, so this joins the list of screen work awaiting a manual look.
+
+### Next steps
+- **Session 77:** the permutable three-level chart drill-down with the
+  "Level 1 / 2 / 3 =" order selects.
+- The `docs/STATE.md` reconciliation backlog from Sessions 61–75 (now 76)
+  is still outstanding; this session made only a targeted correction.

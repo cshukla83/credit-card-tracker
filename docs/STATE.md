@@ -80,7 +80,9 @@ its bank), date inputs bounded by the real data, invalidated selections
 kept and flagged rather than silently cleared, URL as source of truth on
 load, and a second sequence counter guarding the pickers. **As of Session
 75 the mesh includes category, subcategory, and merchant on the API side**
-(frontend dropdowns pending, Session 76): `/categories`, `/subcategories`,
+(frontend dropdowns added in Session 76 as a second filter-bar row —
+Category, Subcategory, Merchant — on all three tabs, each always offering a
+synthetic "Uncategorized" option): `/categories`, `/subcategories`,
 and `/merchants` are narrowed by bank / card / card type / statement month
 / date range, and `/cards`, `/statement-months`, `/card-types`, and
 `/transactions` are narrowed by the three labels in return — with **one
