@@ -1559,6 +1559,8 @@
       suggestions: new Map(), // transaction_id -> {category, confidence, match_type}
       catalog: [],            // GET /categories, sorted
       merchants: [],          // GET /merchants, sorted (dropdown + typeahead)
+      subcategoriesAll: [],   // GET /subcategories (unscoped), for the bar's subcategory typeahead
+      subcategoryQuery: "",   // selection-bar subcategory typeahead text
       merchantQuery: "",      // selection-bar merchant typeahead text
       bulkField: "category",  // which field's bulk controls the bar shows; display-only
       rowError: null,         // {id, message} shown inline in a row's payment cell
@@ -1756,14 +1758,32 @@
       return ids;
     }
 
+    // Global rule (Session 79): credit rows -- refunds and card payments
+    // alike -- are never part of the manual multi-select. They are a
+    // heterogeneous set (a refund's labels are the user's; a payment's are
+    // owned by the is_payment cascade) and do not belong in one bulk apply.
+    // Enforced in one place: this predicate gates the row checkbox, the
+    // group checkbox's id list, and the prune, so every bulk action that
+    // reads review.selected inherits it.
+    function isSelectable(txn) {
+      return txn.txn_type !== "credit";
+    }
+
+    function selectableIds(txns) {
+      return txns.filter(isSelectable).map((t) => t.id);
+    }
+
     function pruneSelectionToVisible() {
       // In similarity mode the selection is kept for every row in the
       // filtered set, not just the rows above threshold: a threshold or
       // mode change must not change selection state (Session 51 brief).
       const shown =
         review.mode === "similarity"
-          ? new Set(review.transactions.map((t) => t.id))
-          : visibleIds();
+          ? new Set(selectableIds(review.transactions))
+          : new Set(Array.from(visibleIds()).filter((id) => {
+              const t = review.transactions.find((x) => x.id === id);
+              return t && isSelectable(t);
+            }));
       for (const id of Array.from(review.selected)) {
         if (!shown.has(id)) review.selected.delete(id);
       }
@@ -1803,6 +1823,7 @@
           review.editing = null;
           review.query = "";
           review.merchantQuery = "";
+          review.subcategoryQuery = "";
           // busy is cleared *before* the reload renders, otherwise every
           // button would be rebuilt disabled and stay that way.
           review.busy = false;
@@ -1840,6 +1861,25 @@
         const m = merchantSuggestionFor(t);
         if (m && m.match_type !== "from_description") {
           pairs.push({ transaction_id: t.id, merchant: m.value });
+        }
+      }
+      return pairs;
+    }
+
+    // Subcategory bulk accept (Session 79), the same shape as merchant's:
+    // one subcategory-only entry per selected row whose displayed
+    // suggestion was *learned* (match_type "exact"). "same_as_category" is
+    // excluded for exactly the reason "from_description" is above: it is a
+    // fallback with a default 1.0 confidence, not evidence, and every row
+    // with a category but no subcategory has one -- a bulk accept would
+    // otherwise copy category names into the subcategory column across the
+    // whole selection. Those rows keep their per-row accept.
+    function acceptSubcategoryPairs(txns) {
+      const pairs = [];
+      for (const t of txns) {
+        const sc = subSuggestionFor(t);
+        if (sc && sc.match_type !== "same_as_category") {
+          pairs.push({ transaction_id: t.id, subcategory: sc.value });
         }
       }
       return pairs;
@@ -1903,6 +1943,7 @@
       const transactionsP = fetchJSON(transactionsURL(filters));
       const catalogP = fetchJSON("/categories");
       const merchantsP = fetchJSON("/merchants");
+      const subcategoriesP = fetchJSON("/subcategories");
       const clustersP = transactionsP.then((transactions) =>
         review.mode === "similarity" ? fetchClusters(transactions) : review.clusters,
       );
@@ -1915,8 +1956,8 @@
         return postJSON("/transactions/suggestions", { transaction_ids: openIds });
       });
 
-      return Promise.all([transactionsP, suggestionsP, catalogP, merchantsP, clustersP])
-        .then(([transactions, suggestionBody, catalog, merchants, clusters]) => {
+      return Promise.all([transactionsP, suggestionsP, catalogP, merchantsP, subcategoriesP, clustersP])
+        .then(([transactions, suggestionBody, catalog, merchants, subcategoriesAll, clusters]) => {
           if (seq !== requestSeq) return;
           if (!hasDateFilter(filters)) applyDateBounds(transactions);
           review.transactions = transactions;
@@ -1925,6 +1966,7 @@
           );
           review.catalog = catalog;
           review.merchants = merchants;
+          review.subcategoriesAll = subcategoriesAll;
           review.clusters = clusters;
           review.rowError = null;
           review.editing = null;
@@ -2100,6 +2142,7 @@
       const amount = selectedTxns.reduce((n, t) => n + Number(t.amount), 0);
       const categoryPairs = acceptPairs(selectedTxns);
       const merchantPairs = acceptMerchantPairs(selectedTxns);
+      const subcategoryPairs = acceptSubcategoryPairs(selectedTxns);
 
       const label = document.createElement("span");
       label.className = "label";
@@ -2116,7 +2159,7 @@
       seg.className = "segmented";
       seg.setAttribute("role", "group");
       seg.setAttribute("aria-label", "Bulk field");
-      for (const [field, text] of [["category", "Category"], ["merchant", "Merchant"]]) {
+      for (const [field, text] of [["category", "Category"], ["subcategory", "Sub Category"], ["merchant", "Merchant"]]) {
         const b = document.createElement("button");
         b.type = "button";
         b.textContent = text;
@@ -2151,6 +2194,22 @@
           title:
             "Writes each selected transaction its own suggested category (as displayed); " +
             "rows with no category suggestion are left as they are",
+        },
+        subcategory: {
+          typeahead: {
+            placeholder: "Assign subcategory\u2026",
+            options: () => review.subcategoriesAll,
+            getQuery: () => review.subcategoryQuery,
+            setQuery: (v) => { review.subcategoryQuery = v; },
+            emptyText: "Type a subcategory name",
+            onPick: (value) => assign(uniformSubPairs(selectedIds, value)),
+          },
+          pairs: subcategoryPairs,
+          label: "Accept subcategory suggestions (" + subcategoryPairs.length + ")",
+          title:
+            "Writes each selected transaction its own learned subcategory suggestion (exact, " +
+            "as displayed); \u201csame as category\u201d rows are skipped here and can be " +
+            "accepted one at a time",
         },
         merchant: {
           typeahead: {
@@ -2188,6 +2247,7 @@
         review.selected.clear();
         review.query = "";
         review.merchantQuery = "";
+        review.subcategoryQuery = "";
         renderReview();
       });
       selectionBarEl.appendChild(clear);
@@ -2250,16 +2310,21 @@
       });
       head.appendChild(toggle);
 
-      const allIn = group.ids.every((id) => review.selected.has(id));
-      const someIn = !allIn && group.ids.some((id) => review.selected.has(id));
+      // Only the group's selectable (non-credit) rows take part.
+      const groupSelectable = selectableIds(group.txns);
+      const allIn = groupSelectable.length > 0 && groupSelectable.every((id) => review.selected.has(id));
+      const someIn = !allIn && groupSelectable.some((id) => review.selected.has(id));
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.checked = allIn;
       cb.indeterminate = someIn;
-      cb.title = "Select every row in this group";
+      cb.disabled = groupSelectable.length === 0;
+      cb.title = groupSelectable.length
+        ? "Select every debit row in this group"
+        : "No bulk-selectable rows in this group";
       cb.addEventListener("change", () => {
-        if (allIn) for (const id of group.ids) review.selected.delete(id);
-        else for (const id of group.ids) review.selected.add(id);
+        if (allIn) for (const id of groupSelectable) review.selected.delete(id);
+        else for (const id of groupSelectable) review.selected.add(id);
         renderReview();
       });
       head.appendChild(cb);
@@ -2307,15 +2372,20 @@
 
       const selectCell = document.createElement("td");
       selectCell.className = "select";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.checked = isSelected;
-      cb.addEventListener("change", () => {
-        if (cb.checked) review.selected.add(txn.id);
-        else review.selected.delete(txn.id);
-        renderReview();
-      });
-      selectCell.appendChild(cb);
+      if (isSelectable(txn)) {
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = isSelected;
+        cb.addEventListener("change", () => {
+          if (cb.checked) review.selected.add(txn.id);
+          else review.selected.delete(txn.id);
+          renderReview();
+        });
+        selectCell.appendChild(cb);
+      } else {
+        // Credit rows carry no checkbox at all (Session 79 global rule).
+        selectCell.title = "Credits are not bulk-selectable";
+      }
       tr.appendChild(selectCell);
 
       const dateCell = document.createElement("td");

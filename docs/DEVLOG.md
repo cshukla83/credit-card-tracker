@@ -8772,3 +8772,79 @@ step back while looking at the chart. Not yet seen running from here.
 - The `docs/STATE.md` full reconciliation backlog, Sessions 61–78.
 - **Module 1** (upload UI with auto-detect) is the next arc once that
   verification has happened.
+
+## Session 79 — 2026-09-13
+
+### Goal
+Subcategory joins the sticky bar's per-field bulk accept at parity with
+category and merchant, and a global rule: credit rows cannot be selected
+for any bulk action. Frontend only.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `847c48c`, clean.
+Browser tooling: not available; traced.
+
+**The global credit-row rule, in one place.** `isSelectable(txn)` —
+`txn_type !== "credit"` — now gates the three places the multi-select is
+formed: the row checkbox (a credit row renders no checkbox at all, with a
+title explaining why, rather than a disabled one that invites a click), the
+group header checkbox (which now toggles only the group's selectable ids
+and is disabled when a group has none), and `pruneSelectionToVisible()`.
+Because every bulk action — category, merchant, and now subcategory accept,
+and the typed bulk assign — reads `review.selected`, all of them inherit
+the rule without touching their own code. **Why credits:** the credit rows
+are a heterogeneous set — a refund's labels are the user's to assign, a
+payment's labels are owned by the `is_payment` cascade (Session 61) — and
+neither belongs in a single bulk apply alongside debits; refunds also net
+against spend rather than being spend. Group-level "accept all" is not
+selection-based and was left as it is; noted here as a possible follow-up,
+not changed.
+
+**Subcategory bulk accept — the merchant pattern, exactly.** The bar's
+existing per-field controls are a table keyed by `review.bulkField` with a
+typeahead and an accept button each; a `subcategory` entry was added
+between category and merchant (the segmented toggle now reads Category /
+Sub Category / Merchant). `acceptSubcategoryPairs()` mirrors
+`acceptMerchantPairs()`: one `{transaction_id, subcategory}` entry per
+selected row whose displayed suggestion has `match_type "exact"`. **The
+`same_as_category` fallback is excluded** for the same reason Session 57
+excluded merchant's `from_description`: it is a default with a 1.0
+confidence, not a learned match, and every row with a category but no
+subcategory has one — so a bulk accept would otherwise copy category
+names into the subcategory column across the whole selection in one
+click. Those rows keep their per-row accept, where the "same as category"
+badge is in view. The typeahead offers the unscoped `GET /subcategories`
+list (fetched with the catalogs), writing one typed value to every
+selected row via the existing per-field-optional assign entries. Both call
+the endpoint the other two already use; no backend change.
+
+**Tests.** The checkbox rule and the bulk-accept eligibility are frontend
+behaviours; this project has no frontend test suite and none was invented,
+per convention. The endpoint the new control calls is already covered by
+Session 53's subcategory-only assignment tests, and the backend suite was
+run for the record: **500 passing**, unchanged. Debit-only selections are
+the only kind the UI can now form, so the existing category/merchant bulk
+paths are unaffected by construction.
+
+**Verification — traced, not seen.** Script parsed; the three gates, the
+group toggle over selectable ids only, and the new control's wiring were
+checked by reading the code. Adds to the manual-verification backlog.
+
+### Outcome
+All three labels have a bulk accept of the same shape, each skipping its
+fallback tier; credit rows are outside the multi-select everywhere, by one
+rule.
+
+### In plain English
+The bulk bar can now accept suggested finer labels for many ticked rows at
+once, just as it already could for categories and merchants — skipping the
+placeholder suggestions that merely repeat the category, for the same
+reason placeholder merchant names were already skipped. Separately, rows
+that are money coming in — refunds and card payments — can no longer be
+ticked at all: they are different kinds of thing from purchases and from
+each other, and don't belong in one sweep. Not seen running.
+
+### Next steps
+Session 80 (review-status filter, backend), then 81–83. Manual
+verification backlog grows by this session.

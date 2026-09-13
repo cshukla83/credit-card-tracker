@@ -96,8 +96,16 @@ transactions* lists rows read-only with merchant/category/subcategory.
 description similarity at a chosen threshold; each row shows its
 suggestions with accept/change for all three labels (one-click dropdown,
 spread-to-group, add-new); a sticky multi-select bar offers typed bulk
-assign and per-field bulk accept for category and merchant (merchant bulk
-excludes `from_description`), with a Category/Merchant display toggle.
+assign and per-field bulk accept for category, subcategory (Session 79),
+and merchant — each excluding its fallback tier from bulk (merchant's
+`from_description`, subcategory's `same_as_category`), since a default
+confidence is not evidence — behind a Category / Sub Category / Merchant
+display toggle. **Credit rows (refunds and payments alike) carry no
+selection checkbox and are never in the multi-select** (Session 79): the
+set is heterogeneous — a refund's labels are the user's, a payment's are
+the cascade's — and does not belong in one bulk apply; the rule lives in
+one predicate that gates the row checkbox, the group checkbox, and the
+selection prune, so every bulk action inherits it.
 *Dashboard* (Sessions 65–69, 73–77): period controls (week / month /
 quarter / year / custom, relative or absolute), the resolved period and
 total echoed from the API, a Chart.js bar chart, a collapsible table, and
