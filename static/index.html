@@ -2213,11 +2213,18 @@
       else renderReviewGrouped();
     }
 
+    // Both renderers build the new rows into a fragment and swap them in
+    // with replaceChildren() at the end, so the tbody is never empty
+    // mid-render (Session 93). It used to be emptied first, and the
+    // selection bar's height measurement (updateBarOffset) then forced a
+    // layout on a table with no rows: the document shrank to under a
+    // screen, the viewport's scroll position was clamped to 0, and the
+    // rows came back after the clamp -- every tick of a checkbox sent the
+    // page to the top. Measured in headless Chrome, not inferred.
     function renderReviewGrouped() {
       const { groups, openCount, partialCount } = buildGroups();
       const total = review.transactions.length;
 
-      reviewBodyEl.textContent = "";
       nothingLeftEl.style.display = "none";
       reviewModeNoteEl.style.display = "none";
 
@@ -2225,6 +2232,7 @@
       thresholdLabelEl.style.display = similarity ? "" : "none";
 
       if (total === 0) {
+        reviewBodyEl.replaceChildren();
         reviewStatusEl.textContent = "No transactions found.";
         reviewTableEl.style.display = "none";
         selectionBarEl.style.display = "none";
@@ -2259,20 +2267,23 @@
       }
 
       if (groups.length === 0) {
+        reviewBodyEl.replaceChildren();
         reviewTableEl.style.display = "none";
         return;
       }
 
+      const rows = document.createDocumentFragment();
       for (const group of groups) {
-        reviewBodyEl.appendChild(renderGroupHeader(group));
+        rows.appendChild(renderGroupHeader(group));
         // Collapsed groups keep their header (and its checkbox/accept-all);
         // only the rows are withheld. Keyed by title, which is the group's
         // identity across re-renders.
         if (isGroupCollapsed(group)) continue;
         for (const txn of group.txns) {
-          reviewBodyEl.appendChild(renderRow(txn, group));
+          rows.appendChild(renderRow(txn, group));
         }
       }
+      reviewBodyEl.replaceChildren(rows);
       reviewTableEl.style.display = "";
 
       // Focus whatever the open editor wants focused, now that it exists.
@@ -2377,6 +2388,16 @@
       selectionBarEl.style.display = "";
       panelReviewEl.classList.add("has-selection");
       updateBarOffset();
+      // The IntersectionObserver below fires only when the sentinel's
+      // intersection *changes*; a bar that appears while the page is
+      // already scrolled past its flow position gets no callback, so set
+      // the stuck state from the sentinel's position now (Session 93).
+      // Measured with the rows in place -- see renderReviewGrouped.
+      selectionBarEl.classList.toggle("stuck", selectionBarSentinelEl.getBoundingClientRect().top < barStickyTop() + 1);
+    }
+
+    function barStickyTop() {
+      return parseFloat(getComputedStyle(selectionBarEl).top) || 0;
     }
 
     // Group headers stick just beneath the bar (CSS reads --bar-offset), so
@@ -2401,7 +2422,7 @@
     // goes. rootMargin pulls the observed top edge down by the sticky offset
     // (+1px) so the flip happens exactly at the pin point.
     if (typeof IntersectionObserver !== "undefined") {
-      const stickyTop = parseFloat(getComputedStyle(selectionBarEl).top) || 0;
+      const stickyTop = barStickyTop();
       new IntersectionObserver(
         ([entry]) => {
           const shown = selectionBarEl.style.display !== "none";
@@ -2544,9 +2565,9 @@
     const reviewedSort = makeSort();
 
     function renderReviewed() {
-      reviewedBodyEl.textContent = "";
       const total = review.transactions.length;
       if (total === 0) {
+        reviewedBodyEl.replaceChildren();
         reviewedStatusEl.textContent = "No fully labelled transactions for these filters.";
         reviewedTableEl.style.display = "none";
         reviewedSelectionBarEl.style.display = "none";
@@ -2556,6 +2577,7 @@
       renderReviewedSelectionBar();
       renderSortIndicators(reviewedTableEl, reviewedSort);
 
+      const rows = document.createDocumentFragment();
       for (const txn of sortRows(review.transactions, reviewedSort)) {
         const tr = document.createElement("tr");
         const isSelected = review.selected.has(txn.id);
@@ -2598,8 +2620,9 @@
         tr.appendChild(renderLabelCell(txn, "category", editingField === "category"));
         tr.appendChild(renderLabelCell(txn, "subcategory", editingField === "subcategory"));
         tr.appendChild(renderPaymentCell(txn));
-        reviewedBodyEl.appendChild(tr);
+        rows.appendChild(tr);
       }
+      reviewedBodyEl.replaceChildren(rows);
       reviewedTableEl.style.display = "";
 
       if (review.editing) focusOpenEditor(reviewedBodyEl);

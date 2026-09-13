@@ -9925,3 +9925,113 @@ produce the state; the engine is now None-safe against it (Session 91),
 so it is a data-hygiene question, not a crash. Manual verification of
 this session's four points when the browser is available. Then the
 Session 88 backlog.
+
+## Session 93 — 2026-09-14
+
+### Goal
+Two reports from real use: ticking a bulk-select checkbox resets the
+page to the top, and the multi-select bar "isn't sticky". Find the
+actual cause, fix it at the source, and verify on both tabs.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `cd59b0e`, clean.
+Browser tooling: the Chrome extension was not connected, so a small
+stdlib-only DevTools-protocol driver (scratchpad, not committed) ran
+the app in **headless Chrome** against a scratchpad copy of the
+database, and every claim below is a measurement from it; the real file
+was confirmed byte-identical afterwards.
+
+**Root cause of the scroll reset — measured, and not the first guess.**
+There is no `scrollIntoView`/`scrollTo` on the selection path; every
+checkbox `change` calls `renderReview()`, which rebuilt the table. The
+mechanism, isolated step by step in the browser:
+- emptying and refilling the tbody with no layout read in between:
+  scroll unchanged (9000 → 9000);
+- the same with one forced layout while empty (`body.offsetHeight`):
+  9000 → 0 — the document was 638px tall at that instant, so the
+  viewport's scroll position was clamped to 0 and the rows came back
+  after the clamp;
+- the real tick with `updateBarOffset()` neutralised: no reset.
+`renderReviewGrouped()` did `reviewBodyEl.textContent = ""` first and
+then `renderSelectionBar()`, whose `updateBarOffset()` reads the bar's
+`offsetHeight` and `getComputedStyle().top` (the used value on a
+positioned element — also a forced layout; stubbing `offsetHeight`
+alone did not remove the reset, which is how that second read was
+found). That runs only when the selection is non-empty, which is why
+*ticking* reset the page and un-ticking to empty did not. So: a full
+re-render that left the DOM empty at the moment a layout was forced —
+not an explicit scroll, and not the bar's CSS.
+
+**The bar was already sticky.** `.selection-bar` has had `position:
+sticky; top: .75rem; z-index: 20` since Session 58; `#panel-review` is
+a direct child of `body` with no `overflow` ancestor, and headless
+Chrome reports `position: sticky` with the bar at `top: 12px` after
+scrolling further. What the user saw was the reset: after every tick the
+page was at the top, where the bar sits in flow, and scrolling away from
+it read as "not sticky".
+
+**Fix.** Both renderers now build their rows into a
+`DocumentFragment` and swap them in with `replaceChildren()` at the end,
+so the tbody is never empty mid-render and no layout, forced or not, can
+see a short document; the bar's measurement now happens with the old
+rows still in place. The two empty-state early returns clear the tbody
+explicitly, as before. `renderReviewed()` had no forced layout and did
+not reset, and gets the same invariant so it cannot start to. One
+adjacent fix on the bar's own layering cue: the `stuck` shadow is set
+by an IntersectionObserver that fires only when the sentinel's
+intersection *changes*, so a bar appearing while already scrolled past
+its flow position never got the shadow; `renderSelectionBar()` now sets
+it from the sentinel's position at show time (measured with the rows in
+place). Nothing else changed: no CSS for the bar, no `position: fixed`,
+and the sticky-table-header backlog item is untouched — noted in
+STATE.md that a sticky header would share the bar's top band and would
+need to park beneath it as the group headers do.
+
+**Verification — seen, in headless Chrome, both tabs.** Scroll to 60%
+of a 16,283px page (Review & Assign) / 5,648px (Reviewed), tick three
+rows one at a time, then (Review & Assign) a group select-all, then
+scroll on by 700px. Before: first tick 9769 → **0**. After, on every
+tick on both tabs: the ticked row's on-screen position unchanged
+(`rowTop` before == after), the bar inside the viewport at `top: 12px`,
+and still pinned after the extra scroll; `stuck` true when pinned, false
+at the top of the page. The one residual, stated exactly: on the
+**first** tick only, `scrollY` changes by the bar's own flow height
+(+71px Review & Assign, +62px Reviewed) — the bar entering the document
+above the viewport — while Chrome's scroll anchoring keeps the content
+stationary. A top-pinned in-flow bar cannot appear without that
+insertion unless its space is permanently reserved; nothing on screen
+moves in Chrome, and every subsequent tick is zero on both measures.
+Not measured in Safari (no automation available); if WebKit does not
+anchor, that first tick would show a one-time shift of the bar's
+height there. The Chrome extension itself was still unavailable, so
+this is headless, not the user's own window.
+
+**Tests.** No frontend suite for DOM/scroll behaviour, per convention,
+and nothing pure was extracted — the change is the order of DOM
+operations. Backend unchanged: **532 passing**. Script parsed under
+jsc.
+
+**Docs.** STATE.md: the bar sentence and the sticky-header backlog item.
+
+### Outcome
+Ticking a row or a group moves nothing on screen; the bar is where it
+always was, pinned at the top, now actually reachable because the page
+stays put.
+
+### In plain English
+Every time you ticked a box, the page jumped back to the top — because,
+for a split second while the list was being redrawn, the table was
+empty, the page was shorter than the screen, and the browser lost your
+place. The list is now swapped in whole, so there is never an empty
+moment. The floating bar had been pinned to the top all along; it only
+looked unpinned because you kept being sent back to where it lives.
+Checked in a real (headless) Chrome on both tabs, several ticks in a row
+at a deep scroll position.
+
+### Next steps
+Manual confirmation in the user's own browser (the extension was not
+connected). Optionally commit the headless-Chrome driver under
+`scripts/` for future frontend sessions — it is ~80 lines, stdlib only,
+and turned "traced" into "seen" here; not added unasked. Then the
+Session 88 backlog.

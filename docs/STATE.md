@@ -143,7 +143,11 @@ set)" on the tab's notice line (silent when nothing was skipped). If the edited 
 (the bulk apply), with a count shown before commit; editing an unchecked
 row is never bulk. Payment rows' cascade-set labels are editable the same
 way. The old accept / change / spread-to-group / add-new buttons and the
-bar's typed bulk assign are gone; a sticky multi-select bar offers
+bar's typed bulk assign are gone; a viewport-sticky multi-select bar
+(`position: sticky`, top-pinned, z-index above rows and parked group
+headers; Session 93 fixed the render that sent the page to the top on
+every checkbox tick — the table is never empty mid-render now, so
+ticking a row or a group moves nothing on screen on either tab) offers
 per-field bulk accept for category, subcategory (Session 79),
 and merchant — each excluding its fallback tier from bulk (merchant's
 `from_description`, subcategory's `same_as_category`), since a default
@@ -433,7 +437,10 @@ system font stack.
   sticky using the same pattern, with attention to z-index layering
   against the multi-select bar — and against the group headers that
   already park beneath it — when all are visible at once. Recorded, not
-  designed.
+  designed. Session 93 confirmed the bar itself is correctly pinned and
+  did not touch this: a sticky header would want the same top band the
+  bar occupies (`--bar-top`, then `--bar-offset` for the group headers),
+  so it will need to park beneath the bar the way group headers do.
 - **No "collapse all" for groups.** Groups on Review & assign are
   individually collapsible in both grouping modes (collapsing added in
   Session 44; per-group defaults in Session 52) but there is no bulk
