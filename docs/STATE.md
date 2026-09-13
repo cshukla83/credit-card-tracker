@@ -403,7 +403,14 @@ system font stack.
   frontend's behaviour is what the code specifies, not what has been
   observed. Two real bugs were caught by code trace alone in that stretch
   (a disabled-buttons regression in Session 43, a dropdown-clipping bug in
-  Session 44); more may be waiting.
+  Session 44); more may be waiting. **Since Session 93 there is a way to
+  see it without the extension:** `scripts/headless_chrome.py` drives a
+  headless Chrome over the DevTools protocol — stdlib only, needs just a
+  Chrome/Chromium binary — so a session can run the app on a scratchpad
+  copy of the database, load a page, click, and measure scroll positions,
+  bounding rects, classes, or anything else the page can evaluate. It
+  found and confirmed the fix for Session 93's scroll reset; frontend
+  sessions should reach for it before writing "traced, not seen".
 - **The selection count can include rows that are not on screen.** After
   a bulk accept from the multi-select bar (Session 57) the selection is
   deliberately kept whole and the post-reload prune is skipped, so the

@@ -10035,3 +10035,75 @@ connected). Optionally commit the headless-Chrome driver under
 `scripts/` for future frontend sessions — it is ~80 lines, stdlib only,
 and turned "traced" into "seen" here; not added unasked. Then the
 Session 88 backlog.
+
+## Session 94 — 2026-09-14
+
+### Goal
+Closing / housekeeping session for this thread: commit Session 93's
+headless-Chrome verification driver into the repository, and write the
+learning summary for the 13 September working day (Sessions 72–94). No
+feature work.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `24d5750`, clean.
+
+**Driver.** `scripts/headless_chrome.py` — Session 93's scratchpad
+`cdp.py` with a module docstring added and nothing else; the body was
+diffed against the scratchpad file and is identical. Placement and
+naming follow the only precedent `scripts/` has: a module docstring
+that says what it does and how to run it from the project root with the
+venv active (as `create_card.py` and `query_transactions.py` do). It is
+a library rather than a `python -m` command, and the docstring says so
+and shows the shape of a verification script on top of it. Smoke-tested
+from its new location: launches Chrome, evaluates `1 + 1`, reports a
+HeadlessChrome user agent. The usage note landed in STATE.md's
+manual-verification-gap item, since that is where a future session
+looking for "how do I see the screen" will read: what it does, that it
+needs only a Chrome/Chromium binary, and that it exists to replace
+"traced, not seen".
+
+**Learning summary.** `docs/learnings/learning_summary_13-Sep-2026.md`,
+new; `learning_summary_12-Sep-2026.md` untouched (checked: no diff).
+Written from the DEVLOG entries for Sessions 72–93 plus this one,
+following `docs/learnings/CONVENTIONS.md` — plain English, no session
+numbers, no code names — so the brief's asks were rendered in words:
+the investigate-before-fixing discipline (the four bug sessions, three
+of which overturned the first explanation); the evidence-versus-default
+rule now applied a third time, with the by-name exclusion that let the
+precedent tier join bulk unnamed; the crash whose cause was a
+comparison written for a narrower shared pool that a later session
+widened, and why the history of a line matters more than the date of
+the last change; and the headless driver as a change in what the
+project can verify, not another traced-only session. Every number was
+checked against the log before it went in: the suite from 483 (Session
+73's count) to 532; fifteen sessions in the range recording "not seen
+running" or "traced, not seen" (a first regex miscounted eleven across
+line breaks; recounted on whitespace-normalised text). One boundary
+note: Session 72 is logged under 12 September (it updated that day's
+summary) and Sessions 93–94 fall on 14 September by the clock; the
+brief treats 72–94 as one continuous working day and the file is named
+for 13 September accordingly, with Session 72 covered in a single line.
+
+**Tests.** None added; nothing under test changed. Suite not re-run —
+no code path touched (`scripts/headless_chrome.py` is not imported by
+the app or the tests).
+
+**Docs.** STATE.md: the driver pointer only. DEVLOG: this entry.
+
+### Outcome
+The verification driver is part of the repository, and the day's
+record has its plain-language summary.
+
+### In plain English
+A tidy-up to close the day: the small tool built last session to watch
+the screens in a real browser is now saved with the project, with a
+note on how to use it, and the day's work has been written up as a
+plain-language summary alongside the earlier days'. Nothing about the
+app itself changed.
+
+### Next steps
+Manual verification in the user's own browser of the screen work since
+Session 76 — or with the committed driver where a measurement will do.
+Not merged to main: that waits on that verification. Then the Session
+88 backlog (STATE.md reconciliation 61–94, Module 1).
