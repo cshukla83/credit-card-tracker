@@ -9503,3 +9503,117 @@ asked. It asks for every unfinished row now. Not seen running.
 Unchanged from Session 86: manual re-verification (including these two
 fixes), Sessions 73–78's separate verification, STATE.md reconciliation
 (61–87), merge, then Module 1.
+
+## Session 88 — 2026-09-13
+
+### Goal
+Add a subcategory suggestion tier between `exact` and `same_as_category`:
+a precedent from other rows with the same merchant and category. Real
+evidence, so bulk-acceptable; `same_as_category` stays excluded.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `2381e63`, clean.
+Browser tooling: not used against a live server (the only database is the
+real one, and a bulk-accept click writes); traced, with the engine run
+read-only against the real database.
+
+**Tier order and rule.** `_suggest_subcategory_from` now runs, for a row
+with a category: (1) `exact` — unchanged; (2) **`merchant_category`** —
+only when the row also has a merchant: every OTHER row whose merchant and
+category both match and whose subcategory is set, however it got there
+(manual, bulk, cascade) and whatever its debit/credit type; most common
+subcategory wins, tie to the highest id (Session 41's proxy, via the same
+id-DESC + `Counter.most_common()` first-seen trick the other tiers use);
+confidence is the winner's share, and the response carries an extra
+`precedents` key with the total, so 1-of-1 and 12-of-12 are
+distinguishable; (3) `same_as_category` — unchanged. `_fetch_targets` now
+selects `merchant` for the target. No other engine touched.
+
+**Two deviations from the brief, both with evidence.** *(a)* The brief
+said merchant "matches exactly (the normalized, title-cased stored
+value)". Read-only, the real database holds `HDFC`/`Hdfc` and
+`ICICI`/`Icici` as distinct merchant strings — by design: the payment
+cascade writes the bank name as stored on the card ("HDFC must not become
+Hdfc", Session 61), while manual writes Title-Case. Those are one
+merchant, so the comparison is casefolded, the rule the engine already
+applies to category. *(b)* "Regardless of review status" is vacuous by
+construction: a precedent has merchant, category, and subcategory all
+set, which is exactly Session 80's derived "complete". No incomplete row
+can be a precedent, so no test pretends otherwise; the debit/credit and
+cascade-set dimensions are real and are tested.
+
+**Item 2 — bulk-accept eligibility, the finding.** It is
+**exclude-by-name**, not an allowlist: `acceptSubcategoryPairs()` in
+`static/index.html` keeps a row iff `sc.match_type !== "same_as_category"`
+and names no other tier. So the new tier was bulk-acceptable with no
+frontend change to that function. Confirmed with a test, not by reading:
+`tests/test_frontend_bulk_accept.py` lifts `hasSubcategory`,
+`subSuggestionFor`, `acceptSubcategoryPairs`, and the new `precedentText`
+verbatim out of index.html and runs them under macOS's JavaScriptCore
+shell (`jsc`, skipped where absent). An all-`merchant_category` selection
+of 3 yields 3 pairs; an all-`same_as_category` selection yields 0; a mixed
+one yields only the exact and precedent rows and skips a row that already
+has a subcategory. Mutating the predicate to `=== "exact"` fails three of
+those tests; restored, all pass. This is the project's first test that
+executes frontend code; it invents no framework and adds no dependency.
+
+**Frontend.** The badge for the new tier reads `precedent 3/4 · 75%`
+(agreeing count / precedent count · share) with the usual high/mid/low
+colouring, and a tooltip spelling the count out; `same_as_category` keeps
+its worded `same as category` default badge, so the two are distinct at
+a glance. Ghost-text click-to-accept is untouched. The bulk-accept
+button's tooltip now says "exact or merchant precedent".
+
+**Real database, read-only** (`mode=ro`; nothing written; no
+descriptions, amounts, or dates reproduced): 336 rows, 289 carry a
+category or merchant, 226 have a category and no subcategory. Running the
+batch engine over those 226: **`same_as_category` 197, `merchant_category`
+17, `exact` 12**. The 17 precedent hits span 4 (merchant, category) pairs
+(6, 5, 3, 3 rows) and every one scores 1.0 with 1–5 precedents (1.0/2 ×6,
+1.0/3 ×5, 1.0/5 ×3, 1.0/1 ×3) — no disagreeing precedents exist in the
+data yet. **The reported Amazon/Grocery case: 17 rows, all with
+subcategory NULL — zero precedents, so all 17 still get
+`same_as_category`.** The tier cannot fire there until one of them is
+labelled; after that, the other 16 get it at 1.0/1, and bulk accept can
+take them in one click. That is the tier working as specified, not a gap.
+Timing, best of three over the 226-id batch: 513.6 ms before, 524.1 ms
+after — the cost is the pre-existing category fuzzy tier; the new tier
+is one more linear pass over 289 rows per target.
+
+**Tests.** Backend (`test_categories.py`, 7 new): fires with precedents /
+falls back without them (and the fallback shape is byte-identical to
+before, no `precedents` key); requires a merchant on the target; `exact`
+outranks it; majority wins over a disagreeing set, then highest id on a
+tie, with the flip both ways; credit rows and cascade-set rows count,
+case-insensitively; batch carries it. API (`test_api.py`, 1 new): both
+suggestion endpoints return the tier with `precedents`. Frontend
+(`test_frontend_bulk_accept.py`, 5 new) as above. **522 passing**
+(509 + 13).
+
+**Docs.** `docs/STATE.md`: the subcategory engine paragraph rewritten as
+the three-tier order; the bulk-accept sentence notes exclude-by-name and
+the new test.
+
+### Outcome
+Once one row for a merchant + category is sub-labelled, every other row
+for that pair suggests it as a precedent with its count, and a selection
+of such rows bulk-accepts in one click; the bare "same as category"
+default remains one-at-a-time.
+
+### In plain English
+Until now, a row only got a real finer-label suggestion when another row
+had the *identical* description. Now, once you have labelled any Amazon
+grocery purchase as, say, "Household", every other Amazon grocery row
+suggests "Household" too, with a badge showing how many rows agree — and
+because that is learned from your own labels, you can accept a whole
+selection of them at once. Checked against the real data: 17 rows would
+get such a suggestion today. The Amazon grocery rows that prompted this
+are not among them yet, because none of them has been labelled — label
+one, and the other sixteen follow. Not seen running.
+
+### Next steps
+Manual verification: the new `precedent n/m · x%` badge next to a ghost
+subcategory, and bulk accept counting such rows while still skipping
+"same as category" rows. Then the standing backlog from Session 87
+(re-verification, STATE.md reconciliation 61–88, merge, Module 1).

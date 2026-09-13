@@ -55,10 +55,12 @@ def _fetch_labeled(conn: sqlite3.Connection) -> "list[sqlite3.Row]":
 
 
 def _fetch_targets(conn: sqlite3.Connection, transaction_ids: "list[int]") -> "dict[int, sqlite3.Row]":
-    """id -> row (id, description, category) for the given ids; raises if any is unknown."""
+    """id -> row (id, description, category, merchant) for the given ids; raises if any is unknown.
+
+    merchant (Session 88) feeds the subcategory engine's precedent tier."""
     placeholders = ",".join("?" * len(transaction_ids))
     rows = conn.execute(
-        f"SELECT id, description, category FROM transactions WHERE id IN ({placeholders})",
+        f"SELECT id, description, category, merchant FROM transactions WHERE id IN ({placeholders})",
         transaction_ids,
     ).fetchall()
     found = {row["id"]: row for row in rows}
@@ -164,22 +166,36 @@ def _suggest_subcategory_from(
     target_id: int,
     description: str,
     category: "str | None",
+    merchant: "str | None",
     labeled: "list[sqlite3.Row]",
 ) -> "dict | None":
     """Subcategory suggestion -- deliberately simpler than category's. No fuzzy tier.
 
     - Category not yet set on the row -> None (the API renders it as null):
       subcategory suggestion does not run until the row has a category.
-    - Otherwise, peers are OTHER rows with the same category (case-
+    - Tier 1 "exact": peers are OTHER rows with the same category (case-
       insensitive), a non-null subcategory, and an exactly matching
       description (casefold equality, nothing else normalised -- category
       Tier 1's rule). If any: most frequent subcategory wins, confidence is
       its share, ties break to the highest id via the same id-DESC ordering
-      + Counter.most_common() first-seen trick as Tier 1. match_type "exact".
-    - No peers (including a category nobody has sub-labelled yet) -> the
-      row's own category value, match_type "same_as_category", confidence
-      1.0. That 1.0 is a default, not a learned match; the frontend labels
-      it in words rather than as a percentage for exactly that reason.
+      + Counter.most_common() first-seen trick as Tier 1.
+    - Tier 2 "merchant_category" (Session 88): only when the row has a
+      merchant and Tier 1 found nothing. Precedents are OTHER rows whose
+      merchant and category both match the target's (case-insensitive --
+      the cascade stores "HDFC" where a manual write stores "Hdfc", and
+      those are one merchant) and whose subcategory is set. How the
+      precedent got its labels (manual, bulk, cascade) and whether it is a
+      debit or a credit are irrelevant; only the three columns count. Same
+      majority-vote and highest-id tie-break as Tier 1; confidence is the
+      winner's share of the precedents and the extra key "precedents" is
+      how many there were, so a 1-of-1 and a 12-of-12 both read 1.0 but
+      the frontend can show the difference. This is learned evidence, so
+      it is bulk-acceptable, unlike the tier below.
+    - Tier 3 "same_as_category": nothing above matched (including a
+      category nobody has sub-labelled yet) -> the row's own category
+      value, confidence 1.0. That 1.0 is a default, not a learned match;
+      the frontend labels it in words rather than as a percentage for
+      exactly that reason, and bulk accept skips it.
     """
     if category is None:
         return None
@@ -197,6 +213,27 @@ def _suggest_subcategory_from(
         counts = Counter(row["subcategory"] for row in peers)
         value, count = counts.most_common(1)[0]
         return {"value": value, "confidence": count / len(peers), "match_type": "exact"}
+    if merchant is not None:
+        wanted_merchant = merchant.casefold()
+        precedents = [
+            row
+            for row in labeled
+            if row["id"] != target_id
+            and row["subcategory"] is not None
+            and row["category"] is not None
+            and row["category"].casefold() == wanted
+            and row["merchant"] is not None
+            and row["merchant"].casefold() == wanted_merchant
+        ]
+        if precedents:
+            counts = Counter(row["subcategory"] for row in precedents)
+            value, count = counts.most_common(1)[0]
+            return {
+                "value": value,
+                "confidence": count / len(precedents),
+                "match_type": "merchant_category",
+                "precedents": len(precedents),
+            }
     return {"value": category, "confidence": 1.0, "match_type": "same_as_category"}
 
 
@@ -206,7 +243,7 @@ def _suggest_from(target: sqlite3.Row, labeled: "list[sqlite3.Row]") -> dict:
     return {
         "category": _suggest_category_from(target["id"], target["description"], labeled),
         "subcategory": _suggest_subcategory_from(
-            target["id"], target["description"], target["category"], labeled
+            target["id"], target["description"], target["category"], target["merchant"], labeled
         ),
         "merchant": _suggest_merchant_from(target["id"], target["description"], labeled),
     }

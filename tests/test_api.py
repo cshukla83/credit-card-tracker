@@ -862,6 +862,25 @@ def test_assign_subcategory_only_writes_subcategory_and_normalizes(client, two_c
     assert _subcats(client)[ids[0]] == "Coffee Shops"
 
 
+def test_suggestion_endpoints_carry_merchant_category_tier(client, two_cards):
+    # Session 88: a (merchant, category) precedent from another row -- here
+    # one whose description is nothing like the target's -- reaches both
+    # suggestion endpoints unchanged, including the "precedents" count.
+    ids = _ids(client)
+    target, precedent = ids[0], ids[3]
+    client.post(
+        "/transactions/category",
+        json={"assignments": [
+            {"transaction_id": target, "category": "Food", "merchant": "corner shop"},
+            {"transaction_id": precedent, "category": "food", "subcategory": "Snacks", "merchant": "Corner Shop"},
+        ]},
+    )
+    expected = {"value": "Snacks", "confidence": 1.0, "match_type": "merchant_category", "precedents": 1}
+    assert client.get(f"/transactions/{target}/suggestion").json()["subcategory"] == expected
+    batch = client.post("/transactions/suggestions", json={"transaction_ids": [target]}).json()
+    assert batch["suggestions"][0]["subcategory"] == expected
+
+
 def test_assign_category_only_leaves_subcategory_alone(client, two_cards):
     ids = _ids(client)
     client.post(

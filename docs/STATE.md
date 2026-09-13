@@ -50,10 +50,15 @@ labelled-rows query per request:
 - *category*: exact (case-insensitive description match, majority vote,
   confidence = winning share) then fuzzy (`difflib` ratio, best match, no
   floor), global across all cards; cold start → `none`.
-- *subcategory*: exact only, scoped to rows sharing the transaction's own
-  category; nothing until the row has a category; otherwise falls back to
-  the category value itself (`same_as_category`, shown in words, not as a
-  percentage).
+- *subcategory*: nothing until the row has a category; then three tiers
+  in order. (1) `exact`: rows sharing the transaction's own category with
+  an identical description (no fuzzy tier). (2) `merchant_category`
+  (Session 88): when the row has a merchant, other rows with the same
+  merchant and category (both case-insensitive) that carry a subcategory,
+  whatever set them and whether debit or credit; majority wins, tie to the
+  highest id, confidence = winning share, plus a `precedents` count so
+  the badge reads "precedent 3/4 · 75%". (3) Otherwise the category value
+  itself (`same_as_category`, shown in words, not as a percentage).
 - *merchant*: category's exact and fuzzy tiers on the merchant field,
   global; plus a fallback tier category lacks — the raw description
   (`from_description`, confidence null, shown in words).
@@ -133,7 +138,10 @@ per-field bulk accept for category, subcategory (Session 79),
 and merchant — each excluding its fallback tier from bulk (merchant's
 `from_description`, subcategory's `same_as_category`), since a default
 confidence is not evidence — behind a Category / Sub Category / Merchant
-display toggle. **Credit rows (refunds and payments alike) carry no
+display toggle. The exclusion is by the fallback's name, so every learned
+tier is bulk-acceptable, `merchant_category` included (Session 88, pinned
+by `tests/test_frontend_bulk_accept.py`, which runs the shipped function
+under macOS's `jsc` and skips where that is absent). **Credit rows (refunds and payments alike) carry no
 selection checkbox and are never in the multi-select** (Session 79): the
 set is heterogeneous — a refund's labels are the user's, a payment's are
 the cascade's — and does not belong in one bulk apply; the rule lives in

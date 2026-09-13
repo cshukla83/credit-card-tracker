@@ -848,6 +848,192 @@ def test_batch_carries_subcategory_suggestions(db_path):
         conn.close()
 
 
+# --- subcategory: merchant_category precedent tier (Session 88) -----------------
+
+
+def _seed_typed(conn, rows):
+    """Like _seed but each entry is (description, txn_type); ids in order."""
+    card_id = create_card(conn, "FAKE BANK", "FAKE CARD TYPE")
+    txns = []
+    for i, (d, t) in enumerate(rows):
+        txn = _txn(1 + i, d)
+        txn["txn_type"] = t
+        txns.append(txn)
+    insert_statement(conn, card_id, date(2026, 1, 1), date(2026, 1, 31), txns)
+    return [row["id"] for row in conn.execute("SELECT id FROM transactions ORDER BY id").fetchall()]
+
+
+def _label(conn, txn_id, category, subcategory, merchant):
+    assign_categories(conn, [(txn_id, category, subcategory, merchant, None)])
+
+
+def test_subcategory_merchant_category_tier_fires_and_falls_back(db_path):
+    conn = get_connection()
+    try:
+        # Descriptions all differ: no exact-description peer exists anywhere,
+        # so Tier 1 is out of the picture and only the precedent tier can fire.
+        target, p1, p2, wrong_cat, wrong_merchant, no_sub = _seed(
+            conn, ["AMZ ORDER 1", "AMZ ORDER 2", "AMZ ORDER 3", "AMZ ORDER 4", "AMZ ORDER 5", "AMZ ORDER 6"]
+        )
+        _label(conn, target, "Grocery", None, "Amazon")
+        _label(conn, p1, "Grocery", "Household", "Amazon")
+        _label(conn, p2, "Grocery", "Household", "Amazon")
+        # Same merchant, different category: not a precedent.
+        _label(conn, wrong_cat, "Shopping", "Electronics", "Amazon")
+        # Same category, different merchant: not a precedent.
+        _label(conn, wrong_merchant, "Grocery", "Vegetables", "Bigbasket")
+        # Same merchant and category but no subcategory: not a precedent.
+        _label(conn, no_sub, "Grocery", None, "Amazon")
+        assert suggest_category(conn, target)["subcategory"] == {
+            "value": "Household",
+            "confidence": 1.0,
+            "match_type": "merchant_category",
+            "precedents": 2,
+        }
+
+        # Remove the precedents' subcategories: back to same_as_category,
+        # exactly the pre-Session-88 shape (no "precedents" key).
+        conn.execute("UPDATE transactions SET subcategory = NULL WHERE id IN (?, ?)", (p1, p2))
+        conn.commit()
+        assert suggest_category(conn, target)["subcategory"] == {
+            "value": "Grocery",
+            "confidence": 1.0,
+            "match_type": "same_as_category",
+        }
+    finally:
+        conn.close()
+
+
+def test_subcategory_merchant_category_requires_merchant_on_target(db_path):
+    conn = get_connection()
+    try:
+        target, p1 = _seed(conn, ["AMZ ORDER 1", "AMZ ORDER 2"])
+        _label(conn, target, "Grocery", None, None)
+        _label(conn, p1, "Grocery", "Household", "Amazon")
+        # No merchant on the target -> nothing to match on -> fallback.
+        assert suggest_category(conn, target)["subcategory"]["match_type"] == "same_as_category"
+    finally:
+        conn.close()
+
+
+def test_subcategory_exact_description_outranks_merchant_category(db_path):
+    conn = get_connection()
+    try:
+        target, exact_peer, precedent = _seed(conn, ["AMZ ORDER 1", "amz order 1", "AMZ ORDER 2"])
+        _label(conn, target, "Grocery", None, "Amazon")
+        _label(conn, exact_peer, "Grocery", "Snacks", "Amazon")
+        _label(conn, precedent, "Grocery", "Household", "Amazon")
+        result = suggest_category(conn, target)["subcategory"]
+        assert result["match_type"] == "exact"
+        assert result["value"] == "Snacks"
+    finally:
+        conn.close()
+
+
+def test_subcategory_merchant_category_majority_wins_then_highest_id(db_path):
+    conn = get_connection()
+    try:
+        target, a1, b1, a2, b2, b3 = _seed(
+            conn, ["AMZ 1", "AMZ 2", "AMZ 3", "AMZ 4", "AMZ 5", "AMZ 6"]
+        )
+        _label(conn, target, "Grocery", None, "Amazon")
+        for i in (a1, a2):
+            _label(conn, i, "Grocery", "Household", "Amazon")
+        for i in (b1, b2, b3):
+            _label(conn, i, "Grocery", "Snacks", "Amazon")
+        result = suggest_category(conn, target)["subcategory"]
+        assert result["value"] == "Snacks"
+        assert result["confidence"] == pytest.approx(3 / 5)
+        assert result["precedents"] == 5
+
+        # Drop one Snacks precedent so it is 2-2: the value on the highest id
+        # wins. b2 > a2 in id order, so Snacks; then flip b3's value so the
+        # highest-id row is Household and the tie goes the other way.
+        conn.execute("UPDATE transactions SET subcategory = NULL WHERE id = ?", (b3,))
+        conn.commit()
+        tied = suggest_category(conn, target)["subcategory"]
+        assert tied["value"] == "Snacks"
+        assert tied["confidence"] == pytest.approx(0.5)
+        assert tied["precedents"] == 4
+        _label(conn, b3, None, "Household", None)
+        # Now Household 3 : Snacks 2 -- majority, not id, decides.
+        assert suggest_category(conn, target)["subcategory"]["value"] == "Household"
+        _label(conn, b3, None, "Snacks", None)
+        _label(conn, b2, None, "Household", None)
+        # Household on {a1, a2, b2}, Snacks on {b1, b3}: 3-2 again but with
+        # the highest id on the minority -- majority still wins.
+        assert suggest_category(conn, target)["subcategory"]["value"] == "Household"
+    finally:
+        conn.close()
+
+
+def test_subcategory_merchant_category_tie_breaks_to_highest_id(db_path):
+    conn = get_connection()
+    try:
+        target, older, newer = _seed(conn, ["AMZ 1", "AMZ 2", "AMZ 3"])
+        _label(conn, target, "Grocery", None, "Amazon")
+        _label(conn, older, "Grocery", "Household", "Amazon")
+        _label(conn, newer, "Grocery", "Snacks", "Amazon")
+        assert suggest_category(conn, target)["subcategory"]["value"] == "Snacks"
+        # Flip: the tie follows the id, not the name.
+        _label(conn, older, None, "Snacks", None)
+        _label(conn, newer, None, "Household", None)
+        assert suggest_category(conn, target)["subcategory"]["value"] == "Household"
+    finally:
+        conn.close()
+
+
+def test_subcategory_merchant_category_counts_credit_and_cascade_rows(db_path):
+    # A precedent qualifies on its three columns alone: a credit (refund)
+    # row counts, and so does a row whose labels were set by the is_payment
+    # cascade rather than by hand. (Review status is not a separate
+    # dimension: a row with merchant + category + subcategory is by
+    # definition "complete" under Session 80's derived status.)
+    conn = get_connection()
+    try:
+        target, refund, payment = _seed_typed(
+            conn, [("AMZ 1", "debit"), ("AMZ REFUND", "credit"), ("PAYMENT RECEIVED", "credit")]
+        )
+        _label(conn, target, "Grocery", None, "Amazon")
+        _label(conn, refund, "Grocery", "Household", "Amazon")
+        result = suggest_category(conn, target)["subcategory"]
+        assert result == {
+            "value": "Household",
+            "confidence": 1.0,
+            "match_type": "merchant_category",
+            "precedents": 1,
+        }
+
+        # Cascade-set labels: is_payment=True writes category = subcategory =
+        # PAYMENT_LABEL and merchant = the card's bank name ("FAKE BANK").
+        assign_categories(conn, [(payment, None, None, None, True)])
+        target2 = _seed(conn, ["AMZ 1"])[-1]  # a fresh row, new card, same DB
+        _label(conn, target2, categories.PAYMENT_LABEL, None, "Fake Bank")
+        result = suggest_category(conn, target2)["subcategory"]
+        # Merchant comparison is case-insensitive: the cascade stored
+        # "FAKE BANK", the manual write Title-Cased "Fake Bank".
+        assert result["match_type"] == "merchant_category"
+        assert result["value"] == categories.PAYMENT_LABEL
+        assert result["precedents"] == 1
+    finally:
+        conn.close()
+
+
+def test_batch_carries_merchant_category_suggestions(db_path):
+    conn = get_connection()
+    try:
+        a, b = _seed(conn, ["AMZ 1", "AMZ 2"])
+        _label(conn, a, "Grocery", None, "Amazon")
+        _label(conn, b, "Grocery", "Household", "Amazon")
+        by_id = {e["transaction_id"]: e for e in suggest_categories(conn, [a, b])}
+        assert by_id[a]["subcategory"]["match_type"] == "merchant_category"
+        assert by_id[a]["subcategory"]["value"] == "Household"
+        # b's only possible precedent is a, which has no subcategory.
+        assert by_id[b]["subcategory"]["match_type"] == "same_as_category"
+    finally:
+        conn.close()
+
+
 # --- list_subcategories -------------------------------------------------------
 
 

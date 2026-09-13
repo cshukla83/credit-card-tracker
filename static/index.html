@@ -1782,7 +1782,7 @@
       if (hasSubcategory(txn)) return null;
       const entry = review.suggestions.get(txn.id);
       const s = entry && entry.subcategory;
-      return s || null; // {value, confidence, match_type: "exact" | "same_as_category"}
+      return s || null; // {value, confidence, match_type: "exact" | "merchant_category" | "same_as_category"}
     }
 
     function confClass(confidence) {
@@ -1791,6 +1791,17 @@
 
     function confText(s) {
       return s.match_type + " · " + Math.round(s.confidence * 100) + "%";
+    }
+
+    // Badge text for the subcategory precedent tier (Session 88): the
+    // engine reports the winning share as `confidence` and how many
+    // (merchant, category) precedents there were as `precedents`, so
+    // "precedent 3/4 · 75%" reads as "3 of 4 rows agree". A 1/1 and a
+    // 12/12 both score 100% and the count is what tells them apart.
+    function precedentText(s) {
+      const total = s.precedents || 0;
+      const agree = Math.round(s.confidence * total);
+      return "precedent " + agree + "/" + total + " · " + Math.round(s.confidence * 100) + "%";
     }
 
     function buildGroups() {
@@ -2035,8 +2046,10 @@
 
     // Subcategory bulk accept (Session 79), the same shape as merchant's:
     // one subcategory-only entry per selected row whose displayed
-    // suggestion was *learned* (match_type "exact"). "same_as_category" is
-    // excluded for exactly the reason "from_description" is above: it is a
+    // suggestion was *learned* (match_type "exact", or Session 88's
+    // "merchant_category" precedent -- eligibility is "not the fallback",
+    // so any learned tier qualifies without being named here).
+    // "same_as_category" is excluded for exactly the reason "from_description" is above: it is a
     // fallback with a default 1.0 confidence, not evidence, and every row
     // with a category but no subcategory has one -- a bulk accept would
     // otherwise copy category names into the subcategory column across the
@@ -2304,9 +2317,9 @@
           pairs: subcategoryPairs,
           label: "Accept subcategory suggestions (" + subcategoryPairs.length + ")",
           title:
-            "Writes each selected transaction its own learned subcategory suggestion (exact, " +
-            "as displayed); \u201csame as category\u201d rows are skipped here and can be " +
-            "accepted one at a time",
+            "Writes each selected transaction its own learned subcategory suggestion (exact " +
+            "or merchant precedent, as displayed); \u201csame as category\u201d rows are skipped " +
+            "here and can be accepted one at a time",
         },
         merchant: {
           pairs: merchantPairs,
@@ -2802,6 +2815,15 @@
         if (spec.fallbackType && s.match_type === spec.fallbackType) {
           badge.className = "conf default";
           badge.textContent = spec.fallbackWords;
+        } else if (s.match_type === "merchant_category") {
+          // Learned from other rows with this merchant + category, not
+          // from the description: same confidence colouring as exact/fuzzy
+          // but worded as a precedent so it never reads as the bare default.
+          badge.className = "conf " + confClass(s.confidence);
+          badge.textContent = precedentText(s);
+          badge.title =
+            Math.round(s.confidence * s.precedents) + " of " + s.precedents +
+            " other row(s) with this merchant and category use this subcategory";
         } else {
           badge.className = "conf " + confClass(s.confidence);
           badge.textContent = confText(s);
