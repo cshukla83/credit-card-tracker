@@ -9,7 +9,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from storage.aggregate import DimensionsError, PeriodError, aggregate_spend, resolve_period
 from parsers.detect import NotAPdfError
-from storage.cards import CardAlreadyExistsError, create_card, get_card, list_cards_with_statements
+from storage.cards import (
+    CardAlreadyExistsError,
+    create_card,
+    get_card,
+    list_cards,
+    list_cards_with_statements,
+)
 from storage.commentary import (
     CommentaryNotConfiguredError,
     CommentaryUnavailableError,
@@ -238,8 +244,15 @@ def read_cards(
     category: str | None = None,
     subcategory: str | None = None,
     merchant: str | None = None,
+    all: bool = False,
     conn=Depends(get_db),
 ):
+    # all=true (Session 101): every card, statements or not, ignoring the
+    # filters -- for the upload screen, where a card created a moment ago
+    # with no imports yet must still be selectable. The default is the
+    # filter-driven "cards with statements" the rest of the frontend uses.
+    if all:
+        return list_cards(conn)
     start_date, end_date = _parse_date_range(start, end)
     return list_cards_with_statements(
         conn,

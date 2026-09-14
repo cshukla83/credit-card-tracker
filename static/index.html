@@ -507,6 +507,133 @@
     border-color: var(--accent-ink);
     color: #fff;
   }
+  /* --- upload tab (Session 101) ------------------------------------------ */
+  .upload-card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 1.25rem 1.4rem;
+    max-width: 44rem;
+  }
+  .upload-card h2 {
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin: 0 0 0.6rem;
+  }
+  .upload-card p {
+    margin: 0 0 0.9rem;
+    line-height: 1.5;
+  }
+  .upload-card p.muted { color: var(--muted); font-size: 0.92rem; }
+  .upload-file {
+    color: var(--muted);
+    font-size: 0.88rem;
+    margin-bottom: 0.9rem;
+  }
+  .upload-file code { color: var(--ink); }
+  .drop-zone {
+    border: 2px dashed var(--rule-strong);
+    border-radius: var(--radius);
+    padding: 2.4rem 1.5rem;
+    text-align: center;
+    color: var(--muted);
+    transition: border-color 120ms ease, background 120ms ease;
+  }
+  .drop-zone.over {
+    border-color: var(--accent);
+    background: var(--accent-wash);
+    color: var(--accent-ink);
+  }
+  .drop-zone p { margin: 0 0 0.9rem; }
+  .upload-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.9rem 1.5rem;
+    align-items: flex-end;
+    margin-bottom: 1rem;
+  }
+  .upload-form label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
+  .upload-form input[type="text"], .upload-form select {
+    min-width: 12rem;
+    padding: 0.42rem 0.6rem;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 0.92rem;
+  }
+  .upload-choices {
+    list-style: none;
+    margin: 0 0 1rem;
+    padding: 0;
+  }
+  .upload-choices li label {
+    display: flex;
+    gap: 0.6rem;
+    align-items: baseline;
+    padding: 0.45rem 0.2rem;
+    border-bottom: 1px solid var(--rule);
+    cursor: pointer;
+  }
+  .upload-choices .when { color: var(--muted); font-size: 0.88rem; }
+  .upload-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+    margin-top: 0.4rem;
+  }
+  .upload-actions button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .upload-actions button.primary:hover:not(:disabled) {
+    background: var(--accent-ink);
+    border-color: var(--accent-ink);
+  }
+  .upload-facts {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.35rem 1.2rem;
+    margin: 0 0 1rem;
+    font-size: 0.95rem;
+  }
+  .upload-facts dt { color: var(--muted); }
+  .upload-facts dd { margin: 0; }
+  .pill.match { color: var(--credit); background: #e8f5ee; border-color: #cfe9d9; }
+  .pill.mismatch { color: var(--danger); background: #fdf0ef; border-color: #f3c9c5; }
+  button.pill-toggle {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+  }
+  button.pill-toggle .hint {
+    color: var(--muted);
+    font-size: 0.82rem;
+    margin-left: 0.5rem;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  table.recon-detail {
+    width: auto;
+    margin: 0.4rem 0 0;
+    font-size: 0.9rem;
+  }
+  table.recon-detail th, table.recon-detail td { padding: 0.3rem 0.9rem 0.3rem 0; }
+  table.recon-detail td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.recon-detail td.off { color: var(--danger); font-weight: 600; }
+  .upload-error { margin-bottom: 0.9rem; }
+
   /* --- card payment cell ------------------------------------------------ */
   th.payment, td.payment {
     width: 7rem;
@@ -985,6 +1112,7 @@
     <button type="button" id="tab-review">Review &amp; assign</button>
     <button type="button" id="tab-reviewed">Reviewed</button>
     <button type="button" id="tab-dashboard">Dashboard</button>
+    <button type="button" id="tab-upload">Upload</button>
   </div>
 
   <div id="filters">
@@ -1243,6 +1371,13 @@
     </table>
   </div>
 
+  <!-- Upload (Session 101): one panel, rebuilt from upload.step by
+       renderUpload(). The filter bar is hidden on this tab -- nothing here
+       is filter-driven. -->
+  <div id="panel-upload" style="display: none;">
+    <div id="upload-card" class="upload-card"></div>
+  </div>
+
   <!-- Reusable confirmation modal (first modal in the app, Session 62).
        Hidden until showModal() opens it. -->
   <div id="modal-overlay" class="modal-overlay" style="display: none;">
@@ -1277,9 +1412,13 @@
     const tabReviewEl = document.getElementById("tab-review");
     const tabReviewedEl = document.getElementById("tab-reviewed");
     const tabDashboardEl = document.getElementById("tab-dashboard");
+    const tabUploadEl = document.getElementById("tab-upload");
     const panelAllEl = document.getElementById("panel-all");
     const panelReviewEl = document.getElementById("panel-review");
     const panelDashboardEl = document.getElementById("panel-dashboard");
+    const panelUploadEl = document.getElementById("panel-upload");
+    const uploadCardEl = document.getElementById("upload-card");
+    const filtersEl = document.getElementById("filters");
     const panelReviewedEl = document.getElementById("panel-reviewed");
     const reviewedStatusEl = document.getElementById("reviewed-status");
     const reviewedErrorEl = document.getElementById("reviewed-error");
@@ -1418,6 +1557,8 @@
         params.set("tab", "reviewed");
       } else if (activeTab === "dashboard") {
         params.set("tab", "dashboard");
+      } else if (activeTab === "upload") {
+        params.set("tab", "upload");
       }
       // Dashboard period state rides along in its own d_ namespace whatever
       // tab is active, so it survives a reload from any tab and never
@@ -3811,6 +3952,466 @@
     syncPeriodControls();
 
     // ------------------------------------------------------------------
+    // Upload tab (Session 101)
+    // ------------------------------------------------------------------
+    // One state object, one render. Every server reply carries a "status"
+    // and the screen is that status: the flow is detect -> (zero_match |
+    // multi_match | unrecognized | password_needed | matched -> preview)
+    // -> preview | duplicate -> confirm -> success. The file is held in
+    // memory and re-sent to preview with the resolved card_id, since detect
+    // keeps nothing server-side. Nothing here touches the filter bar.
+    const KNOWN_BANKS = ["HDFC", "ICICI", "SBI", "IndusInd"];
+    const upload = {
+      step: "empty",      // empty | zero_match | multi_match | unrecognized |
+                          // password_needed | preview | llm_blocked | success
+      file: null,
+      detect: null,       // the /upload/detect reply
+      preview: null,      // the /upload/preview reply (preview or duplicate)
+      result: null,       // the /upload/confirm reply
+      strategy: "detected",
+      llm: null,          // llm_not_configured / llm_failed reply
+      allCards: [],       // GET /cards?all=true, for the unrecognized screen
+      chosenCardId: "",   // unrecognized screen's picker
+      showDetail: false,  // reconciliation detail expanded
+      busy: false,
+      error: "",
+    };
+
+    function resetUpload() {
+      Object.assign(upload, {
+        step: "empty", file: null, detect: null, preview: null, result: null,
+        strategy: "detected", llm: null, chosenCardId: "", showDetail: false,
+        busy: false, error: "",
+      });
+      renderUpload();
+    }
+
+    function uploadFail(error) {
+      upload.busy = false;
+      upload.error = error && error.message ? error.message : String(error);
+      renderUpload();
+    }
+
+    function postFile(url, file, fields) {
+      const form = new FormData();
+      form.append("file", file, file.name);
+      for (const [key, value] of Object.entries(fields || {})) form.append(key, value);
+      return fetch(url, { method: "POST", body: form }).then(handleResponse);
+    }
+
+    // --- transitions ------------------------------------------------------
+
+    function takeFiles(fileList) {
+      const files = Array.from(fileList || []);
+      if (files.length === 0) return;
+      if (files.length > 1) {
+        upload.error = "One statement at a time: " + files.length + " files were given. Drop or pick a single PDF.";
+        renderUpload();
+        return;
+      }
+      upload.file = files[0];
+      upload.error = "";
+      upload.busy = true;
+      renderUpload();
+      postFile("/upload/detect", upload.file)
+        .then((reply) => {
+          upload.busy = false;
+          upload.detect = reply;
+          if (reply.status === "matched") return startPreview(reply.card_id, "detected");
+          upload.step = reply.status; // zero_match | multi_match | unrecognized | password_needed
+          if (reply.status === "unrecognized") return loadAllCards();
+          renderUpload();
+        })
+        .catch(uploadFail);
+    }
+
+    function loadAllCards() {
+      return fetchJSON("/cards?all=true")
+        .then((cards) => {
+          upload.allCards = cards;
+          renderUpload();
+        })
+        .catch(uploadFail);
+    }
+
+    function startPreview(cardId, strategy) {
+      upload.busy = true;
+      upload.strategy = strategy;
+      upload.showDetail = false;
+      upload.error = "";
+      renderUpload();
+      const url = "/upload/preview" + (strategy === "detected" ? "" : "?strategy=" + encodeURIComponent(strategy));
+      return postFile(url, upload.file, { card_id: String(cardId) })
+        .then((reply) => {
+          upload.busy = false;
+          if (reply.status === "preview" || reply.status === "duplicate") {
+            upload.preview = reply;
+            upload.step = "preview";
+          } else if (reply.status === "llm_not_configured" || reply.status === "llm_failed") {
+            upload.llm = reply;
+            upload.llmCardId = cardId;
+            upload.step = "llm_blocked";
+          } else {
+            upload.detect = reply; // password_needed, now naming the bank
+            upload.step = reply.status;
+          }
+          renderUpload();
+        })
+        .catch(uploadFail);
+    }
+
+    function createCardAndPreview(bank, cardType, nickname, strategy) {
+      upload.busy = true;
+      upload.error = "";
+      renderUpload();
+      return postJSON("/cards", { bank, card_type: cardType, nickname: nickname || null })
+        .then((card) => startPreview(card.id, strategy))
+        .catch(uploadFail);
+    }
+
+    function confirmUpload(override) {
+      const preview = upload.preview;
+      upload.busy = true;
+      upload.error = "";
+      renderUpload();
+      postJSON("/upload/confirm", { upload_id: preview.upload_id, override_reconciliation: override })
+        .then((reply) => {
+          upload.busy = false;
+          upload.result = reply;
+          upload.step = "success";
+          renderUpload();
+          // The pickers on every other tab now have a new statement (and
+          // maybe a new card) to offer.
+          recomputeOptions(currentFilters());
+        })
+        .catch(uploadFail);
+    }
+
+    // --- rendering --------------------------------------------------------
+
+    function el(tag, attrs, children) {
+      const node = document.createElement(tag);
+      for (const [key, value] of Object.entries(attrs || {})) {
+        if (key === "class") node.className = value;
+        else if (key === "text") node.textContent = value;
+        else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+        else if (value !== null && value !== undefined) node.setAttribute(key, value);
+      }
+      for (const child of children || []) {
+        if (child !== null && child !== undefined) node.appendChild(typeof child === "string" ? document.createTextNode(child) : child);
+      }
+      return node;
+    }
+
+    function uploadButton(label, onClick, options) {
+      const opts = options || {};
+      return el("button", {
+        type: "button",
+        class: "small" + (opts.primary ? " primary" : "") + (opts.link ? " link" : ""),
+        disabled: upload.busy || opts.disabled ? "" : null,
+        onclick: onClick,
+      }, [label]);
+    }
+
+    function fileLine() {
+      if (!upload.file) return null;
+      return el("div", { class: "upload-file" }, ["File: ", el("code", { text: upload.file.name })]);
+    }
+
+    function errorLine() {
+      if (!upload.error) return null;
+      return el("div", { class: "error upload-error", role: "alert", text: upload.error });
+    }
+
+    function startOverButton(label) {
+      return uploadButton(label || "Choose another file", resetUpload);
+    }
+
+    function periodText(period) {
+      return period ? period.period_start + " → " + period.period_end : "no statements yet";
+    }
+
+    function renderEmpty() {
+      const input = el("input", {
+        type: "file", accept: "application/pdf,.pdf", style: "display: none;",
+        onchange: (event) => { takeFiles(event.target.files); event.target.value = ""; },
+      });
+      const zone = el("div", { class: "drop-zone" }, [
+        el("p", { text: upload.busy ? "Reading the statement…" : "Drop a statement PDF here" }),
+        upload.busy ? null : el("div", { class: "upload-actions", style: "justify-content: center;" }, [
+          uploadButton("Choose a file", () => input.click(), { primary: true }),
+          input,
+        ]),
+      ]);
+      zone.addEventListener("dragover", (event) => { event.preventDefault(); zone.classList.add("over"); });
+      zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+      zone.addEventListener("drop", (event) => {
+        event.preventDefault();
+        zone.classList.remove("over");
+        if (!upload.busy) takeFiles(event.dataTransfer.files);
+      });
+      return [
+        el("h2", { text: "Upload a statement" }),
+        el("p", { class: "muted", text: "One PDF at a time. The bank is read off the statement; the card is matched from your cards." }),
+        errorLine(),
+        upload.busy ? fileLine() : null,
+        zone,
+      ];
+    }
+
+    function cardForm(bank, cardType, submitLabel, onSubmit) {
+      const bankEl = el("input", { type: "text", value: bank || "", placeholder: "e.g. HDFC" });
+      const typeEl = el("input", { type: "text", value: cardType || "", placeholder: "e.g. Diners" });
+      const nickEl = el("input", { type: "text", value: "", placeholder: "optional, e.g. Primary" });
+      const form = el("form", {
+        class: "upload-form",
+        onsubmit: (event) => {
+          event.preventDefault();
+          const b = bankEl.value.trim(), t = typeEl.value.trim();
+          if (!b || !t) { upload.error = "Bank and card type are both needed."; renderUpload(); return; }
+          onSubmit(b, t, nickEl.value.trim());
+        },
+      }, [
+        el("label", {}, ["Bank", bankEl]),
+        el("label", {}, ["Card type", typeEl]),
+        el("label", {}, ["Nickname", nickEl]),
+        el("button", { type: "submit", class: "small primary", disabled: upload.busy ? "" : null }, [submitLabel]),
+      ]);
+      return form;
+    }
+
+    function renderZeroMatch() {
+      const d = upload.detect;
+      return [
+        el("h2", { text: "New card" }),
+        fileLine(),
+        el("p", {}, ["This is a ", el("strong", { text: d.bank + " " + d.card_type }),
+          " statement, and there is no such card yet. Create it and continue -- bank and card type are pre-filled from the statement and can be edited."]),
+        errorLine(),
+        cardForm(d.bank, d.card_type, "Create card and continue",
+          (b, t, n) => createCardAndPreview(b, t, n, "detected")),
+        el("div", { class: "upload-actions" }, [startOverButton()]),
+      ];
+    }
+
+    function renderMultiMatch() {
+      const d = upload.detect;
+      let chosen = String(d.candidates[0].card_id);
+      const list = el("ul", { class: "upload-choices" }, d.candidates.map((c, i) => {
+        const radio = el("input", {
+          type: "radio", name: "upload-candidate", value: String(c.card_id),
+          onchange: () => { chosen = String(c.card_id); },
+        });
+        if (i === 0) radio.checked = true;
+        return el("li", {}, [el("label", {}, [
+          radio,
+          el("span", { text: c.nickname || "(no nickname)" }),
+          el("span", { class: "when", text: "last statement: " + periodText(c.last_statement_period) }),
+        ])]);
+      }));
+      return [
+        el("h2", { text: "Which card?" }),
+        fileLine(),
+        el("p", {}, ["You have ", el("strong", { text: String(d.candidates.length) }), " ",
+          el("strong", { text: d.bank + " " + d.card_type }), " cards. Pick the one this statement belongs to."]),
+        errorLine(),
+        list,
+        el("div", { class: "upload-actions" }, [
+          uploadButton("Continue", () => startPreview(Number(chosen), "detected"), { primary: true }),
+          startOverButton(),
+        ]),
+      ];
+    }
+
+    function renderPasswordNeeded() {
+      const d = upload.detect;
+      const known = d.bank && d.password_env_key;
+      return [
+        el("h2", { text: "Password needed" }),
+        fileLine(),
+        known
+          ? el("p", {}, ["This ", el("strong", { text: d.bank + " " + d.card_type }),
+              " statement is password-protected and the password on file does not open it. Add or correct ",
+              el("code", { text: d.password_env_key }), " in ", el("code", { text: ".env" }),
+              ", restart the server, and upload the file again."])
+          : el("p", {}, ["This PDF is password-protected and none of the passwords in ",
+              el("code", { text: ".env" }), " open it",
+              d.tried_env_keys && d.tried_env_keys.length
+                ? " (tried: " + d.tried_env_keys.join(", ") + ")"
+                : " (no statement passwords are set)",
+              ". Add the right bank's password (", el("code", { text: "<BANK>_SAMPLE_PASSWORD" }),
+              "), restart the server, and upload the file again."]),
+        el("p", { class: "muted", text: "Nothing was read from the file; no partial import was attempted." }),
+        el("div", { class: "upload-actions" }, [startOverButton()]),
+      ];
+    }
+
+    function renderUnrecognized() {
+      const cards = upload.allCards;
+      const picker = el("select", {
+        onchange: (event) => { upload.chosenCardId = event.target.value; },
+      }, [el("option", { value: "", text: cards.length ? "Choose a card…" : "(no cards yet)" })].concat(
+        cards.map((c) => el("option", { value: String(c.id), text: c.bank + " · " + cardLabel(c) }))
+      ));
+      picker.value = upload.chosenCardId;
+      const withStrategy = (strategy) => {
+        if (!upload.chosenCardId) { upload.error = "Pick a card first, or create one below."; renderUpload(); return; }
+        startPreview(Number(upload.chosenCardId), strategy);
+      };
+      let newCardStrategy = "best_effort";
+      return [
+        el("h2", { text: "Unrecognized format" }),
+        fileLine(),
+        el("p", {}, ["This statement is not from a bank the app can read directly (",
+          KNOWN_BANKS.join(", "), "). It can still be imported two ways; either lands on the same preview, ",
+          "and the totals check decides whether it is trusted."]),
+        errorLine(),
+        el("h2", { text: "1. Which card is it for?" }),
+        el("div", { class: "upload-form" }, [el("label", {}, ["Existing card", picker])]),
+        el("p", { class: "muted", text: "Or create one (bank and card type are not read from an unrecognized statement):" }),
+        cardForm("", "", "Create card and continue", (b, t, n) => createCardAndPreview(b, t, n, newCardStrategy)),
+        el("h2", { text: "2. How should it be read?" }),
+        el("div", { class: "upload-form" }, [el("label", {}, ["For a new card", el("select", {
+          onchange: (event) => { newCardStrategy = event.target.value; },
+        }, [
+          el("option", { value: "best_effort", text: "Best-attempt parse" }),
+          el("option", { value: "llm_assist", text: "LLM-assisted parse" }),
+        ])])]),
+        el("div", { class: "upload-actions" }, [
+          uploadButton("Try LLM-assisted parse", () => withStrategy("llm_assist"), { primary: true }),
+          uploadButton("Best-attempt parse", () => withStrategy("best_effort")),
+          startOverButton(),
+        ]),
+        el("p", { class: "muted", text: "LLM-assisted sends the statement's text (long numbers blanked out) to the configured model. Best-attempt reads it locally with generic rules." }),
+      ];
+    }
+
+    function renderLlmBlocked() {
+      const r = upload.llm;
+      const notConfigured = r.status === "llm_not_configured";
+      return [
+        el("h2", { text: notConfigured ? "LLM not configured" : "LLM parse failed" }),
+        fileLine(),
+        notConfigured
+          ? el("p", {}, ["The model's API key is not set. Add ", el("code", { text: r.api_key_env }),
+              " to ", el("code", { text: ".env" }), ", restart the server, and try again -- or use the best-attempt parse instead."])
+          : el("p", {}, ["The model did not return a usable statement (", r.reason || "unknown reason",
+              "). Nothing was imported. Try again, or use the best-attempt parse instead."]),
+        el("div", { class: "upload-actions" }, [
+          uploadButton("Best-attempt parse", () => startPreview(upload.llmCardId, "best_effort"), { primary: true }),
+          notConfigured ? null : uploadButton("Try again", () => startPreview(upload.llmCardId, "llm_assist")),
+          startOverButton(),
+        ]),
+      ];
+    }
+
+    function reconciliationBlock(recon) {
+      const matched = recon.status === "match";
+      const toggle = el("button", {
+        type: "button", class: "pill-toggle", "aria-expanded": upload.showDetail ? "true" : "false",
+        onclick: () => { upload.showDetail = !upload.showDetail; renderUpload(); },
+      }, [
+        el("span", { class: "pill " + (matched ? "match" : "mismatch"), text: matched ? "Match" : "Mismatch" }),
+        el("span", { class: "hint", text: upload.showDetail ? "hide detail" : "show detail" }),
+      ]);
+      if (!upload.showDetail) return [toggle];
+      const fmt = (v) => (v === null || v === undefined ? "—" : fmtAmount(v));
+      const row = (label, side) => {
+        const off = side.delta === null || Math.abs(side.delta) >= 0.01;
+        return el("tr", {}, [
+          el("th", { text: label }),
+          el("td", { class: "num", text: side.expected === null ? "not found" : fmt(side.expected) }),
+          el("td", { class: "num", text: fmt(side.parsed) }),
+          el("td", { class: "num" + (off ? " off" : ""), text: side.delta === null ? "—" : fmt(side.delta) }),
+        ]);
+      };
+      const table = el("table", { class: "recon-detail" }, [
+        el("thead", {}, [el("tr", {}, [
+          el("th", { text: "" }), el("th", { text: "statement says" }), el("th", { text: "parsed" }), el("th", { text: "delta" }),
+        ])]),
+        el("tbody", {}, [row("Debits", recon.debit), row("Credits", recon.credit)]),
+      ]);
+      return [toggle, table];
+    }
+
+    function renderPreview() {
+      const p = upload.preview;
+      const duplicate = p.status === "duplicate";
+      const matched = !duplicate && p.reconciliation.status === "match";
+      const strategyLabel = { detected: "bank parser", best_effort: "best-attempt parse", llm_assist: "LLM-assisted parse" }[upload.strategy];
+      const facts = el("dl", { class: "upload-facts" }, [
+        el("dt", { text: "Period" }), el("dd", { text: p.period_start + " → " + p.period_end }),
+        duplicate ? null : el("dt", { text: "Transactions" }),
+        duplicate ? null : el("dd", { text: String(p.transaction_count) }),
+        el("dt", { text: "Read with" }), el("dd", { text: strategyLabel }),
+        duplicate ? null : el("dt", { text: "Totals check" }),
+        duplicate ? null : el("dd", {}, reconciliationBlock(p.reconciliation)),
+      ]);
+      const actions = [];
+      if (duplicate) {
+        actions.push(uploadButton("Import", () => {}, { primary: true, disabled: true }));
+      } else if (matched) {
+        actions.push(uploadButton("Import " + p.transaction_count + " transactions", () => confirmUpload(false), { primary: true }));
+      } else {
+        actions.push(uploadButton("Import", () => {}, { primary: true, disabled: true }));
+        actions.push(uploadButton("Import anyway…", () => {
+          showModal({
+            title: "Totals do not match",
+            message: "The transactions read from this statement do not add up to the totals it prints. " +
+              "Importing anyway saves " + p.transaction_count + " transactions as read; check them on Review & Assign afterwards.",
+            confirmLabel: "Import anyway",
+          }).then((ok) => { if (ok) confirmUpload(true); });
+        }));
+      }
+      actions.push(startOverButton("Cancel"));
+      return [
+        el("h2", { text: duplicate ? "Already imported" : "Preview" }),
+        fileLine(),
+        duplicate
+          ? el("p", {}, ["A statement for this card covering ", el("strong", { text: p.period_start + " → " + p.period_end }),
+              " is already in the tracker (statement #" + p.statement_id + "). The same statement cannot be imported twice; there is no override for this."])
+          : matched
+            ? el("p", { class: "muted", text: "Nothing has been saved yet. The debits and credits read from the statement add up to the totals it prints." })
+            : el("p", { class: "muted", text: "Nothing has been saved yet. The totals read from the statement do not match what it prints, so importing is off by default." }),
+        errorLine(),
+        facts,
+        el("div", { class: "upload-actions" }, actions),
+      ];
+    }
+
+    function renderSuccess() {
+      const p = upload.preview, r = upload.result;
+      return [
+        el("h2", { text: "Imported" }),
+        fileLine(),
+        el("dl", { class: "upload-facts" }, [
+          el("dt", { text: "Period" }), el("dd", { text: p.period_start + " → " + p.period_end }),
+          el("dt", { text: "Transactions" }), el("dd", { text: String(r.transaction_count) }),
+          el("dt", { text: "Statement" }), el("dd", { text: "#" + r.statement_id }),
+        ]),
+        el("div", { class: "upload-actions" }, [
+          uploadButton("Review & assign these", () => setTab("review", true), { primary: true }),
+          uploadButton("Upload another", resetUpload),
+        ]),
+      ];
+    }
+
+    function renderUpload() {
+      const screens = {
+        empty: renderEmpty,
+        zero_match: renderZeroMatch,
+        multi_match: renderMultiMatch,
+        unrecognized: renderUnrecognized,
+        password_needed: renderPasswordNeeded,
+        llm_blocked: renderLlmBlocked,
+        preview: renderPreview,
+        success: renderSuccess,
+      };
+      const render = screens[upload.step] || renderEmpty;
+      uploadCardEl.replaceChildren(...render().filter((node) => node !== null));
+    }
+
+    // ------------------------------------------------------------------
     // Tabs
     // ------------------------------------------------------------------
     // "Reviewed" (Session 83) is the review panel with its row set pinned
@@ -3822,14 +4423,20 @@
       const isReview = tab === "review";
       const isReviewed = tab === "reviewed";
       const isDashboard = tab === "dashboard";
-      tabAllEl.classList.toggle("active", !isReview && !isReviewed && !isDashboard);
+      const isUpload = tab === "upload";
+      tabAllEl.classList.toggle("active", !isReview && !isReviewed && !isDashboard && !isUpload);
       tabReviewEl.classList.toggle("active", isReview);
       tabReviewedEl.classList.toggle("active", isReviewed);
       tabDashboardEl.classList.toggle("active", isDashboard);
-      panelAllEl.style.display = isReview || isReviewed || isDashboard ? "none" : "";
+      tabUploadEl.classList.toggle("active", isUpload);
+      panelAllEl.style.display = isReview || isReviewed || isDashboard || isUpload ? "none" : "";
       panelReviewEl.style.display = isReview ? "" : "none";
       panelReviewedEl.style.display = isReviewed ? "" : "none";
       panelDashboardEl.style.display = isDashboard ? "" : "none";
+      panelUploadEl.style.display = isUpload ? "" : "none";
+      // Upload (Session 101) is the one tab with no filter bar at all.
+      filtersEl.style.display = isUpload ? "none" : "";
+      if (isUpload) renderUpload();
       // Dashboard: period controls replace month/date filters; bank/card stay.
       statementMonthFieldEl.style.display = isDashboard ? "none" : "";
       startFieldEl.style.display = isDashboard ? "none" : "";
@@ -3846,6 +4453,7 @@
     function loadActiveTab(filters) {
       if (activeTab === "review" || activeTab === "reviewed") loadReview(filters);
       else if (activeTab === "dashboard") loadDashboard(filters);
+      else if (activeTab === "upload") return; // nothing to fetch; the panel is state-driven
       else fetchTransactions(filters);
     }
 
@@ -3996,7 +4604,7 @@
         merchant: params.get("merchant") || "",
       };
       const urlTabRaw = params.get("tab");
-      const urlTab = ["review", "reviewed", "dashboard"].includes(urlTabRaw) ? urlTabRaw : "all";
+      const urlTab = ["review", "reviewed", "dashboard", "upload"].includes(urlTabRaw) ? urlTabRaw : "all";
       readDashboardURLParams(params);
       readSortURLParams(params, "", allSort, tableEl);
       readSortURLParams(params, "r_", reviewedSort, reviewedTableEl);
@@ -4164,6 +4772,11 @@
     });
     tabReviewedEl.addEventListener("click", () => setTab("reviewed", true));
     tabDashboardEl.addEventListener("click", () => setTab("dashboard", true));
+    tabUploadEl.addEventListener("click", () => setTab("upload", true));
+    // A PDF dropped on the panel but outside the drop zone must not open in
+    // the browser tab (the default for a dropped file).
+    panelUploadEl.addEventListener("dragover", (event) => event.preventDefault());
+    panelUploadEl.addEventListener("drop", (event) => event.preventDefault());
 
     initFromURL();
   </script>

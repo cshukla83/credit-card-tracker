@@ -10821,3 +10821,141 @@ Session 101: the Upload tab. Separately scoped, not folded in here:
 put the HTTP status into `llm_failed.reason`; decide whether the
 module's default model name should change or whether `GEMINI_MODEL`
 being required is the convention (it is set locally either way).
+
+## Session 101 — 2026-09-14
+
+### Goal
+Module 1, step 5 of 5: the Upload tab -- every screen of the upload
+flow on top of Sessions 97–100's endpoints -- plus the one small
+backend addition it needs (`GET /cards?all=true`). Closes Module 1.
+
+### What happened
+
+Branch `feature/upload-ui` at `e074a2c`, clean.
+
+**`GET /cards?all=true`** (`main.py`): a new boolean query parameter on
+the existing endpoint; when true it returns `list_cards()` -- every
+card, statements or not, filters ignored -- and when absent or false
+the behaviour is exactly what it was (`list_cards_with_statements`
+with the filters). Needed by the unrecognized-format screen, whose
+card picker must offer a card created a moment ago with no imports.
+Two tests in `tests/test_api.py`: a card without statements appears
+only with `all=true` (and `all=false` matches the default), and
+`all=true` ignores a bank filter. **718 passing** (716 + 2).
+
+**The tab** (`static/index.html`). A fifth tab button and panel; the
+filter bar is hidden on it (nothing on this tab is filter-driven --
+the first tab for which that is true, so `setTab` now toggles
+`#filters` as well as the panels), `?tab=upload` survives a reload
+like the others, and `loadActiveTab` fetches nothing for it. The panel
+is one state object (`upload`) and one `renderUpload()` that rebuilds
+the card from `upload.step`, the same render-from-state shape as the
+review screens. Every server reply carries `status`, and the step *is*
+the status: detect -> `zero_match` / `multi_match` / `unrecognized` /
+`password_needed`, or `matched` straight into preview; preview ->
+`preview` / `duplicate` / `password_needed` / `llm_not_configured` /
+`llm_failed`; confirm -> `success`. The chosen file is held in memory
+and re-sent to preview with the resolved `card_id` (detect keeps
+nothing server-side). Screens, and the per-screen reuse decisions:
+
+- *Empty*: a dashed drop zone with a "Choose a file" button over a
+  hidden `<input type=file accept=pdf>`. More than one file, dropped
+  or picked, is refused with an inline message naming the count --
+  never the first one taken silently. A drop anywhere else on the
+  panel is swallowed so the browser does not navigate to the PDF.
+- *Zero-match*: an inline form -- bank and card type pre-filled from
+  detection and editable, nickname optional -- `POST /cards`, then
+  preview. The form is the filter bar's label/input idiom, not the
+  modal: it has three fields, and the modal is a yes/no.
+- *Multi-match*: a radio list, one row per candidate, nickname plus
+  "last statement: start -> end" or "no statements yet"; first
+  preselected; Continue previews.
+- *Preview*: period, count, which reader produced it, and the totals
+  check as **one Match / Mismatch pill that expands on click** to the
+  two-sided table (debits and credits, each what the statement says /
+  parsed / delta; a missing figure shows as "not found", an off delta
+  in red). On a match the primary button imports. On a mismatch the
+  primary button is disabled and a separate "Import anyway…" opens
+  **the existing confirmation modal** (Session 62's, reused as-is)
+  with the explanation; confirming sends `override_reconciliation:
+  true`. On a duplicate the import button is disabled with no override
+  path and the explanation names the statement already there. Nothing
+  is written until confirm, and the screen says so.
+- *Password-needed*: when preview named the bank, the message names
+  bank, card type and the exact `.env` key to add or correct; when
+  detect could not (a locked file identifies nothing), it says none of
+  the passwords on file opened it and lists the keys tried, or that
+  none are set. Either way: fix `.env`, restart, upload again; nothing
+  was read.
+- *Unrecognized*: names the four known banks, then two numbered
+  choices -- which card (a picker from `/cards?all=true`, or the same
+  inline create form with bank and type blank, since nothing was
+  detected) and how to read it ("Try LLM-assisted parse" /
+  "Best-attempt parse", `?strategy=llm_assist` / `best_effort`), both
+  landing on the same preview. A one-line note says the LLM option
+  sends the statement's text (long numbers blanked) to the model and
+  the other reads locally -- the user is told before data leaves.
+- *LLM blocked* (not in the brief's list, but two of Session 100's
+  statuses): key not configured names `GEMINI_API_KEY`; a failed call
+  shows the reason. Both offer the best-attempt parse on the same card,
+  and the failed one a retry.
+- *Success*: period, count, statement id; "Review & assign these" is
+  `setTab("review", true)` -- a tab switch the user chooses, no
+  redirect -- and "Upload another" resets. After a confirm the filter
+  pickers are recomputed so the new card and month appear on the other
+  tabs.
+
+Buttons disable while a request is in flight (`upload.busy`); errors
+from any request land in one `.error` line inside the card, using the
+existing `handleResponse` so a FastAPI `detail` is shown as-is.
+Amounts in the detail table go through the existing `fmtAmount`.
+
+**Verification.** The extracted script parsed under jsc (`new
+Function`, no execution): syntax OK; every `getElementById` reference
+resolved against the markup. **No automated frontend coverage exists
+(STATE.md, P2, unscheduled), so this session closes with manual
+verification only**, stated here rather than skipped: the tab has not
+been seen rendered. Part A's exception did not extend to this part, so
+no server was started for it. The walk should cover each screen above
+with the four sample statements (matched path), a file for a card that
+does not exist (zero-match), a second card of one bank (multi-match),
+a re-upload (duplicate), a wrong password in `.env` (password-needed),
+a non-bank PDF (unrecognized, both readers), the multi-file refusal,
+and the pill's expand/collapse. `scripts/headless_chrome.py` can
+measure the DOM parts.
+
+**Close-out.** PRD.md: requirement 4 marked built and awaiting manual
+browser verification; the Module 1 paragraph in section 7 rewritten to
+what was built; build-sequence step 4 done; the two Module 1 open
+questions (card resolution, reconciliation failure handling) marked
+resolved; version 1.5. STATE.md "Next arc": the analytics arc's build
+sequence complete as scoped, the browser walk (now including this tab)
+as the gate, the parser-tier roadmap as what comes next, and the two
+LLM follow-ups from the verification pass carried forward.
+
+### Outcome
+The upload flow has a screen for every state the endpoints can return,
+end to end from a dropped file to a link into Review & Assign; a
+freshly created card is selectable on the unrecognized screen. Module
+1 is built as scoped. The tab is not yet seen running.
+
+### In plain English
+The last piece of the upload feature is the screen itself. Drop a
+statement on the Upload tab and the app works out the bank, matches or
+creates the card, and shows a preview: the period, how many
+transactions, and a single green-or-red badge saying whether the
+numbers add up -- click it and it opens into the detail. Importing is
+one button when the numbers match, a deliberate "import anyway" with a
+confirmation when they don't, and simply not possible for a statement
+already imported. Locked files and unknown banks each get a plain
+explanation and, for unknown banks, the two fallback readers. This
+finishes the upload feature as planned; like the other screens, it
+still needs to be walked through in a real browser.
+
+### Next steps
+Manual browser verification of the Upload tab (list above), alongside
+the standing walk of Review & assign and the dashboard. Then, off this
+arc: the parser-tier roadmap. Deferred from here: the LLM follow-ups
+already recorded (HTTP status in `llm_failed.reason`; the default
+model name), and a "cards without statements" note on the other tabs'
+pickers, which still show only cards with imports by design.

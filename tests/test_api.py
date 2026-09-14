@@ -193,6 +193,38 @@ def test_cards_returns_only_cards_with_statements_ordered_by_id(client, db_path)
     assert set(body[0].keys()) == {"id", "bank", "card_type", "nickname", "created_at"}
 
 
+def test_cards_all_true_includes_cards_without_statements(client, db_path):
+    # Session 101: the upload screen's card picker needs every card, a
+    # freshly created one included; the default stays statements-only.
+    conn = get_connection()
+    try:
+        with_statement = create_card(conn, "FAKE BANK A", "FAKE CARD TYPE", "Primary")
+        without_statement = create_card(conn, "FAKE BANK B", "FAKE CARD TYPE")
+        insert_statement(conn, with_statement, date(2026, 1, 1), date(2026, 1, 31), [_txn(5, "X")])
+    finally:
+        conn.close()
+
+    everything = client.get("/cards", params={"all": "true"})
+    assert everything.status_code == 200
+    assert [card["id"] for card in everything.json()] == [with_statement, without_statement]
+    assert everything.json()[0]["nickname"] == "Primary"
+
+    assert [card["id"] for card in client.get("/cards").json()] == [with_statement]
+    assert [card["id"] for card in client.get("/cards", params={"all": "false"}).json()] == [with_statement]
+
+
+def test_cards_all_true_ignores_filters(client, db_path):
+    conn = get_connection()
+    try:
+        a = create_card(conn, "FAKE BANK A", "FAKE CARD TYPE")
+        b = create_card(conn, "FAKE BANK B", "FAKE CARD TYPE")
+    finally:
+        conn.close()
+
+    response = client.get("/cards", params={"all": "true", "bank": "FAKE BANK A"})
+    assert [card["id"] for card in response.json()] == [a, b]
+
+
 def test_cards_with_multiple_statements_appears_once(client, db_path):
     conn = get_connection()
     try:

@@ -1,7 +1,7 @@
 # PRD: Credit Card Statement Tracker
 
 ## 0. Document Control
-Version 1.4 — 13 Sep 2026 — Owner: Chandra — Consolidated from
+Version 1.5 — 14 Sep 2026 — Owner: Chandra — Consolidated from
 STATE.md, PRODUCT_VISION.md, EXPENSE_ANALYTICS_VISION.md, CONVENTIONS.md.
 This document is re-consolidated by hand whenever any of those source
 docs change materially — it is not maintained independently of them.
@@ -58,7 +58,7 @@ aggregators).
 | P0 | 1 | Categorization data model + suggestion engines (category, subcategory, merchant) | **Built** (Sessions 41–55) | EXPENSE_ANALYTICS_VISION.md, Module 2 |
 | P0 | 2 | Categorization review/assign screen, incl. multi-select bulk actions and two grouping modes | **Built, awaiting manual browser verification** (Sessions 43–58) | Module 2 |
 | P0 | 3 | Aggregation endpoint + dashboard (filters + LLM commentary) | **Built, awaiting manual browser verification** (Sessions 65–69, 73–77) | Module 3 |
-| P0 | 4 | Upload UI with bank/card auto-detect | Not started | Module 1 |
+| P0 | 4 | Upload UI with bank/card auto-detect | **Built, awaiting manual browser verification** (Sessions 97–101; endpoints verified live under a one-time exception) | Module 1 |
 | P1 | 5 | Parser config schema (prerequisite for all remaining tiers) | Not started | PRODUCT_VISION.md |
 | P1 | 6 | Tier 4 — LLM auto-learn parser generation | Not started | PRODUCT_VISION.md |
 | P1 | 7 | Tier 3 — Guided manual config wizard | Not started | PRODUCT_VISION.md |
@@ -171,14 +171,28 @@ built: nullable `category`, `subcategory`, `merchant` on `transactions`
 use), new endpoints for categorization and aggregation, and new frontend
 screens alongside the existing transaction-list page.
 
-**Module 1 — Upload & Auto-Import.** Drag-and-drop upload that
-auto-detects the bank/card from the PDF and loads it — no manual card
-selection. This reverses the STATE.md decision that card-type
-auto-detection is deferred; that reversal is the locked decision as of
-that document. Zero-match (new card) and multi-match (ambiguous existing
-card) handling are deliberately left open — to be resolved when this
-module is actually scoped, per the project's anti-speculation rule, since
-it's last in the build sequence.
+**Module 1 — Upload & Auto-Import (built, Sessions 97–101).** An
+Upload tab: drop or pick one PDF at a time. The bank is read off page 1
+of the statement (a landmark per known bank; the card type is the
+bank's one parser-backed type, since no sample names its card product
+on the page) and resolved against the cards table — one card proceeds
+silently, none offers an inline card-creation form pre-filled from the
+detection, several are listed by nickname and last statement period
+for the user to pick. A locked PDF that no `.env` password opens stops
+with the bank and the key named; no partial parse. An unrecognised
+format names the four known banks and offers two readers — a
+bank-agnostic best-attempt parser (local, generic date/description/
+amount rules) and an LLM-assisted parse (one call to the configured
+Gemini model with the statement text, long digit runs redacted; no
+format learned, nothing cached) — both landing on the same preview.
+The preview shows period, count and a two-sided reconciliation of the
+parsed debit and credit sums against the statement's own printed
+totals; nothing is written until confirm, which is blocked on a
+mismatch unless the user explicitly overrides, and blocked with no
+override on a duplicate (same card, same period). Success stays on the
+tab with a link to Review & Assign. Every step is a new entry point
+onto the CLI's own parse → adapt → atomic-insert pipeline through one
+shared bank registry, not a second pipeline.
 
 **Module 2 — Categorization (built, Sessions 41–58).**
 
@@ -251,7 +265,9 @@ it's last in the build sequence.
    — **done**, pending manual browser verification
 3. Aggregation endpoint + dashboard with filters and LLM commentary —
    **done**, pending manual browser verification
-4. Upload UI with auto-detect (Module 1)
+4. Upload UI with auto-detect (Module 1) — **done** (Sessions 97–101),
+   endpoints verified live once under an explicit exception; the tab
+   itself pending manual browser verification
 
 ## 8. Non-Functional / Technical Constraints
 - Single-user, local-file storage. Single-user is implicit throughout —
@@ -317,14 +333,16 @@ From PRODUCT_VISION.md (to be answered when that document is revisited):
   can complete? — TBD
 - Tier 4 prompt engineering: how many few-shot examples are needed for
   reliable config generation? — TBD
-- Reconciliation failure handling: retry logic, confidence scoring, or
-  manual review queue? — TBD
+- Reconciliation failure handling — **resolved for uploads (Session
+  98)**: blocked by default with an explicit override; no retry,
+  scoring, or queue
 
 From EXPENSE_ANALYTICS_VISION.md (to be answered when each module is
 scoped):
 
 - Module 1: zero-match / multi-match card resolution at upload time —
-  TBD
+  **resolved (Session 101)**: zero-match creates the card inline,
+  multi-match picks from candidates by nickname + last statement period
 - Module 3: Gemini API key storage — follows the existing `.env` secret
   convention (never in a Claude Code prompt) — TBD
 - Module 3: behavior when the free-tier rate limit is hit — silent skip,
@@ -362,3 +380,4 @@ scoped):
 | 1.2 | 12 Sep 2026 | Module 2 reconciled with what was built (Sessions 41–58): three labels, three suggestion engines, multi-select bulk actions in place of merchant-keyed bulk-apply, two grouping modes; requirements 1–2 marked built; verification gap recorded |
 | 1.3 | 13 Sep 2026 | Commentary payload scope corrected: labels to merchant depth with amounts only (Session 73 reversal), in 7.3 and 9 |
 | 1.4 | 13 Sep 2026 | Module 3 aggregation/dashboard marked built with its growth beyond scope (Sessions 73–77); requirement 3 status updated |
+| 1.5 | 14 Sep 2026 | Module 1 upload marked built as scoped (Sessions 97–101): bank detection, card resolution, two-sided reconciliation gate, best-attempt and LLM readers; requirement 4 and the two Module 1 open questions updated |

@@ -484,23 +484,30 @@ The Tier 1 parser arc (Sessions 27–35) is complete: all four known bank
 parsers are built, generalized behind one bank-agnostic registry, and
 verified against every real sample statement on disk.
 
-The project is in the Expense Categorization & Analytics arc. Against that
-document's build sequence, **steps 1 and 2 — the categorization data model
-and suggestion engines, and the review/assign screen with bulk apply —
-are built** (Sessions 41–58), and grew beyond their original scope with
-subcategory and merchant labels and a similarity-grouping mode. They are
-built, tested at the API level, and **not yet manually verified in a
-browser** (see Open flags); that walk is the gate before calling Module 2
-done. Step 3 — the aggregation endpoint and analytics dashboard with
-filters and LLM commentary (Module 3) — is next in sequence, and step 4
-(upload with auto-detect, Module 1) after it. Scope, open questions, and
-sequencing remain in the vision document, which is the source of truth
-for this arc.
+The Expense Categorization & Analytics arc's build sequence is
+**complete as scoped**: steps 1 and 2 (categorization model, suggestion
+engines, review/assign screen — Sessions 41–58, grown since), step 3
+(aggregation endpoint and dashboard with commentary — Sessions 65–77),
+and step 4 (Module 1, upload with auto-detect — Sessions 97–101:
+`POST /cards`, `/upload/detect`, `/upload/preview` with
+`strategy=detected|best_effort|llm_assist`, `/upload/confirm`, the
+shared `parsers/registry.py`, and the Upload tab). The upload endpoints
+were verified live once, under an explicit one-time exception recorded
+in CONVENTIONS.md; the Upload tab, like every other frontend screen
+since Session 43, is **not yet manually verified in a browser** (see
+Open flags). That walk — now covering Review & assign, the dashboard,
+and the Upload tab — is the gate before any module is called verified.
+
+What is next is not on this arc: the parser-tier roadmap in
+docs/PRODUCT_VISION.md (config schema, then the Tier 4 auto-learn that
+Module 1's one-off LLM parse deliberately is not), on hold until
+scoped. Two small follow-ups recorded in the DEVLOG's verification-pass
+entry: the LLM path's `llm_failed.reason` should carry the HTTP status,
+and its default model name is not callable with the current key
+(`GEMINI_MODEL` in `.env` is what works).
 
 The preceding "HDFC UI end-to-end" arc (Sessions 23–26) and the
-second-bank/generalization work that followed it are both done, and the
-parser-tier roadmap in docs/PRODUCT_VISION.md is deliberately on hold
-while the current arc runs.
+second-bank/generalization work that followed it are both done.
 
 ## How this project works
 
