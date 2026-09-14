@@ -10175,3 +10175,76 @@ Manual (or headless-driver) verification of the screen work since
 Session 76, now including this reorder. Not merged to main: that waits
 on that verification. Then the Session 88 backlog (STATE.md
 reconciliation 61–94, Module 1).
+
+## Session 96 — 2026-09-14
+
+### Goal
+Close out `feature/merchant-aggregation`: record the parked credit-row
+/ "accept all" decision in STATE.md, merge the branch into `main`, and
+fork the Module 1 branch. Docs and git only; no feature code.
+
+### What happened
+1. `git branch --show-current` → `feature/merchant-aggregation`, but
+   **not clean**: Session 95's column reorder and its DEVLOG entry were
+   still uncommitted from the previous prompt. Confirmed with Chandra
+   and committed as `d35057a` (Session 95) before anything else; the
+   DEVLOG's last heading was then Session 95, so this is Session 96.
+2. **STATE.md, Open flags.** One new entry, after the "collapse all"
+   flag and in that section's "recorded, not designed" register: the
+   per-group "accept all" writes each row's displayed category
+   suggestion directly — one `POST /transactions/category` carrying
+   `acceptPairs(group.txns)` — and never passes through the checkbox
+   selection, so `isSelectable()`'s credit exclusion (Session 79) does
+   not reach it. A card-payment credit is already complete after the
+   cascade and never appears on Review & Assign; the exposure is an
+   unflagged credit, typically a refund, in a suggestion group. Left
+   as-is by explicit decision, no live case reported; the two options
+   if revisited — gate `acceptPairs()` through `isSelectable()`, or
+   give credits their own group (which still needs the gate) — are in
+   the entry. Two details of the brief were corrected against the code
+   before writing: "accept all" is one request with one assignment per
+   row, not one call per row; and `acceptPairs()` is category-only
+   (merchant has its own bulk path), so the exposure is a suggested
+   category, not category/merchant. Committed on the feature branch as
+   `a3c2d2c`.
+3. Full suite on the feature branch at `a3c2d2c`: **532 passing**,
+   matching Session 93's count (Sessions 94–96 added no tests).
+4. `git checkout main` (at `fcffc3d`, Session 72), confirmed `main` was
+   an ancestor of the branch tip, then `git merge --ff-only
+   feature/merchant-aggregation`: a clean fast-forward to `a3c2d2c`, no
+   merge commit. The branch carried 24 commits, Sessions 73–96: the
+   merchant aggregation and `storage/normalize.py`, the inline label
+   editor and its subcategory gating, the credit-row selection rule,
+   the Reviewed tab, the headless-Chrome driver, the scroll-reset fix,
+   the card-payment column move, and their docs and tests
+   (`tests/test_frontend_bulk_accept.py` among them).
+5. Full suite on `main` post-merge: **532 passing**, same as step 3.
+6. `git branch -d feature/merchant-aggregation` (was `a3c2d2c`),
+   following the Session 59→60 / Session 71 precedent: merged, verified
+   on `main`, then deleted.
+7. This entry, committed on `main`.
+8. `git checkout -b feature/upload-ui` from `main`'s tip for Module 1
+   (upload UI with bank/card auto-detect). Branch creation is the whole
+   of that part: no Module 1 code, which gets scoped in its own
+   conversation first.
+
+### Outcome
+`main` is at the merchant-aggregation tip with 532 tests passing; the
+feature branch is gone; `feature/upload-ui` exists, empty of new work,
+pointing at the same commit as `main`.
+
+### In plain English
+The last two days' work on the review screens was folded into the main
+line of the project, with the same 532 checks passing before and after
+and no reconciliation needed. One known loose end — the per-group
+"accept all" button can also write to a refund in the group, which the
+tick-box rules would have excluded — was written down as a deliberate
+"leave it for now" rather than fixed. A fresh branch was opened for the
+next piece of work, the statement upload screen, with nothing on it
+yet.
+
+### Next steps
+Module 1 (upload UI with auto-detect) on `feature/upload-ui`, after it
+is scoped in its own conversation. The manual browser walk of the
+screen work since Session 76 remains the gate before Module 2 is called
+verified; `scripts/headless_chrome.py` can cover the measurable parts.
