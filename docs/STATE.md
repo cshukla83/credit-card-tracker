@@ -453,6 +453,30 @@ system font stack.
   Session 44; per-group defaults in Session 52) but there is no bulk
   toggle. A future session should add a "collapse all" / "expand all"
   control. Recorded, not designed.
+- **Group "accept all" does not exclude credit rows.** The per-group
+  "accept all N" button on Review & Assign's suggestion groups writes
+  each row's displayed category suggestion straight to the server — one
+  `POST /transactions/category` carrying one assignment per row via
+  `acceptPairs(group.txns)` — and never goes through the checkbox
+  selection. `isSelectable()` (Session 79) keeps credit rows out of the
+  row checkbox, the group-header checkbox, and the selection prune, but
+  not out of group membership or out of "accept all", because that
+  control was never selection-based to begin with. A credit that is a
+  card payment (`is_payment=1`) cannot be caught by this: the cascade
+  sets all three labels, the row is then complete, and Review & Assign
+  shows only incomplete rows. The real exposure is an **unflagged**
+  credit — typically a refund — sitting in a suggestion group: "accept
+  all" would give it the suggested category like any debit in the group,
+  ahead of any decision about whether it should instead be marked a card
+  payment. Left as-is by explicit decision (Session 96): discussed and
+  recorded, not fixed, and not urgent — no live case of a mis-accepted
+  credit has been reported. If revisited, the two options on the table
+  were (a) gate `acceptPairs()` — which "accept all" already calls —
+  through `isSelectable()`, reusing Session 79's single-predicate
+  pattern, which fixes it regardless of grouping; or (b) route credit
+  rows into their own group so the exposure is at least isolated and
+  visible, which does not by itself fix it and would still need (a)
+  alongside.
 
 ## Next arc
 
