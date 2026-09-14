@@ -10493,3 +10493,123 @@ endpoints (bank-named on preview), and the bank-agnostic best-attempt
 parser behind `?strategy=best_effort`. Deferred here: any expiry or
 size cap on the preview cache (single user, one process; revisit only
 if it ever matters).
+
+## Session 99 — 2026-09-14
+
+### Goal
+Module 1, step 3 of 5: the `password_needed` status on both upload
+endpoints, and a bank-agnostic best-attempt parser behind
+`POST /upload/preview?strategy=best_effort` for formats detection does
+not recognise.
+
+### What happened
+
+Branch `feature/upload-ui` at `c10b466`, clean.
+
+**Password path.** Detect already returned `password_needed` (Session
+97, bank unknown by necessity). Preview now returns it too, and can do
+better because it has the card: `{"status": "password_needed", "bank",
+"card_type", "password_env_key", "tried_env_keys"}` --
+`password_env_key` is the registry's key for the card's bank (null for
+a bank outside the registry, since there is no convention to name),
+`tried_env_keys` the keys that were set and tried. The two failure
+modes -- no key in `.env`, or a key that is set but does not open this
+file -- are indistinguishable from outside and are reported the same
+way; neither gets a partial parse (the unlock step is before any
+parser runs). Lookup keys are the existing `<BANK>_SAMPLE_PASSWORD`
+ones; nothing new was invented. The Session 98 placeholder (a 422
+naming the tried keys) is gone.
+
+**`parsers/generic_fallback.py`.** A line is a transaction when it
+starts with a date in one of seven common shapes (each carrying a
+year; day-and-month-only rows are skipped, not guessed), has at least
+one "1,234.56"-shaped number after it -- the *last* one is the amount,
+so points, serial numbers and foreign-currency figures stay in the
+description -- and the text between contains a letter. A leading clock
+time and a trailing currency marker (`C`, `Rs`, `INR`, the rupee sign,
+the backtick some fonts emit for it) are trimmed from the description.
+Credit when the token after the amount is `C`/`CR`, when a bare `+`
+sits before the amount, or when the description carries a whole-word
+credit keyword (payment, refund, reversal, cashback, credit); else
+debit. `is_payment` is a guess -- a credit saying PAYMENT and not
+REFUND -- editable on the review screen like any other row. Period from
+a "Statement/Billing Period <date> to/- <date>" anywhere in the text,
+else the earliest and latest transaction dates. Summary: a line whose
+label says purchases/debits or payments/credits with an amount on the
+same line; most layouts do not do that, so it usually finds nothing,
+and a missing figure is a mismatch by Session 98's rule, never a
+match. No bank is named anywhere in it; the line shapes it handles
+were taken from the four hand-built parsers' regexes, not their data.
+One bug found by the tests: with "DESC + C 75.00" the currency marker
+sits between the `+` and the amount, so the marker is trimmed before
+the `+` is looked for (and again after).
+
+**How it fares** (scratch probe over the 18 real samples, counts
+only): the row count equals the hand-built parser's on 15 of 18
+(three ICICI statements lose 2-3 wrapped rows); the period is the same
+on 14 of 18 (IndusInd's label and dates are on different lines, so
+those four fall back to transaction dates); debit and credit sums both
+identical to the real parser's on 10 of 18, credit sums alone on 16.
+Summary figures were found on 6 of 18 and reconciliation matched on
+none -- so every real statement through this path would need the
+override. That is the design: the gate is the safety net, the parser
+is not asked to be right.
+
+**Wiring.** `storage/upload.py` gained a `Strategy` (parse, summary
+extraction, and the two summary keys -- the same three things a
+registry `Bank` carries, so a bank and the fallback are
+interchangeable from the preview step on). `preview()` takes
+`strategy` (`detected` default, `best_effort`); `detected` resolves the
+card's bank in the registry as before, `best_effort` uses the fallback
+and does not need the bank to be known at all -- the point. `main.py`
+reads `?strategy=` as a query parameter; an unknown value is 422
+naming the valid ones. The preview response now carries `strategy` so
+the frontend can say which parser produced it.
+
+**Tests** (`tests/test_generic_fallback.py`, 37; `tests/test_upload_
+preview.py`, +30). Fallback: one line per known layout shape, none
+named (slash date with currency marker and trailing token; `+` before
+the amount; two-digit year with `D`/`C` flag; serial + points +
+foreign amount + `CR`; keyword credit and the payment flag; keyword as
+a whole word only); five non-transaction lines rejected; three period
+shapes and none; summary with and without figures; three whole
+synthetic statements (unknown layout end to end, period from
+transaction dates, nothing transaction-like). Plus the 18 real samples
+treated as unrecognised: rows found, a period, valid types, both sums
+computed -- "something reconciliation-checkable", with the match
+itself deliberately not asserted. Upload: `best_effort` previews an
+unknown bank (mismatch with `expected: null`), reconciles when figures
+are on the page, confirms through the same gate (blocked, then
+overridden; `is_payment` lands on the payment row), duplicate still a
+hard stop, nothing parsed is 422, `detected` is the default, unknown
+strategy 422. Password: missing key (bank and key named, nothing
+cached), wrong key (same status, key listed as tried), a bank with no
+key convention (`password_env_key` null), the detect side with a wrong
+key (`[None, "wrong"]` attempted), and 18 real-sample cases with every
+key replaced by a wrong value -- the file refuses to open and preview
+names the bank. **683 passing** (616 + 67).
+
+### Outcome
+A locked statement no longer produces an error message but a status
+naming the bank and the `.env` key to set; a statement from an unknown
+bank can be previewed and imported through the same gate as any other.
+Not run against a live server.
+
+### In plain English
+Two gaps in the upload flow are closed. If a statement is locked and
+none of the saved passwords open it, the app now says which bank's
+password it needs, instead of failing part-way. And for a statement
+from a bank the app has never seen, there is a rough, bank-agnostic
+reader that picks out anything shaped like "date, description,
+amount". It is deliberately not clever: checked against every real
+statement on disk, it gets the row count right most of the time and
+the totals right about half the time -- so it never sneaks past the
+totals check, and importing its result always takes a deliberate
+"import anyway".
+
+### Next steps
+Session 100 (prompt Session 4): the LLM-assisted parse behind
+`?strategy=llm_assist`, mocked in tests, key from `.env`. Deferred here:
+better wrapped-row handling in the fallback (the ICICI misses) and a
+period search that tolerates interleaved lines (the IndusInd case) --
+both are bank-shaped knowledge the fallback is meant not to have.

@@ -1,4 +1,4 @@
-"""The web upload path (Sessions 97-98): a new entry point onto the CLI's
+"""The web upload path (Sessions 97-99): a new entry point onto the CLI's
 import pipeline, not a parallel one.
 
 Step 1, detection (`detect()`): read the PDF's first page
@@ -18,7 +18,9 @@ frontend branches on one field:
                  that were tried are listed instead.
 
 Step 2, preview (`preview()`): with a card resolved, run the CLI's own
-pipeline -- the registry's parse() for the card's bank -- then check for a
+pipeline -- the registry's parse() for the card's bank, or with
+strategy="best_effort" the bank-agnostic parsers.generic_fallback for a
+format no landmark recognised (Session 99) -- then check for a
 duplicate (same card, same period: the key insert_statement() dedups on),
 reconcile the parsed sums against the statement's summary box, and hold
 the parsed statement in memory under an opaque upload_id. Nothing is
@@ -36,8 +38,9 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from typing import NamedTuple
+from typing import Callable, NamedTuple
 
+from parsers import generic_fallback
 from parsers.detect import PasswordNeededError, identify, unlock
 from parsers.reconcile import reconcile
 from parsers.registry import BANKS
@@ -71,6 +74,25 @@ class ReconciliationBlockedError(Exception):
 
 class DuplicateStatementError(Exception):
     pass
+
+
+class UnknownStrategyError(Exception):
+    pass
+
+
+class Strategy(NamedTuple):
+    """How a preview parses: a parse function, its summary extraction, and
+    which two summary keys the debit and credit sums reconcile against --
+    the same three things a registry Bank carries, so a bank and the
+    fallback are interchangeable from here on."""
+
+    parse: "Callable[[str, str | None], dict]"
+    extract_summary: "Callable[[str, str | None], dict]"
+    summary_debit_key: str
+    summary_credit_key: str
+
+
+STRATEGIES = ("detected", "best_effort")
 
 
 class PendingUpload(NamedTuple):
@@ -124,16 +146,62 @@ def _bank_for(card: dict):
     return bank
 
 
-def preview(conn: sqlite3.Connection, pdf_path: str, card_id: int) -> dict:
+def _strategy_for(card: dict, strategy: str) -> Strategy:
+    if strategy == "best_effort":
+        # Bank-agnostic by definition: the card's bank need not be in the
+        # registry (that is the point -- an unrecognised format).
+        return Strategy(
+            parse=generic_fallback.parse,
+            extract_summary=generic_fallback.extract_summary,
+            summary_debit_key="purchases",
+            summary_credit_key="payments_credits",
+        )
+    if strategy == "detected":
+        bank = _bank_for(card)
+        card_type = card["card_type"]
+        return Strategy(
+            parse=lambda path, password: bank.parse(path, password, card_type=card_type),
+            extract_summary=lambda path, password: bank.extract_summary(
+                path, password, card_type=card_type
+            ),
+            summary_debit_key=bank.summary_debit_key,
+            summary_credit_key=bank.summary_credit_key,
+        )
+    raise UnknownStrategyError(
+        f"Unknown strategy {strategy!r} (expected one of: {', '.join(STRATEGIES)})"
+    )
+
+
+def _password_needed(card: dict, error: PasswordNeededError) -> dict:
+    # Unlike detect(), preview knows the card, so the bank is named and --
+    # when the bank is a known one -- so is the .env key to set. The two
+    # ways to get here look the same from outside: no key in .env, or a key
+    # that is set but does not open this file. Neither gets a partial parse.
+    bank = BANKS.get(card["bank"])
+    return {
+        "status": "password_needed",
+        "bank": card["bank"],
+        "card_type": card["card_type"],
+        "password_env_key": bank.password_env_key if bank else None,
+        "tried_env_keys": error.tried_env_keys,
+    }
+
+
+def preview(
+    conn: sqlite3.Connection, pdf_path: str, card_id: int, strategy: str = "detected"
+) -> dict:
     card = get_card(conn, card_id)
     if card is None:
         raise CardNotFoundError(f"No such card: {card_id}")
-    bank = _bank_for(card)
+    chosen = _strategy_for(card, strategy)
 
-    unlocked = unlock(pdf_path)
     try:
-        parsed = bank.parse(pdf_path, unlocked.password, card_type=card["card_type"])
-        summary = bank.extract_summary(pdf_path, unlocked.password, card_type=card["card_type"])
+        unlocked = unlock(pdf_path)
+    except PasswordNeededError as e:
+        return _password_needed(card, e)
+    try:
+        parsed = chosen.parse(pdf_path, unlocked.password)
+        summary = chosen.extract_summary(pdf_path, unlocked.password)
     except NotImplementedError as e:
         raise UnsupportedCardError(str(e)) from e
 
@@ -153,8 +221,8 @@ def preview(conn: sqlite3.Connection, pdf_path: str, card_id: int) -> dict:
 
     reconciliation = reconcile(
         parsed["transactions"],
-        summary.get(bank.summary_debit_key),
-        summary.get(bank.summary_credit_key),
+        summary.get(chosen.summary_debit_key),
+        summary.get(chosen.summary_credit_key),
     )
     upload_id = uuid.uuid4().hex
     PREVIEWS[upload_id] = PendingUpload(card_id=card_id, parsed=parsed, reconciliation=reconciliation)
@@ -162,6 +230,7 @@ def preview(conn: sqlite3.Connection, pdf_path: str, card_id: int) -> dict:
         "status": "preview",
         "upload_id": upload_id,
         "card_id": card_id,
+        "strategy": strategy,
         "period_start": to_date_str(period_start),
         "period_end": to_date_str(period_end),
         "transaction_count": len(parsed["transactions"]),

@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from storage.aggregate import DimensionsError, PeriodError, aggregate_spend, resolve_period
-from parsers.detect import NotAPdfError, PasswordNeededError
+from parsers.detect import NotAPdfError
 from storage.cards import CardAlreadyExistsError, create_card, get_card, list_cards_with_statements
 from storage.commentary import (
     CommentaryNotConfiguredError,
@@ -34,6 +34,7 @@ from storage.upload import (
     PreviewExpiredError,
     ReconciliationBlockedError,
     StatementPeriodError,
+    UnknownStrategyError,
     UnsupportedCardError,
     confirm as confirm_upload,
     detect as detect_upload,
@@ -561,25 +562,27 @@ def upload_detect(file: UploadFile = File(...), conn=Depends(get_db)):
 
 
 @app.post("/upload/preview")
-def upload_preview(file: UploadFile = File(...), card_id: int = Form(...), conn=Depends(get_db)):
+def upload_preview(
+    file: UploadFile = File(...),
+    card_id: int = Form(...),
+    strategy: str = "detected",
+    conn=Depends(get_db),
+):
     # The PDF is re-sent with the resolved card_id rather than held from
     # /upload/detect: detect keeps nothing, so a page reload between the two
-    # steps costs nothing but the second upload.
+    # steps costs nothing but the second upload. `strategy` (query param,
+    # Session 99) picks the parser: the card's bank by default, or
+    # best_effort for a format detect did not recognise.
     try:
-        return _with_uploaded_pdf(file, lambda path: preview_upload(conn, path, card_id))
+        return _with_uploaded_pdf(
+            file, lambda path: preview_upload(conn, path, card_id, strategy=strategy)
+        )
     except NotAPdfError as e:
         raise HTTPException(status_code=422, detail=f"Could not read the file as a PDF: {e}")
     except CardNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except (UnsupportedCardError, StatementPeriodError) as e:
+    except (UnsupportedCardError, StatementPeriodError, UnknownStrategyError) as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except PasswordNeededError as e:
-        # Session 3 of this module gives this its own status body; until
-        # then it is a plain error naming the keys that were tried.
-        raise HTTPException(
-            status_code=422,
-            detail=f"{e} (tried: {', '.join(e.tried_env_keys) or 'no passwords set'})",
-        )
 
 
 class UploadConfirm(BaseModel):

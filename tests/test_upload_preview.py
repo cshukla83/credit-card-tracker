@@ -294,3 +294,174 @@ def test_real_statement_previews_reconciled(bank, pdf_path, client, conn):
     assert body["status"] == "preview"
     assert body["transaction_count"] > 0
     assert body["reconciliation"]["status"] == "match", body["reconciliation"]["status"]
+
+
+# --- Session 99: strategy=best_effort and password_needed -------------------
+
+
+def _unknown_statement():
+    return [
+        "FAKE BANK Platinum statement",
+        "Statement Period: 01/01/2026 to 31/01/2026",
+        "05/01/2026 FAKE SHOP ONE 100.00",
+        "10/01/2026 FAKE SHOP TWO 50.00",
+        "15/01/2026 PAYMENT RECEIVED 75.00 CR",
+    ]
+
+
+def _preview_with(client, pdf_bytes, card_id, strategy):
+    return client.post(
+        f"/upload/preview?strategy={strategy}",
+        files={"file": ("statement.pdf", pdf_bytes, "application/pdf")},
+        data={"card_id": str(card_id)},
+    )
+
+
+def test_best_effort_previews_unknown_bank(client, conn, make_pdf):
+    card = create_card(conn, "FAKE BANK", "Platinum")
+    body = _preview_with(client, make_pdf(_unknown_statement()), card, "best_effort").json()
+    assert body["status"] == "preview"
+    assert body["strategy"] == "best_effort"
+    assert body["transaction_count"] == 3
+    assert body["period_start"] == "2026-01-01"
+    # No summary figures on this page: unverifiable, so a mismatch by rule.
+    assert body["reconciliation"]["status"] == "mismatch"
+    assert body["reconciliation"]["debit"] == {"expected": None, "parsed": 150.0, "delta": None}
+
+
+def test_best_effort_can_reconcile_when_figures_are_on_the_page(client, conn, make_pdf):
+    card = create_card(conn, "FAKE BANK", "Platinum")
+    lines = _unknown_statement() + ["Purchases 150.00", "Payments 75.00"]
+    body = _preview_with(client, make_pdf(lines), card, "best_effort").json()
+    assert body["reconciliation"]["status"] == "match"
+
+
+def test_best_effort_confirms_through_the_same_gate(client, conn, make_pdf):
+    card = create_card(conn, "FAKE BANK", "Platinum")
+    upload_id = _preview_with(client, make_pdf(_unknown_statement()), card, "best_effort").json()["upload_id"]
+    assert _confirm(client, upload_id).status_code == 422  # blocked: mismatch
+    assert _confirm(client, upload_id, override=True).status_code == 200
+    statement = find_statement(conn, card, date(2026, 1, 1), date(2026, 1, 31))
+    assert statement is not None
+    rows = conn.execute(
+        "SELECT txn_type, is_payment FROM transactions WHERE statement_id = ? ORDER BY id",
+        (statement["id"],),
+    ).fetchall()
+    assert [tuple(r) for r in rows] == [("debit", 0), ("debit", 0), ("credit", 1)]
+
+
+def test_best_effort_duplicate_is_still_a_hard_stop(client, conn, make_pdf):
+    card = create_card(conn, "FAKE BANK", "Platinum")
+    insert_statement(conn, card, date(2026, 1, 1), date(2026, 1, 31), [])
+    body = _preview_with(client, make_pdf(_unknown_statement()), card, "best_effort").json()
+    assert body["status"] == "duplicate"
+
+
+def test_best_effort_nothing_parsed_is_422(client, conn, make_pdf):
+    card = create_card(conn, "FAKE BANK", "Platinum")
+    response = _preview_with(client, make_pdf(["nothing here"]), card, "best_effort")
+    assert response.status_code == 422
+    assert "statement period" in response.json()["detail"]
+
+
+def test_detected_strategy_is_the_default(client, card_id, make_pdf):
+    explicit = _preview_with(client, make_pdf(_hdfc_statement()), card_id, "detected").json()
+    assert explicit["status"] == "preview"
+    assert explicit["strategy"] == "detected"
+
+
+def test_unknown_strategy_is_422(client, card_id, make_pdf):
+    response = _preview_with(client, make_pdf(_hdfc_statement()), card_id, "magic")
+    assert response.status_code == 422
+    assert "best_effort" in response.json()["detail"]
+
+
+@pytest.fixture
+def locked_pdf(monkeypatch):
+    """Every open attempt fails as a wrong/missing password."""
+    from pdfminer.pdfdocument import PDFPasswordIncorrect
+    from pdfplumber.utils.exceptions import PdfminerException
+
+    import parsers.detect as detect_module
+
+    def refuse(path, password):
+        raise PdfminerException(PDFPasswordIncorrect())
+
+    monkeypatch.setattr(detect_module, "_first_page_text", refuse)
+    from parsers.registry import BANKS
+
+    for bank in BANKS.values():
+        monkeypatch.delenv(bank.password_env_key, raising=False)
+
+
+def test_preview_password_missing_names_bank_and_key(client, card_id, locked_pdf):
+    body = _preview(client, b"%PDF-1.4 locked", card_id).json()
+    assert body == {
+        "status": "password_needed",
+        "bank": "HDFC",
+        "card_type": "Diners",
+        "password_env_key": "HDFC_SAMPLE_PASSWORD",
+        "tried_env_keys": [],
+    }
+    assert upload_module.PREVIEWS == {}
+
+
+def test_preview_password_wrong_is_the_same_status(client, card_id, locked_pdf, monkeypatch):
+    monkeypatch.setenv("HDFC_SAMPLE_PASSWORD", "wrong")
+    body = _preview(client, b"%PDF-1.4 locked", card_id).json()
+    assert body["status"] == "password_needed"
+    assert body["password_env_key"] == "HDFC_SAMPLE_PASSWORD"
+    assert body["tried_env_keys"] == ["HDFC_SAMPLE_PASSWORD"]
+
+
+def test_preview_password_needed_for_bank_without_key(client, conn, locked_pdf):
+    card = create_card(conn, "FAKE BANK", "Platinum")
+    body = _preview_with(client, b"%PDF-1.4 locked", card, "best_effort").json()
+    assert body["status"] == "password_needed"
+    assert body["bank"] == "FAKE BANK"
+    assert body["password_env_key"] is None
+
+
+def test_detect_password_wrong_is_password_needed(client, monkeypatch):
+    # Detect side of the same rule: a set-but-wrong key is tried and listed.
+    from pdfminer.pdfdocument import PDFPasswordIncorrect
+    from pdfplumber.utils.exceptions import PdfminerException
+
+    import parsers.detect as detect_module
+
+    attempts = []
+
+    def refuse(path, password):
+        attempts.append(password)
+        raise PdfminerException(PDFPasswordIncorrect())
+
+    monkeypatch.setattr(detect_module, "_first_page_text", refuse)
+    from parsers.registry import BANKS
+
+    for bank in BANKS.values():
+        monkeypatch.delenv(bank.password_env_key, raising=False)
+    monkeypatch.setenv("ICICI_SAMPLE_PASSWORD", "wrong")
+    body = client.post(
+        "/upload/detect", files={"file": ("s.pdf", b"%PDF-1.4 locked", "application/pdf")}
+    ).json()
+    assert body["status"] == "password_needed"
+    assert body["tried_env_keys"] == ["ICICI_SAMPLE_PASSWORD"]
+    assert attempts == [None, "wrong"]
+
+
+@pytest.mark.parametrize("bank, pdf_path", _REAL_CASES)
+def test_real_statement_with_wrong_password_is_password_needed(bank, pdf_path, client, conn, monkeypatch):
+    # A real encrypted file, every bank's key replaced by a wrong value: the
+    # file must refuse to open and preview must say so, naming the bank.
+    if not os.environ.get(BANKS[bank].password_env_key):
+        pytest.skip(f"{BANKS[bank].password_env_key} not set in .env")
+    if not Path(pdf_path).exists():
+        pytest.skip(f"{pdf_path} not present locally")
+    for entry in BANKS.values():
+        monkeypatch.setenv(entry.password_env_key, "definitely-wrong")
+
+    card = create_card(conn, bank, BANKS[bank].card_type)
+    body = _preview(client, Path(pdf_path).read_bytes(), card).json()
+    assert body["status"] == "password_needed"
+    assert body["bank"] == bank
+    assert body["password_env_key"] == BANKS[bank].password_env_key
