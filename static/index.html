@@ -4478,7 +4478,7 @@
       }
       actions.push(startOverButton("Cancel"));
       return [
-        el("h2", { text: duplicate ? "Already imported" : "Preview" }),
+        el("h2", { text: duplicate ? "Already imported" : "Preview & Import Statement" }),
         fileLine(),
         duplicate
           ? el("p", {}, ["A statement for this card covering ", el("strong", { text: p.period_start + " → " + p.period_end }),

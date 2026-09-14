@@ -11149,3 +11149,28 @@ the transactions list as before.
 
 ### Next steps
 Session 105: the preview screen's heading.
+
+## Session 105 — 2026-09-14
+
+### Goal
+Rename the preview screen's heading.
+
+### What happened
+Branch `feature/upload-ui` at `20fdc0b`, clean. One string in
+`renderPreview()` (`static/index.html`): the `<h2>` "Preview" is now
+"Preview & Import Statement". The duplicate variant of the same screen
+keeps its own heading, "Already imported" -- it is a different state
+with a different message and the brief named only the preview heading.
+No other copy on the screen changed. Manual verification only, per the
+tab's pattern.
+
+### Outcome
+The preview screen is headed "Preview & Import Statement".
+
+### In plain English
+The screen where a statement is checked before saving now says what it
+is for in its title -- previewing and importing -- instead of just
+"Preview".
+
+### Next steps
+Session 106: the duplicate-statement message.
