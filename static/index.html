@@ -4011,6 +4011,7 @@
       llm: null,          // llm_not_configured / llm_failed reply
       allCards: [],       // GET /cards?all=true, for the unrecognized screen
       chosenCardId: "",   // unrecognized screen's picker
+      cardRef: null,      // {card_id} or {new_card} the preview was made for (Session 112)
       showDetail: false,  // reconciliation detail expanded
       rowsSeen: false,    // the row-level preview has been opened and closed (Session 103)
       busy: false,
@@ -4020,7 +4021,7 @@
     function resetUpload() {
       Object.assign(upload, {
         step: "empty", file: null, detect: null, preview: null, result: null,
-        strategy: "detected", llm: null, chosenCardId: "", showDetail: false,
+        strategy: "detected", llm: null, chosenCardId: "", cardRef: null, showDetail: false,
         rowsSeen: false, busy: false, error: "",
       });
       renderUpload();
@@ -4057,7 +4058,7 @@
         .then((reply) => {
           upload.busy = false;
           upload.detect = reply;
-          if (reply.status === "matched") return startPreview(reply.card_id, "detected");
+          if (reply.status === "matched") return startPreview({ card_id: reply.card_id }, "detected");
           upload.step = reply.status; // zero_match | multi_match | unrecognized | password_needed
           if (reply.status === "unrecognized") return loadAllCards();
           renderUpload();
@@ -4074,15 +4075,31 @@
         .catch(uploadFail);
     }
 
-    function startPreview(cardId, strategy) {
+    // `cardRef` (Session 112) is either {card_id} for an existing card or
+    // {new_card: {bank, card_type, nickname}} for one the server will create
+    // only when the import is confirmed. The details ride along to preview
+    // as form fields and are held server-side with the parsed statement;
+    // nothing is written until confirm, so backing out leaves no card.
+    function cardFields(cardRef) {
+      if (cardRef.new_card) {
+        const c = cardRef.new_card;
+        const fields = { new_bank: c.bank, new_card_type: c.card_type };
+        if (c.nickname) fields.new_nickname = c.nickname;
+        return fields;
+      }
+      return { card_id: String(cardRef.card_id) };
+    }
+
+    function startPreview(cardRef, strategy) {
       upload.busy = true;
       upload.strategy = strategy;
+      upload.cardRef = cardRef;
       upload.showDetail = false;
       upload.rowsSeen = false;
       upload.error = "";
       renderUpload();
       const url = "/upload/preview" + (strategy === "detected" ? "" : "?strategy=" + encodeURIComponent(strategy));
-      return postFile(url, upload.file, { card_id: String(cardId) })
+      return postFile(url, upload.file, cardFields(cardRef))
         .then((reply) => {
           upload.busy = false;
           if (reply.status === "preview" || reply.status === "duplicate") {
@@ -4090,7 +4107,6 @@
             upload.step = "preview";
           } else if (reply.status === "llm_not_configured" || reply.status === "llm_failed") {
             upload.llm = reply;
-            upload.llmCardId = cardId;
             upload.step = "llm_blocked";
           } else {
             upload.detect = reply; // password_needed, now naming the bank
@@ -4101,13 +4117,11 @@
         .catch(uploadFail);
     }
 
+    // Until Session 112 this POSTed /cards immediately, so a preview that
+    // was never confirmed left an orphan card. Now the details are only
+    // carried to preview; the card exists once the import does.
     function createCardAndPreview(bank, cardType, nickname, strategy) {
-      upload.busy = true;
-      upload.error = "";
-      renderUpload();
-      return postJSON("/cards", { bank, card_type: cardType, nickname: nickname || null })
-        .then((card) => startPreview(card.id, strategy))
-        .catch(uploadFail);
+      return startPreview({ new_card: { bank, card_type: cardType, nickname: nickname || null } }, strategy);
     }
 
     function confirmUpload(override) {
@@ -4258,7 +4272,7 @@
         errorLine(),
         list,
         el("div", { class: "upload-actions" }, [
-          uploadButton("Continue", () => startPreview(Number(chosen), "detected"), { primary: true }),
+          uploadButton("Continue", () => startPreview({ card_id: Number(chosen) }, "detected"), { primary: true }),
           startOverButton(),
         ]),
       ];
@@ -4302,7 +4316,7 @@
       picker.value = upload.chosenCardId;
       const withStrategy = (strategy) => {
         if (!upload.chosenCardId) { upload.error = "Pick a card first, or create one below."; renderUpload(); return; }
-        startPreview(Number(upload.chosenCardId), strategy);
+        startPreview({ card_id: Number(upload.chosenCardId) }, strategy);
       };
       let newCardStrategy = "best_effort";
       return [
@@ -4344,8 +4358,8 @@
           : el("p", {}, ["The model did not return a usable statement (", r.reason || "unknown reason",
               "). Nothing was imported. Try again, or use the best-attempt parse instead."]),
         el("div", { class: "upload-actions" }, [
-          uploadButton("Best-attempt parse", () => startPreview(upload.llmCardId, "best_effort"), { primary: true }),
-          notConfigured ? null : uploadButton("Try again", () => startPreview(upload.llmCardId, "llm_assist")),
+          uploadButton("Best-attempt parse", () => startPreview(upload.cardRef, "best_effort"), { primary: true }),
+          notConfigured ? null : uploadButton("Try again", () => startPreview(upload.cardRef, "llm_assist")),
           startOverButton(),
         ]),
       ];
@@ -4455,6 +4469,9 @@
         duplicate ? null : el("dt", { text: "Transactions" }),
         duplicate ? null : el("dd", { text: String(p.transaction_count) }),
         el("dt", { text: "Read with" }), el("dd", { text: strategyLabel }),
+        p.new_card ? el("dt", { text: "Card" }) : null,
+        p.new_card ? el("dd", { text: p.new_card.bank + " " + p.new_card.card_type
+          + (p.new_card.nickname ? " \u2014 " + p.new_card.nickname : "") + " (new; created when you import)" }) : null,
         duplicate ? null : el("dt", { text: "Totals check" }),
         duplicate ? null : el("dd", {}, reconciliationBlock(p.reconciliation)),
       ]);

@@ -11466,3 +11466,117 @@ have got exactly one screen further and stopped.
 Chandra's browser walk of the Upload tab -- now including a locked
 statement from a bank outside the four -- then merge
 `feature/upload-ui` into `main`.
+
+## Session 112 — 2026-09-14
+
+### Goal
+A card entered during an upload is created only when the import is
+confirmed, atomically with its statement -- so backing out after a
+preview no longer leaves an orphan card.
+
+### What happened
+
+Branch `feature/upload-ui` at `20309ce`, clean.
+
+**This supersedes Session 97/101 behaviour; it is a change, not an
+addition.** Since Session 101 the zero-match form and the
+unrecognized screen's "create card" option called `POST /cards` the
+moment the form was submitted -- before preview, before reconciliation,
+before any decision to import -- and a preview that was then declined,
+abandoned, or lost to a closed tab left a card with no statements
+behind, with nothing to clean it up. From this session no card is
+written by the upload flow until `/upload/confirm` succeeds.
+
+**Storage.** `storage.cards.create_card()` split into
+`insert_card_row()` (the INSERT and the `CardAlreadyExistsError`
+collision rule, inside whatever transaction the caller holds) and the
+public wrapper that opens one. `storage.writes.insert_statement()`
+likewise split into `_insert_statement_rows()` and its wrapper (the
+dedup/foreign-key handling unchanged). On those two pieces,
+`insert_statement_with_new_card(conn, bank, card_type, nickname,
+period_start, period_end, transactions) -> (card_id, statement_id)`
+writes the card and the statement inside a single `with conn:` block:
+a nickname collision raises with nothing written; any failure while
+writing the rows rolls the card back. One INSERT per table in the
+codebase, as before. No dedup skip on this path -- a card that did not
+exist a moment ago cannot already hold the statement -- so a bad row
+raises rather than being swallowed.
+
+**Preview.** Takes exactly one of an existing `card_id` or a pending
+card -- multipart fields `new_bank`, `new_card_type`, optional
+`new_nickname` (stripped; blank nickname is null; both or neither is
+422 "Give exactly one of card_id or a new card"). `_card_for()` returns
+the card as a dict either way (id None when pending), so everything
+downstream -- registry lookup for the strategy, the `password_needed`
+body naming bank and key, the parser's `card_type` -- reads the same
+fields from either source, exactly as the brief describes. The
+duplicate check is skipped for a pending card, and a test plants the
+same period on another card of the same bank to prove it stays a
+`preview`. `PendingUpload` gained `new_card`; the response carries
+`card_id` (null when pending) and `new_card` (null when existing).
+
+**Confirm -- one deviation from the brief.** The brief asked confirm
+to take the same either/or as preview. It does not: `PendingUpload`
+has always bound the parsed statement to its card, and since this
+session it binds it to the pending details too, so confirm needs only
+`upload_id`, as before. Asking the client to resend the card would
+only create a way for confirm to disagree with the preview it is
+confirming (a different nickname, a different card) with no rule for
+which wins. For a pending card confirm calls
+`insert_statement_with_new_card`; a collision is 409 with
+`create_card`'s message and nothing written, and the preview stays
+held so the user can change the details and confirm again. The
+response gained `card_id` on both paths.
+
+**Frontend.** `startPreview()` takes a `cardRef` -- `{card_id}` or
+`{new_card: {bank, card_type, nickname}}` -- and sends the matching
+form fields; `createCardAndPreview()` no longer POSTs `/cards`, it
+builds a pending `cardRef`. Both former call sites (zero-match form,
+unrecognized screen's create form) go through it; matched, multi-match
+and the picked-existing-card path send `{card_id}` as before. The LLM
+blocked screen's retry buttons reuse the held `cardRef` (replacing the
+old `llmCardId`). The preview screen adds a "Card: … (new; created when
+you import)" line when the card is pending. `POST /cards` itself and
+`GET /cards?all=true` are unchanged and still there; the flow just no
+longer calls the former. `/cards` is now referenced from the tab only
+as the `all=true` picker fetch.
+
+**Tests** (`tests/test_upload_pending_card.py`, 19). Storage: the
+combined write creates both; a nickname collision writes nothing; a
+bad row rolls the card back; a simulated failure between the two
+inserts (monkeypatched `_insert_statement_rows`) leaves no card.
+Preview: a pending card creates nothing, blank nickname is null, the
+duplicate check does not fire, stripping and validation, exactly-one
+enforcement (neither and both are 422), `password_needed` names the
+pending card's bank and key, an unknown bank through best-effort,
+a bank without a parser on the detected strategy is 422. Confirm: card
+and statement appear together with the response's ids; a mismatch is
+still gated and declining leaves no card; a collision at confirm is
+409 with nothing written and the preview held; a simulated failure
+through the endpoint (`raise_server_exceptions=False`) is 500 with no
+orphan; two previews never confirmed leave nothing. Existing flows:
+an existing `card_id` previews and confirms as before, and an
+existing zero-statement card is still duplicate-checked. One existing
+test helper gained the new `PendingUpload` field. **763 passing**
+(744 + 19). Frontend: jsc parse OK; manual verification only, per the
+tab's pattern -- zero-match then cancel (no card in the picker),
+zero-match then import (card appears), a nickname collision at
+confirm.
+
+### Outcome
+Backing out of an upload at any point after entering card details
+leaves nothing behind; importing creates the card and its statement
+together or not at all.
+
+### In plain English
+Until now, typing in a new card's details during an upload created the
+card straight away -- even if the user then changed their mind and
+never imported anything, leaving an empty card in the list. The
+details are now only carried along with the preview, and the card is
+created at the moment the statement is saved, in one indivisible step:
+if saving fails for any reason, the card is not created either. Nothing
+else about which imports are allowed has changed.
+
+### Next steps
+Chandra's browser walk of the Upload tab, then merge
+`feature/upload-ui` into `main`.

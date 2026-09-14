@@ -1,4 +1,4 @@
-"""The web upload path (Sessions 97-103): a new entry point onto the CLI's
+"""The web upload path (Sessions 97-112): a new entry point onto the CLI's
 import pipeline, not a parallel one.
 
 Step 1, detection (`detect()`): read the PDF's first page
@@ -29,6 +29,15 @@ written. Step 3, confirm (`confirm()`): write the held statement through
 insert_statement(), the same atomic call the CLI makes, unless
 reconciliation failed and the caller did not explicitly override.
 
+A card can be pending rather than existing (Session 112): preview takes
+either an existing card_id or the details of a card to create -- bank,
+card_type, nickname -- and holds them with the parsed statement; confirm
+then creates the card and writes the statement as one atomic unit
+(storage.writes.insert_statement_with_new_card). Until Session 112 the
+zero-match form created the card immediately, before preview, and a
+preview that was never confirmed left an orphan card behind. A pending
+card skips the duplicate check: it has no statements to collide with.
+
 The preview cache is a module-level dict: this is a single-user app run as
 one process, so an in-process dict is the whole story -- no expiry, no
 persistence, no cross-worker sharing. A server restart empties it, and
@@ -50,7 +59,7 @@ from storage.cards import find_cards_for_type, get_card
 from storage.categories import suggest_categories_for_descriptions
 from storage.dates import to_date_str
 from storage.reads import find_statement
-from storage.writes import insert_statement
+from storage.writes import insert_statement, insert_statement_with_new_card
 
 
 class CardNotFoundError(Exception):
@@ -97,8 +106,13 @@ class Strategy(NamedTuple):
 STRATEGIES = ("detected", "best_effort", "llm_assist")
 
 
+class CardChoiceError(Exception):
+    """Neither, or both, of card_id and a new card's details were given."""
+
+
 class PendingUpload(NamedTuple):
-    card_id: int
+    card_id: "int | None"      # an existing card ...
+    new_card: "dict | None"    # ... or {bank, card_type, nickname} to create on confirm
     parsed: dict
     reconciliation: dict
 
@@ -197,12 +211,38 @@ def _password_needed(card: dict, error: PasswordNeededError) -> dict:
     }
 
 
+def _card_for(conn: sqlite3.Connection, card_id: "int | None", new_card: "dict | None") -> dict:
+    """The card a preview is for, as a dict with bank / card_type / id --
+    from the cards table for an existing card_id, or from the payload for a
+    pending one (id None). Exactly one of the two must be given."""
+    if (card_id is None) == (new_card is None):
+        raise CardChoiceError("Give exactly one of card_id or a new card (bank and card_type)")
+    if card_id is not None:
+        card = get_card(conn, card_id)
+        if card is None:
+            raise CardNotFoundError(f"No such card: {card_id}")
+        return card
+    bank = (new_card.get("bank") or "").strip()
+    card_type = (new_card.get("card_type") or "").strip()
+    nickname = (new_card.get("nickname") or "").strip() or None
+    if not bank or not card_type:
+        raise CardChoiceError("A new card needs both bank and card_type")
+    return {"id": None, "bank": bank, "card_type": card_type, "nickname": nickname}
+
+
 def preview(
-    conn: sqlite3.Connection, pdf_path: str, card_id: int, strategy: str = "detected"
+    conn: sqlite3.Connection,
+    pdf_path: str,
+    card_id: "int | None" = None,
+    strategy: str = "detected",
+    new_card: "dict | None" = None,
 ) -> dict:
-    card = get_card(conn, card_id)
-    if card is None:
-        raise CardNotFoundError(f"No such card: {card_id}")
+    card = _card_for(conn, card_id, new_card)
+    pending_card = (
+        None
+        if card["id"] is not None
+        else {"bank": card["bank"], "card_type": card["card_type"], "nickname": card["nickname"]}
+    )
     chosen = _strategy_for(card, strategy)
 
     try:
@@ -226,11 +266,12 @@ def preview(
     if period_start is None or period_end is None:
         raise StatementPeriodError("Could not read the statement period from this PDF")
 
-    existing = find_statement(conn, card_id, period_start, period_end)
+    # A pending card has no statements yet, so nothing to collide with.
+    existing = None if pending_card else find_statement(conn, card["id"], period_start, period_end)
     if existing is not None:
         return {
             "status": "duplicate",
-            "card_id": card_id,
+            "card_id": card["id"],
             "statement_id": existing["id"],
             "period_start": to_date_str(period_start),
             "period_end": to_date_str(period_end),
@@ -242,11 +283,14 @@ def preview(
         summary.get(chosen.summary_credit_key),
     )
     upload_id = uuid.uuid4().hex
-    PREVIEWS[upload_id] = PendingUpload(card_id=card_id, parsed=parsed, reconciliation=reconciliation)
+    PREVIEWS[upload_id] = PendingUpload(
+        card_id=card["id"], new_card=pending_card, parsed=parsed, reconciliation=reconciliation
+    )
     return {
         "status": "preview",
         "upload_id": upload_id,
-        "card_id": card_id,
+        "card_id": card["id"],
+        "new_card": pending_card,
         "strategy": strategy,
         "period_start": to_date_str(period_start),
         "period_end": to_date_str(period_end),
@@ -265,16 +309,34 @@ def confirm(conn: sqlite3.Connection, upload_id: str, override_reconciliation: b
             "set override_reconciliation to import anyway"
         )
 
-    statement_id = insert_statement(conn, *from_parsed_statement(pending.parsed, card_id=pending.card_id))
-    if statement_id is None:
-        # The preview ran the duplicate check, so this only happens if the
-        # same statement was imported between preview and confirm (say, by
-        # the CLI). Drop the stale preview: it can never be confirmed.
-        PREVIEWS.pop(upload_id, None)
-        raise DuplicateStatementError("This statement was already imported for this card")
+    if pending.new_card is not None:
+        # Card and statement in one transaction (Session 112). A nickname
+        # collision (CardAlreadyExistsError) or a bad row leaves nothing
+        # behind and the preview stays held, so the user can change the
+        # details and confirm again.
+        new = pending.new_card
+        _, _, _, rows = from_parsed_statement(pending.parsed, card_id=0)
+        card_id, statement_id = insert_statement_with_new_card(
+            conn, new["bank"], new["card_type"], new["nickname"],
+            pending.parsed["period_start"], pending.parsed["period_end"], rows,
+        )
+    else:
+        card_id = pending.card_id
+        statement_id = insert_statement(conn, *from_parsed_statement(pending.parsed, card_id=card_id))
+        if statement_id is None:
+            # The preview ran the duplicate check, so this only happens if
+            # the same statement was imported between preview and confirm
+            # (say, by the CLI). Drop the stale preview: it can never be
+            # confirmed.
+            PREVIEWS.pop(upload_id, None)
+            raise DuplicateStatementError("This statement was already imported for this card")
 
     PREVIEWS.pop(upload_id, None)
-    return {"statement_id": statement_id, "transaction_count": len(pending.parsed["transactions"])}
+    return {
+        "statement_id": statement_id,
+        "card_id": card_id,
+        "transaction_count": len(pending.parsed["transactions"]),
+    }
 
 
 # --- preview detail (Session 103) --------------------------------------------

@@ -10,21 +10,33 @@ class CardAlreadyExistsError(Exception):
     """
 
 
-def create_card(
+def insert_card_row(
     conn: sqlite3.Connection, bank: str, card_type: str, nickname: "str | None" = None
 ) -> int:
+    """The INSERT alone, inside whatever transaction the caller holds.
+
+    Split out of create_card() in Session 112 so the upload confirm can
+    create a card and its first statement as one atomic write
+    (storage.writes.insert_statement_with_new_card) without a second copy
+    of this statement or its collision rule.
+    """
     try:
-        with conn:
-            cursor = conn.execute(
-                "INSERT INTO cards (bank, card_type, nickname) VALUES (?, ?, ?)",
-                (bank, card_type, nickname),
-            )
+        cursor = conn.execute(
+            "INSERT INTO cards (bank, card_type, nickname) VALUES (?, ?, ?)",
+            (bank, card_type, nickname),
+        )
     except sqlite3.IntegrityError as e:
         raise CardAlreadyExistsError(
             f"Card already exists: bank={bank!r}, card_type={card_type!r}, nickname={nickname!r}"
         ) from e
-
     return cursor.lastrowid
+
+
+def create_card(
+    conn: sqlite3.Connection, bank: str, card_type: str, nickname: "str | None" = None
+) -> int:
+    with conn:
+        return insert_card_row(conn, bank, card_type, nickname)
 
 
 def get_card(conn: sqlite3.Connection, card_id: int) -> "dict | None":

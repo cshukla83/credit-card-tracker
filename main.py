@@ -35,6 +35,7 @@ from storage.categories import (
 )
 from storage.db import get_connection, init_db
 from storage.upload import (
+    CardChoiceError,
     CardNotFoundError,
     DuplicateStatementError,
     PreviewExpiredError,
@@ -578,24 +579,34 @@ def upload_detect(file: UploadFile = File(...), conn=Depends(get_db)):
 @app.post("/upload/preview")
 def upload_preview(
     file: UploadFile = File(...),
-    card_id: int = Form(...),
+    card_id: int | None = Form(None),
+    new_bank: str | None = Form(None),
+    new_card_type: str | None = Form(None),
+    new_nickname: str | None = Form(None),
     strategy: str = "detected",
     conn=Depends(get_db),
 ):
-    # The PDF is re-sent with the resolved card_id rather than held from
+    # The PDF is re-sent with the resolved card rather than held from
     # /upload/detect: detect keeps nothing, so a page reload between the two
-    # steps costs nothing but the second upload. `strategy` (query param,
-    # Session 99) picks the parser: the card's bank by default, or
-    # best_effort for a format detect did not recognise.
+    # steps costs nothing but the second upload. The card is either an
+    # existing `card_id` or, since Session 112, a card to create on confirm
+    # given as `new_bank` / `new_card_type` / optional `new_nickname` --
+    # exactly one of the two. `strategy` (query param, Session 99) picks the
+    # parser: the card's bank by default, or best_effort / llm_assist for a
+    # format detect did not recognise.
+    new_card = None
+    if new_bank is not None or new_card_type is not None or new_nickname is not None:
+        new_card = {"bank": new_bank, "card_type": new_card_type, "nickname": new_nickname}
     try:
         return _with_uploaded_pdf(
-            file, lambda path: preview_upload(conn, path, card_id, strategy=strategy)
+            file,
+            lambda path: preview_upload(conn, path, card_id, strategy=strategy, new_card=new_card),
         )
     except NotAPdfError as e:
         raise HTTPException(status_code=422, detail=f"Could not read the file as a PDF: {e}")
     except CardNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except (UnsupportedCardError, StatementPeriodError, UnknownStrategyError) as e:
+    except (CardChoiceError, UnsupportedCardError, StatementPeriodError, UnknownStrategyError) as e:
         raise HTTPException(status_code=422, detail=str(e))
 
 
@@ -613,6 +624,10 @@ def upload_confirm(body: UploadConfirm, conn=Depends(get_db)):
     except ReconciliationBlockedError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except DuplicateStatementError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except CardAlreadyExistsError as e:
+        # A pending card's nickname collided at write time (Session 112);
+        # nothing was written and the preview is still held.
         raise HTTPException(status_code=409, detail=str(e))
 
 

@@ -56,7 +56,7 @@ def _row(day, description, amount=10.0, txn_type="debit"):
 def _hold(rows, card_id=1, upload_id="held"):
     parsed = {"period_start": date(2026, 1, 1), "period_end": date(2026, 1, 31), "transactions": rows}
     upload_module.PREVIEWS[upload_id] = PendingUpload(
-        card_id=card_id, parsed=parsed, reconciliation={"status": "match"}
+        card_id=card_id, new_card=None, parsed=parsed, reconciliation={"status": "match"}
     )
     return upload_id
 
