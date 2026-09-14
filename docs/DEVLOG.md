@@ -11327,3 +11327,55 @@ explanation.
 ### Next steps
 Chandra's browser walk of the Upload tab, then merge
 `feature/upload-ui` into `main`.
+
+## Session 110 — 2026-09-14
+
+### Goal
+"Retry" and "Upload another file" on both password-needed screens.
+
+### What happened
+Branch `feature/upload-ui` at `8c82ee9`, clean.
+
+`renderPasswordNeeded()` in `static/index.html` renders both branches
+(unknown-bank and bank-known) with one shared action row; that row
+had a single "Choose another file". It now has two buttons beneath the
+unchanged message:
+
+- **Retry** -- calls `takeFiles([upload.file])`, the exact function a
+  fresh drop or pick goes through: it posts the held `File` to
+  `/upload/detect` and routes on the reply's `status` -- `matched`
+  straight into preview, `zero_match` / `multi_match` /
+  `unrecognized` to their screens, `password_needed` back to this one
+  (a still-wrong password is not swallowed; the reply is rendered as
+  whatever it is). The file is the `File` object the browser has held
+  in `upload.file` since the original selection; nothing is kept
+  server-side, and `/upload/detect` still caches nothing. While the
+  request is in flight `upload.busy` is set, so every button on the
+  screen is disabled (the existing rule) and the label reads
+  "Retrying…"; the label reverts on any reply. A transport failure
+  lands in `upload.error` -- the screen had no error line before, so
+  one was added, otherwise a failed retry would have shown nothing.
+- **Upload another file** -- `resetUpload()`, the existing state reset
+  to the empty drop zone; the held file reference is dropped with the
+  rest of the state. No request.
+
+Script parsed under jsc: syntax OK. **Manual verification only, per
+the tab's pattern**: wrong password -> Retry -> same screen again;
+password corrected and server restarted -> Retry -> preview; "Upload
+another file" -> drop zone.
+
+### Outcome
+A locked-file dead end now has a retry that does not need the file
+picked again, and a way out to a different file.
+
+### In plain English
+When a statement is locked and the app asks for its password, the user
+no longer has to find and drop the file again after fixing the
+settings: a "Retry" button sends the same file through once more, and
+whatever the app finds this time -- it opens, it still doesn't, or it
+turns out to be something else -- is shown as it is. "Upload another
+file" goes back to the start for a different statement.
+
+### Next steps
+Chandra's browser walk of the Upload tab, then merge
+`feature/upload-ui` into `main`.

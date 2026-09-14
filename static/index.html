@@ -4270,6 +4270,7 @@
       return [
         el("h2", { text: "Password needed" }),
         fileLine(),
+        errorLine(),
         known
           ? el("p", {}, ["This ", el("strong", { text: d.bank + " " + d.card_type }),
               " statement is password-protected and the password on file does not open it. Add or correct ",
@@ -4279,7 +4280,15 @@
           // it may not even be from a known bank -- no per-bank guidance.
           : el("p", { text: "Unknown File Password. Please update password in .env, restart the server, and retry." }),
         el("p", { class: "muted", text: "Nothing was read from the file; no partial import was attempted." }),
-        el("div", { class: "upload-actions" }, [startOverButton()]),
+        // Session 110: Retry resends the File the browser already holds
+        // through the fresh-upload path (detect, then whatever the reply
+        // says: matched -> preview, zero/multi-match, unrecognized, or this
+        // screen again). Nothing is kept server-side. Buttons are disabled
+        // while the request is in flight, like every other action here.
+        el("div", { class: "upload-actions" }, [
+          uploadButton(upload.busy ? "Retrying\u2026" : "Retry", () => takeFiles([upload.file]), { primary: true }),
+          uploadButton("Upload another file", resetUpload),
+        ]),
       ];
     }
 
