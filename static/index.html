@@ -4277,7 +4277,7 @@
               ", restart the server, and upload the file again."])
           // Bank unknown (Session 108): a locked file identifies nothing, so
           // it may not even be from a known bank -- no per-bank guidance.
-          : el("p", { text: "Unknown File Password. Please update password in .env and retry" }),
+          : el("p", { text: "Unknown File Password. Please update password in .env, restart the server, and retry." }),
         el("p", { class: "muted", text: "Nothing was read from the file; no partial import was attempted." }),
         el("div", { class: "upload-actions" }, [startOverButton()]),
       ];

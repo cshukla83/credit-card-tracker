@@ -11281,3 +11281,49 @@ password, update it and retry", which is all that is actually known.
 ### Next steps
 Chandra's browser walk of the Upload tab, then merge
 `feature/upload-ui` into `main`.
+
+## Session 109 — 2026-09-14
+
+### Goal
+Make sure both password-needed messages tell the user to restart the
+server after editing `.env`.
+
+### What happened
+Branch `feature/upload-ui` at `0c88fbb`, clean (Sessions 103–108 were
+already committed and were not re-run). The premise checked rather
+than assumed: `load_dotenv()` runs once at module import (`storage/db.py`,
+`parsers/detect.py`), and the passwords are read from `os.environ` at
+call time -- so an edited `.env` is not seen until the process
+restarts, and a retry without one fails again for no visible reason.
+
+Both branches live in `renderPasswordNeeded()` in `static/index.html`
+(Session 108's finding: the backend sends no message text).
+
+1. **Unknown-bank branch** (detect could open nothing) -- now exactly:
+   > Unknown File Password. Please update password in .env, restart the server, and retry.
+
+2. **Bank-known branch** (preview on a resolved card whose password
+   fails) -- already carried the instruction, so it is unchanged. Its
+   text, before and after, rendered with a bank, card type and key:
+   > This **HDFC Diners** statement is password-protected and the password on file does not open it. Add or correct `HDFC_SAMPLE_PASSWORD` in `.env`, restart the server, and upload the file again.
+
+   ("HDFC Diners" and the key are the response's `bank`, `card_type`
+   and `password_env_key`; the sentence is the same for any bank.)
+
+The two remain different messages, as the brief allows. Behaviour
+unchanged. Script parsed under jsc: syntax OK. Manual verification
+only, per the tab's pattern.
+
+### Outcome
+Both password messages say to restart after editing `.env`.
+
+### In plain English
+When a locked statement needs a password added to the settings file,
+the app now reminds the user in both versions of that message to
+restart the server afterwards -- without that step the new password
+would not be picked up and the retry would fail again with no
+explanation.
+
+### Next steps
+Chandra's browser walk of the Upload tab, then merge
+`feature/upload-ui` into `main`.
