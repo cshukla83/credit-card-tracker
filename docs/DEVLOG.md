@@ -11123,3 +11123,29 @@ allowed have not changed at all.
 ### Next steps
 Sessions 104–107: four small copy and ordering changes on the tab.
 Then Chandra's browser walk, then merge.
+
+## Session 104 — 2026-09-14
+
+### Goal
+Put the Upload tab first in the tab bar.
+
+### What happened
+Branch `feature/upload-ui` at `238fa53`, clean. The tab bar is five
+`<button>`s in `#tabs` in `static/index.html`; the Upload button moved
+from last to first. New order: Upload, All transactions, Review &
+assign, Reviewed, Dashboard. Nothing else moved: `setTab`, the
+`?tab=` URL handling, the default tab on load (still "all" -- the
+`class="active"` stays on that button), and every panel are as they
+were; the buttons are found by id, not position. **Manual verification
+only, per the tab's pattern**: the order has not been seen rendered.
+
+### Outcome
+Upload is the first tab. Default tab and behaviour unchanged.
+
+### In plain English
+The Upload tab now sits first in the row of tabs, since importing a
+statement is where a session starts. Opening the app still lands on
+the transactions list as before.
+
+### Next steps
+Session 105: the preview screen's heading.
