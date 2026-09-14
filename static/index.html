@@ -4045,7 +4045,7 @@
       const files = Array.from(fileList || []);
       if (files.length === 0) return;
       if (files.length > 1) {
-        upload.error = "One statement at a time: " + files.length + " files were given. Drop or pick a single PDF.";
+        upload.error = "Please upload one statement at a time.";
         renderUpload();
         return;
       }

@@ -11203,3 +11203,34 @@ explanation. What it does -- refusing the repeat -- has not changed.
 
 ### Next steps
 Session 107: the multi-file message.
+
+## Session 107 — 2026-09-14
+
+### Goal
+Shorten the multi-file refusal message on the Upload tab.
+
+### What happened
+Branch `feature/upload-ui` at `3102d9d`, clean. The check and its text
+live only in the frontend -- `takeFiles()` refuses a drop or pick of
+more than one file before anything is sent, so the backend never sees
+a second file and has no message for it. The one string changed, from
+"One statement at a time: N files were given. Drop or pick a single
+PDF." to "Please upload one statement at a time." The file count is
+gone from the copy; the refusal itself (nothing uploaded, the empty
+screen stays with the message inline) is unchanged. Script parsed
+under jsc after Sessions 104–107's edits: syntax OK; suite still
+**737 passing** (no backend change in any of the four). Manual
+verification only, per the tab's pattern.
+
+### Outcome
+A shorter multi-file message; the same refusal.
+
+### In plain English
+Dropping several files at once still gets turned down, now with a
+one-line request to upload one statement at a time instead of a
+sentence counting the files.
+
+### Next steps
+Chandra's browser walk of the Upload tab -- now covering the row-level
+preview popup (Session 103) and these four copy/order changes -- then
+merge `feature/upload-ui` into `main`.
