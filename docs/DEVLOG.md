@@ -11174,3 +11174,32 @@ is for in its title -- previewing and importing -- instead of just
 
 ### Next steps
 Session 106: the duplicate-statement message.
+
+## Session 106 — 2026-09-14
+
+### Goal
+Shorten the duplicate-statement message on the Upload tab.
+
+### What happened
+Branch `feature/upload-ui` at `40d131d`, clean. The text originates in
+the frontend -- the backend's `duplicate` response carries only
+`status`, `card_id`, `statement_id` and the period (Session 98), no
+message -- so it changed in `renderPreview()` alone, at its one source.
+It now reads "Statement for period <start> → <end> already uploaded.
+Please choose another statement", with the period still templated from
+the response's `period_start` / `period_end`. The statement-number
+reference and the "no override" sentence are gone from the copy;
+the behaviour -- import disabled, no override path, no row-level
+preview (Session 103) -- is exactly as it was. Manual verification only,
+per the tab's pattern.
+
+### Outcome
+A shorter duplicate message; the same block underneath it.
+
+### In plain English
+When a statement has already been imported, the app now says so in one
+short line and asks for a different file, instead of a longer
+explanation. What it does -- refusing the repeat -- has not changed.
+
+### Next steps
+Session 107: the multi-file message.

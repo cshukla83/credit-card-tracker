@@ -4481,8 +4481,8 @@
         el("h2", { text: duplicate ? "Already imported" : "Preview & Import Statement" }),
         fileLine(),
         duplicate
-          ? el("p", {}, ["A statement for this card covering ", el("strong", { text: p.period_start + " → " + p.period_end }),
-              " is already in the tracker (statement #" + p.statement_id + "). The same statement cannot be imported twice; there is no override for this."])
+          ? el("p", {}, ["Statement for period ", el("strong", { text: p.period_start + " → " + p.period_end }),
+              " already uploaded. Please choose another statement"])
           : matched
             ? el("p", { class: "muted", text: "Nothing has been saved yet. The debits and credits read from the statement add up to the totals it prints." })
             : el("p", { class: "muted", text: "Nothing has been saved yet. The totals read from the statement do not match what it prints, so importing is off by default." }),
