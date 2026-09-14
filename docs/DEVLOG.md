@@ -10728,3 +10728,96 @@ with `strategy=llm_assist` against the running server -- the key is
 already in `.env`, so no edit is needed first; the default model name
 has still never been exercised live from this codebase (Session 68's
 note stands). Then Session 101 (prompt Session 5): the Upload tab.
+
+## Verification pass — 2026-09-14 (one-time exception; not a numbered session)
+
+### Goal
+Exercise Module 1's upload endpoints (Sessions 97–100) against a
+running server, and the LLM-assisted path against the live model for
+the first time. **This was a verification pass run by Claude Code
+under an explicit, one-time authorization from Chandra** -- a
+deliberate exception to CONVENTIONS.md's "Claude Code builds, Chandra
+verifies" rule, granted for this occasion only and written into the
+conventions as such below. No build work.
+
+### What happened
+
+Branch `feature/upload-ui` at `2e31281`, clean.
+
+**Where the server ran.** The exception covered `uvicorn`, `curl`, and
+`pip install`; it did not mention `data/tracker.db`, and step 2's
+confirm writes statements. So the server ran against a fresh
+scratchpad database via `DB_PATH` -- Session 93's precedent for the
+headless driver -- with one card per bank created through `POST
+/cards` at the start. That also gave each bank exactly one card, the
+condition for detect to report `matched`. `data/tracker.db` was not
+opened; its modification time (09:35 today) predates the pass.
+
+1. `pip install -r requirements.txt`: `python-multipart` already
+   present from Session 97; nothing else changed.
+2. One sample per bank (the first sample of each), through
+   `POST /upload/detect` -> `POST /upload/preview` -> `POST
+   /upload/confirm`, driven by a small stdlib script (multipart built
+   by hand, statuses and counts checked, every response type-checked
+   before use per the Verification Tooling note). Counts and deltas
+   only:
+
+   | Bank | detect | preview rows | period | debit Δ | credit Δ | confirm |
+   |---|---|---|---|---|---|---|
+   | HDFC | matched | 26 | 2026-06-17..07-16 | 0.0 | 0.0 | statement 1, 26 rows |
+   | ICICI | matched | 18 | 2026-03-17..04-16 | 0.0 | 0.0 | statement 2, 18 rows |
+   | SBI | matched | 22 | 2026-02-17..03-16 | 0.0 | 0.0 | statement 3, 22 rows |
+   | IndusInd | matched | 7 | 2025-12-16..01-15 | 0.0 | 0.0 | statement 4, 7 rows |
+
+   Every reconciliation `match`, both sides, delta 0.0; every confirm
+   count equal to its preview count; the row counts equal the ones the
+   DEVLOG has recorded for these four files since Sessions 8, 30, 33
+   and 35. Re-previewing each file after its confirm returned
+   `duplicate` -- the hard stop, for free.
+3. `POST /upload/preview?strategy=llm_assist` on the SBI sample. **The
+   first attempt returned `{"status": "llm_failed", "reason": "model
+   call failed: HTTPStatusError"}`.** Per the pause condition no
+   pipeline code was touched; the failure was diagnosed instead. The
+   key is valid and `GEMINI_MODEL` is set in `.env` to a model that
+   answers a trivial prompt with 200 and appears in the key's own
+   `models` listing (the module's *default*, `gemini-1.5-flash`, is not
+   in that listing -- so the default would fail; it is the env value
+   that resolves). The app's exact call, reproduced directly, then
+   succeeded: 22 rows -- the same count as the hand-built parser --
+   period read, both printed totals found. Through the server again:
+   `preview`, 22 rows, same period, reconciliation `match` on both
+   sides at delta 0.0, confirm wrote statement 5 with 22 rows. The
+   first failure was therefore transient on the provider's side. One
+   gap it exposed, recorded not fixed: `llm_failed.reason` carries the
+   exception's type only, so a transient 429/503 reads the same as a
+   rejected request; the HTTP status belongs in that reason.
+4. CONVENTIONS.md: the "Verification exceptions are one-time, never
+   standing" bullet, directly after "Claude Code builds, Chandra
+   verifies", in the words supplied.
+5. This entry.
+
+### Outcome
+All four banks' upload paths work against a running server exactly as
+the suite said they would; the LLM path works live and reconciles on
+a real statement. Two findings for later: the LLM module's default
+model name is not callable with this key (the env override is what
+works), and a failed model call does not report its HTTP status.
+
+### In plain English
+For once, the checks against a running copy of the app were run by
+Claude Code itself, with explicit permission for this one occasion --
+on a throwaway copy of the database, never the real one. Every bank's
+statement went through the full upload path -- recognised, previewed,
+totals matching to the paisa, saved -- and trying the same file again
+was correctly refused as already imported. The AI-assisted reading was
+tried against the real model for the first time: the first call failed
+on the provider's side, the next went through and read the statement
+exactly as well as the hand-built reader. The permission was recorded
+as one-time only, so the usual rule -- Chandra does the live checks --
+stands for everything after this.
+
+### Next steps
+Session 101: the Upload tab. Separately scoped, not folded in here:
+put the HTTP status into `llm_failed.reason`; decide whether the
+module's default model name should change or whether `GEMINI_MODEL`
+being required is the convention (it is set locally either way).

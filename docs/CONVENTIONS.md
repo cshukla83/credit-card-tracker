@@ -180,6 +180,13 @@ The discipline this project is built under, session after session:
   never by Claude Code. Claude Code does not start `uvicorn`, does not run
   `curl` against a live endpoint, and does not touch `data/tracker.db`
   unless a prompt explicitly says otherwise for a specific, scoped reason.
+- **Verification exceptions are one-time, never standing.** Chandra
+  may explicitly authorize Claude Code to run live-server verification
+  (starting `uvicorn`, running `curl`, installing dependencies) for a
+  specific session, as happened for Module 1's upload-endpoint
+  verification. This authorization does not carry forward — every
+  future instance requires Chandra's explicit approval at the time it
+  comes up, regardless of what was granted previously.
 - **Documentation is never a separate step.** Every prompt that makes real
   build progress updates `docs/DEVLOG.md` in the same session. There is no
   such thing as "code now, document later."
