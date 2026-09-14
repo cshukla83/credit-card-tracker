@@ -268,6 +268,24 @@ def suggest_category(conn: sqlite3.Connection, transaction_id: int) -> dict:
     return _suggest_from(targets[transaction_id], _fetch_labeled(conn))
 
 
+def suggest_categories_for_descriptions(
+    conn: sqlite3.Connection, descriptions: "list[str]"
+) -> "list[dict]":
+    """The category engine over descriptions that are NOT in the database.
+
+    For the upload preview (Session 103): the parsed rows have no
+    transaction id yet, so `suggest_category` -- which fetches its target by
+    id -- cannot run on them. This runs the same two-tier engine
+    (`_suggest_category_from`) over the same labelled rows, fetched once for
+    the whole list, with no target to exclude (target_id None matches no
+    row). Read-only; nothing is written and nothing is cached. Returns one
+    {"value", "confidence", "match_type"} per description, in order --
+    match_type "none" where the engine has nothing to say.
+    """
+    labeled = _fetch_labeled(conn)
+    return [_suggest_category_from(None, description, labeled) for description in descriptions]
+
+
 def suggest_categories(conn: sqlite3.Connection, transaction_ids: "list[int]") -> "list[dict]":
     """Suggestions for each listed transaction, in input order.
 

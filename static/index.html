@@ -633,6 +633,25 @@
   table.recon-detail td.num { text-align: right; font-variant-numeric: tabular-nums; }
   table.recon-detail td.off { color: var(--danger); font-weight: 600; }
   .upload-error { margin-bottom: 0.9rem; }
+  /* row-level preview popup (Session 103) */
+  .modal.wide { max-width: 46rem; }
+  .modal-body { max-height: 55vh; overflow: auto; margin: 0 0 1.1rem; }
+  table.preview-rows { width: 100%; font-size: 0.9rem; border-collapse: collapse; }
+  table.preview-rows th, table.preview-rows td {
+    padding: 0.35rem 0.6rem;
+    border-bottom: 1px solid var(--rule);
+    text-align: left;
+    white-space: nowrap;
+  }
+  table.preview-rows td.desc { white-space: normal; }
+  table.preview-rows td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  table.preview-rows tbody tr:hover { background: var(--hover); }
+  table.preview-rows tr.gap td { text-align: center; color: var(--muted); font-style: italic; }
+  .preview-breakdown h3 { font-size: 0.92rem; font-weight: 600; margin: 1rem 0 0.4rem; }
+  .preview-breakdown p.muted { color: var(--muted); font-size: 0.85rem; margin: 0 0 0.5rem; }
+  .preview-breakdown ul { list-style: none; margin: 0; padding: 0; columns: 2; column-gap: 1.5rem; }
+  .preview-breakdown li { display: flex; justify-content: space-between; gap: 1rem; padding: 0.2rem 0; font-size: 0.9rem; break-inside: avoid; }
+  .preview-breakdown li .count { color: var(--muted); font-variant-numeric: tabular-nums; }
 
   /* --- card payment cell ------------------------------------------------ */
   th.payment, td.payment {
@@ -1385,6 +1404,7 @@
          aria-labelledby="modal-title" aria-describedby="modal-message">
       <h2 id="modal-title" class="modal-title"></h2>
       <p id="modal-message" class="modal-message"></p>
+      <div id="modal-body" class="modal-body" style="display: none;"></div>
       <div class="modal-actions">
         <button type="button" id="modal-cancel" class="small">Cancel</button>
         <button type="button" id="modal-confirm" class="small primary">Confirm</button>
@@ -1798,6 +1818,8 @@
     const modalMessageEl = document.getElementById("modal-message");
     const modalCancelEl = document.getElementById("modal-cancel");
     const modalConfirmEl = document.getElementById("modal-confirm");
+    const modalBodyEl = document.getElementById("modal-body");
+    const modalEl = document.getElementById("modal");
     let modalResolve = null;
 
     function closeModal(result) {
@@ -1805,18 +1827,35 @@
       const resolve = modalResolve;
       modalResolve = null;
       modalOverlayEl.style.display = "none";
+      // Session 103 additions are reset here so the next yes/no caller
+      // gets the Session 62 modal unchanged.
+      modalBodyEl.replaceChildren();
+      modalBodyEl.style.display = "none";
+      modalCancelEl.style.display = "";
+      modalEl.classList.remove("wide");
       const opener = modalOverlayEl._opener;
       modalOverlayEl._opener = null;
       if (opener && typeof opener.focus === "function") opener.focus();
       resolve(result);
     }
 
-    function showModal({ title, message, confirmLabel, cancelLabel }) {
+    // `body` (Session 103): an optional element shown between the message
+    // and the buttons -- the row-level upload preview uses it for a table.
+    // `cancelLabel: null` hides the cancel button (a single "Close"); `wide`
+    // widens the dialog. Both are undone in closeModal().
+    function showModal({ title, message, confirmLabel, cancelLabel, body, wide }) {
       if (modalResolve) return Promise.resolve(false);
       modalTitleEl.textContent = title || "Confirm";
-      modalMessageEl.textContent = message;
+      modalMessageEl.textContent = message || "";
+      modalMessageEl.style.display = message ? "" : "none";
       modalConfirmEl.textContent = confirmLabel || "Confirm";
       modalCancelEl.textContent = cancelLabel || "Cancel";
+      modalCancelEl.style.display = cancelLabel === null ? "none" : "";
+      if (body) {
+        modalBodyEl.replaceChildren(body);
+        modalBodyEl.style.display = "";
+      }
+      modalEl.classList.toggle("wide", Boolean(wide));
       modalOverlayEl._opener = document.activeElement;
       modalOverlayEl.style.display = "";
       modalConfirmEl.focus();
@@ -3973,6 +4012,7 @@
       allCards: [],       // GET /cards?all=true, for the unrecognized screen
       chosenCardId: "",   // unrecognized screen's picker
       showDetail: false,  // reconciliation detail expanded
+      rowsSeen: false,    // the row-level preview has been opened and closed (Session 103)
       busy: false,
       error: "",
     };
@@ -3981,7 +4021,7 @@
       Object.assign(upload, {
         step: "empty", file: null, detect: null, preview: null, result: null,
         strategy: "detected", llm: null, chosenCardId: "", showDetail: false,
-        busy: false, error: "",
+        rowsSeen: false, busy: false, error: "",
       });
       renderUpload();
     }
@@ -4038,6 +4078,7 @@
       upload.busy = true;
       upload.strategy = strategy;
       upload.showDetail = false;
+      upload.rowsSeen = false;
       upload.error = "";
       renderUpload();
       const url = "/upload/preview" + (strategy === "detected" ? "" : "?strategy=" + encodeURIComponent(strategy));
@@ -4334,6 +4375,71 @@
       return [toggle, table];
     }
 
+    // The row-level preview (Session 103): first and last rows plus what the
+    // category engine would suggest -- suggested, not assigned. Opened from
+    // the preview screen; the import controls appear once it has been
+    // closed. Their state (match / mismatch / duplicate) is computed exactly
+    // as before; only their visibility is gated.
+    function rowsTable(detail) {
+      const cell = (tag, text, cls) => el(tag, cls ? { class: cls, text } : { text });
+      const rowEl = (r) => el("tr", {}, [
+        cell("td", r.date), cell("td", r.description, "desc"), cell("td", fmtAmount(r.amount), "num"), cell("td", r.type),
+      ]);
+      const total = detail.total_rows;
+      const start = detail.sample_start, end = detail.sample_end;
+      const body = [];
+      if (total <= start.length + end.length) {
+        // Short statement: the two samples overlap or cover it; show each row once.
+        const overlap = start.length + end.length - total;
+        for (const r of start) body.push(rowEl(r));
+        for (const r of end.slice(overlap)) body.push(rowEl(r));
+      } else {
+        for (const r of start) body.push(rowEl(r));
+        body.push(el("tr", { class: "gap" }, [el("td", { colspan: "4", text: "\u2026 " + (total - start.length - end.length) + " more rows \u2026" })]));
+        for (const r of end) body.push(rowEl(r));
+      }
+      return el("table", { class: "preview-rows" }, [
+        el("thead", {}, [el("tr", {}, [cell("th", "date"), cell("th", "description"), cell("th", "amount", "num"), cell("th", "type")])]),
+        el("tbody", {}, body),
+      ]);
+    }
+
+    function breakdownList(detail) {
+      return el("div", { class: "preview-breakdown" }, [
+        el("h3", { text: "Suggested category breakdown (not yet assigned)" }),
+        el("p", { class: "muted", text: "What the category engine would suggest for each of the " + detail.total_rows +
+          " rows from your existing labels. Nothing is assigned until you review the rows." }),
+        el("ul", {}, detail.category_breakdown.map((b) => el("li", {}, [
+          el("span", { text: b.category }), el("span", { class: "count", text: String(b.count) }),
+        ]))),
+      ]);
+    }
+
+    function showRowsPreview() {
+      const p = upload.preview;
+      upload.busy = true;
+      upload.error = "";
+      renderUpload();
+      fetchJSON("/upload/" + encodeURIComponent(p.upload_id) + "/preview-detail")
+        .then((detail) => {
+          upload.busy = false;
+          renderUpload();
+          return showModal({
+            title: "Statement rows",
+            message: detail.total_rows + " transactions, " + p.period_start + " \u2192 " + p.period_end + ". Nothing is saved yet.",
+            body: el("div", {}, [rowsTable(detail), breakdownList(detail)]),
+            confirmLabel: "Close Preview",
+            cancelLabel: null,
+            wide: true,
+          });
+        })
+        .then(() => {
+          upload.rowsSeen = true;
+          renderUpload();
+        })
+        .catch(uploadFail);
+    }
+
     function renderPreview() {
       const p = upload.preview;
       const duplicate = p.status === "duplicate";
@@ -4348,8 +4454,15 @@
         duplicate ? null : el("dd", {}, reconciliationBlock(p.reconciliation)),
       ]);
       const actions = [];
+      // A duplicate holds no rows server-side (nothing was cached), so there
+      // is nothing to show; its blocked control stays visible as before.
+      // Otherwise the import controls wait until the rows have been looked
+      // at once (Session 103); "Show Preview" stays alongside them after.
+      if (!duplicate) actions.push(uploadButton("Show Preview", showRowsPreview, { primary: !upload.rowsSeen }));
       if (duplicate) {
         actions.push(uploadButton("Import", () => {}, { primary: true, disabled: true }));
+      } else if (!upload.rowsSeen) {
+        // import controls hidden until the row-level preview has been closed once
       } else if (matched) {
         actions.push(uploadButton("Import " + p.transaction_count + " transactions", () => confirmUpload(false), { primary: true }));
       } else {

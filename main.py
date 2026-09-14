@@ -45,6 +45,7 @@ from storage.upload import (
     confirm as confirm_upload,
     detect as detect_upload,
     preview as preview_upload,
+    preview_detail as preview_detail_upload,
 )
 from storage.reads import (
     ReviewStatusError,
@@ -613,3 +614,16 @@ def upload_confirm(body: UploadConfirm, conn=Depends(get_db)):
         raise HTTPException(status_code=422, detail=str(e))
     except DuplicateStatementError as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+
+# --- upload preview detail (Session 103) --------------------------------------
+
+
+@app.get("/upload/{upload_id}/preview-detail")
+def upload_preview_detail(upload_id: str, conn=Depends(get_db)):
+    # Read-only look at a held preview; the same 410 as confirm when the
+    # preview is gone.
+    try:
+        return preview_detail_upload(conn, upload_id)
+    except PreviewExpiredError as e:
+        raise HTTPException(status_code=410, detail=str(e))

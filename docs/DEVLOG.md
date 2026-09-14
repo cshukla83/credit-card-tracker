@@ -11023,3 +11023,103 @@ commentary, which share the setting.
 ### Next steps
 Chandra's browser walk of the Upload tab, then merge `feature/upload-ui`
 into `main`. Nothing further on Module 1.
+
+## Session 103 — 2026-09-14
+
+### Goal
+A row-level look at a parsed statement before it is imported: a
+read-only detail endpoint over the held preview, and a popup on the
+Upload tab's preview screen that gates the import controls behind
+having looked once. No change to the import / override / duplicate
+logic underneath.
+
+### What happened
+
+Branch `feature/upload-ui` at `bf33d7c`, clean.
+
+**Scope note on the category breakdown.** The brief asked for
+`storage.categories.suggest_category()` run read-only over every parsed
+row. That function takes a *transaction id* and fetches its target from
+the database; the rows in the preview cache are not in the database
+yet and have no id, so it cannot run on them as written. The engine
+itself -- `_suggest_category_from(target_id, description, labeled)`,
+the two tiers over the labelled rows -- works from a description, so a
+small public wrapper, `suggest_categories_for_descriptions(conn,
+descriptions)`, fetches the labelled rows once and runs that engine
+per description with no target to exclude (a `None` id matches no
+row). Same engine, same tiers, same labelled set; nothing written,
+nothing cached. **Scope matched the brief on the other axis:** the
+breakdown runs over the whole statement, not the samples -- a test
+plants the only labelled description in the middle of a 20-row
+statement, outside both samples, and asserts it is counted.
+
+**Backend.** `storage/upload.preview_detail(conn, upload_id)` reads
+the same `PREVIEWS` entry confirm reads (a missing one raises the same
+`PreviewExpiredError`, so the endpoint's 410 and message are
+confirm's, verified equal in a test). Returns `total_rows`,
+`sample_start` (first five rows: date, description as parsed, amount,
+type), `sample_end` (last five; plain slices, so ten rows or fewer
+overlap or cover everything, nothing padded), and
+`category_breakdown` as `[{category, count}]` sorted by count then
+name, with rows the engine has no suggestion for (`match_type` "none"
+-- a cold start, or no categorised row anywhere) counted under
+`"(no suggestion)"` so the counts always sum to `total_rows`.
+`GET /upload/{upload_id}/preview-detail` in `main.py`.
+
+**Frontend.** The Session 62 modal grew three optional inputs --
+`body` (an element between the message and the buttons),
+`cancelLabel: null` (hides Cancel, for a single "Close"), and `wide` --
+each undone in `closeModal()`, so every existing yes/no caller is
+untouched. On the preview screen, "Show Preview" fetches the detail
+and opens that modal with a table of the first rows, a centred
+"… N more rows …" divider when the statement is longer than the two
+samples (for ten rows or fewer the overlap is dropped so each row
+appears once), the last rows, a hover highlight (CSS only), and below
+it "Suggested category breakdown (not yet assigned)" with a sentence
+saying what it is. "Close Preview" is the only button. On close,
+`upload.rowsSeen` is set and the screen re-renders with the import
+controls in exactly the state the existing logic computes -- enabled
+import on a match, disabled-plus-"Import anyway…" on a mismatch --
+which until then were simply not rendered; "Show Preview" stays beside
+them. `rowsSeen` resets with every new preview and on start-over.
+**One case decided here:** a duplicate holds no rows server-side (the
+preview step caches nothing for it, Session 98), so there is nothing
+to show; the duplicate screen keeps its blocked control and
+explanation visible as before, with no "Show Preview". The brief
+listed the duplicate among the controls to gate; gating it behind a
+popup that must 410 would be a dead end.
+
+**Tests** (`tests/test_upload_preview_detail.py`, 14). Seven rows
+(samples overlap by three), exactly ten (cover everything, no
+overlap), twenty-three (no overlap), two, empty, the row shape; the
+breakdown grouping with the no-suggestion bucket and counts summing,
+cold start all no-suggestion, whole-statement scope, nothing written
+and the preview still confirmable; the wrapper's shape; the endpoint,
+the 410 equal to confirm's, and 410 after confirm. **737 passing**
+(723 + 14). Frontend: jsc parse OK, every `getElementById` resolves.
+**Manual verification only for the tab, per its pattern** -- the popup
+has not been seen rendered. The walk: a long statement (divider shown),
+a short one (no divider, no repeated row), the breakdown against a
+database with some labels and against an empty one, "Close Preview"
+revealing the right control on a match and on a mismatch, "Show
+Preview" again afterwards, and a duplicate still blocked without it.
+
+### Outcome
+Before importing, the user can see the statement's first and last
+rows and what the category engine would make of the whole thing; the
+import controls appear once that has been looked at. Nothing about
+what can be imported, or when, changed.
+
+### In plain English
+The preview screen used to show only the headline numbers. Now there
+is a "Show Preview" button that opens a window with the first and last
+few transactions as the app read them, and a rough picture of how it
+would categorise the whole statement based on what has been labelled
+before -- clearly marked as a suggestion, not a decision. The import
+button only appears after that window has been opened and closed once,
+so an import is never a blind click. The rules for when an import is
+allowed have not changed at all.
+
+### Next steps
+Sessions 104–107: four small copy and ordering changes on the tab.
+Then Chandra's browser walk, then merge.

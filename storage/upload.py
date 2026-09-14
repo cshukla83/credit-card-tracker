@@ -1,4 +1,4 @@
-"""The web upload path (Sessions 97-100): a new entry point onto the CLI's
+"""The web upload path (Sessions 97-103): a new entry point onto the CLI's
 import pipeline, not a parallel one.
 
 Step 1, detection (`detect()`): read the PDF's first page
@@ -47,6 +47,7 @@ from parsers.reconcile import reconcile
 from parsers.registry import BANKS
 from storage.adapters import from_parsed_statement
 from storage.cards import find_cards_for_type, get_card
+from storage.categories import suggest_categories_for_descriptions
 from storage.dates import to_date_str
 from storage.reads import find_statement
 from storage.writes import insert_statement
@@ -274,3 +275,54 @@ def confirm(conn: sqlite3.Connection, upload_id: str, override_reconciliation: b
 
     PREVIEWS.pop(upload_id, None)
     return {"statement_id": statement_id, "transaction_count": len(pending.parsed["transactions"])}
+
+
+# --- preview detail (Session 103) --------------------------------------------
+
+SAMPLE_ROWS = 5
+NO_SUGGESTION = "(no suggestion)"
+
+
+def _sample_row(txn: dict) -> dict:
+    txn_date = txn["date"]
+    return {
+        "date": to_date_str(txn_date.date() if hasattr(txn_date, "date") else txn_date),
+        "description": txn["description"],
+        "amount": txn["amount"],
+        "type": txn["type"],
+    }
+
+
+def preview_detail(conn: sqlite3.Connection, upload_id: str) -> dict:
+    """A closer look at a held preview: the first and last few parsed rows,
+    and what the category engine would suggest for every row -- suggested,
+    not assigned. Reads the same cache confirm() reads; writes nothing.
+
+    The samples are slices of the parsed list as-is: a statement of ten
+    rows or fewer has start and end overlapping or covering everything,
+    and the frontend draws its gap marker only when total_rows exceeds
+    the two samples combined. The breakdown runs over every parsed row,
+    not just the samples, with rows the engine has no suggestion for
+    counted under NO_SUGGESTION so the counts always sum to total_rows.
+    """
+    pending = PREVIEWS.get(upload_id)
+    if pending is None:
+        raise PreviewExpiredError("Preview expired or already imported -- upload the file again")
+
+    transactions = pending.parsed["transactions"]
+    suggestions = suggest_categories_for_descriptions(
+        conn, [t["description"] for t in transactions]
+    )
+    counts: "dict[str, int]" = {}
+    for suggestion in suggestions:
+        key = suggestion["value"] if suggestion["value"] is not None else NO_SUGGESTION
+        counts[key] = counts.get(key, 0) + 1
+    breakdown = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+    return {
+        "upload_id": upload_id,
+        "total_rows": len(transactions),
+        "sample_start": [_sample_row(t) for t in transactions[:SAMPLE_ROWS]],
+        "sample_end": [_sample_row(t) for t in transactions[-SAMPLE_ROWS:]] if transactions else [],
+        "category_breakdown": [{"category": value, "count": count} for value, count in breakdown],
+    }
