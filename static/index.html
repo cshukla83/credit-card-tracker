@@ -1094,11 +1094,11 @@
           <th class="num">date</th>
           <th>description</th>
           <th class="type">type</th>
+          <th class="payment">card payment</th>
           <th class="num amount">amount</th>
           <th>merchant</th>
           <th>category</th>
           <th>subcategory</th>
-          <th class="payment">card payment</th>
         </tr>
       </thead>
       <tbody id="review-body"></tbody>
@@ -1119,11 +1119,11 @@
           <th class="num" data-sort="txn_date">date</th>
           <th data-sort="description">description</th>
           <th class="type" data-sort="txn_type">type</th>
+          <th class="payment" data-sort="is_payment">card payment</th>
           <th class="num amount" data-sort="amount">amount</th>
           <th data-sort="merchant">merchant</th>
           <th data-sort="category">category</th>
           <th data-sort="subcategory">subcategory</th>
-          <th class="payment" data-sort="is_payment">card payment</th>
         </tr>
       </thead>
       <tbody id="reviewed-body"></tbody>
@@ -2540,6 +2540,7 @@
       tr.appendChild(descCell);
 
       tr.appendChild(typeCell(txn));
+      tr.appendChild(renderPaymentCell(txn));
 
       const amountCell = document.createElement("td");
       amountCell.className = "num amount " + txn.txn_type;
@@ -2550,7 +2551,6 @@
       tr.appendChild(renderLabelCell(txn, "merchant", editingField === "merchant"));
       tr.appendChild(renderLabelCell(txn, "category", editingField === "category"));
       tr.appendChild(renderLabelCell(txn, "subcategory", editingField === "subcategory"));
-      tr.appendChild(renderPaymentCell(txn));
       return tr;
     }
 
@@ -2611,6 +2611,7 @@
         descCell.textContent = txn.description;
         tr.appendChild(descCell);
         tr.appendChild(typeCell(txn));
+        tr.appendChild(renderPaymentCell(txn));
         const amountCell = document.createElement("td");
         amountCell.className = "num amount " + txn.txn_type;
         amountCell.textContent = fmtAmount(txn.amount);
@@ -2619,7 +2620,6 @@
         tr.appendChild(renderLabelCell(txn, "merchant", editingField === "merchant"));
         tr.appendChild(renderLabelCell(txn, "category", editingField === "category"));
         tr.appendChild(renderLabelCell(txn, "subcategory", editingField === "subcategory"));
-        tr.appendChild(renderPaymentCell(txn));
         rows.appendChild(tr);
       }
       reviewedBodyEl.replaceChildren(rows);

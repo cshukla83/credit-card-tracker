@@ -10107,3 +10107,71 @@ Manual verification in the user's own browser of the screen work since
 Session 76 — or with the committed driver where a measurement will do.
 Not merged to main: that waits on that verification. Then the Session
 88 backlog (STATE.md reconciliation 61–94, Module 1).
+
+## Session 95 — 2026-09-14
+
+### Goal
+Move the "card payment" checkbox column so it sits immediately after
+the "type" column instead of last, in both tables that render it: the
+Review & Assign grouped table and the Reviewed tab's flat table. Layout
+only — no behaviour change.
+
+### What happened
+
+State confirmed: `feature/merchant-aggregation` at `ac0fc9c`, clean.
+
+**Where the column lived.** Both tables had the same nine-column order:
+select, date, description, type, amount, merchant, category,
+subcategory, card payment. (The brief's illustrative order put merchant
+last; the file has merchant first of the three label cells. Left as is
+— the brief said "whatever the existing order is".) Four sites in
+`static/index.html`: the two `<thead>` rows (`#review-table`,
+`#reviewed-table`) and the two row builders (`renderRow()` for the
+grouped table, the per-row loop inside `renderReviewed()`).
+
+**The move.** In each header the `<th class="payment">` cell moved from
+after subcategory to after type; the Reviewed header's
+`data-sort="is_payment"` travelled with it, and `data-sort="txn_type"`
+stayed on the type cell, so the sort module (which keys on
+`dataset.sort`, not column index — checked at the three
+`th[data-sort]` query sites) is unaffected. In each row builder the
+`tr.appendChild(renderPaymentCell(txn))` line moved from after the
+third `renderLabelCell` to directly after `tr.appendChild(typeCell(txn))`.
+Nothing else in the row builders, `renderPaymentCell()`, the
+confirmation modal, the cascade call, or `isSelectable()` changed.
+Diff is 4 insertions, 4 deletions.
+
+**Column count / colSpan.** Verified rather than assumed: both header
+rows still contain nine `<th>`; both row builders still make nine
+`tr.appendChild` calls; `renderGroupHeader()`'s `td.colSpan = 9` is
+unchanged and still spans the full row. Also checked for anything
+keyed on column position: the only `nth-child` rules are on
+`#dash-table`; the `:first-child`/`:last-child` rules are the table
+corner radii, which now land on the subcategory cell as they should.
+`th.payment`/`th.type` CSS is width and alignment only.
+
+**Verification.** The single inline script was extracted and parsed
+under jsc (`new Function` on the source, no execution): syntax OK. No
+tests added; nothing pure changed. Backend suite not re-run — nothing
+outside `static/` moved. Not seen running: like every frontend-only
+session in this arc, this joins the manual-verification backlog (or a
+run of `scripts/headless_chrome.py` where a DOM measurement will do —
+header text order and per-row cell order are exactly that).
+
+**Docs.** DEVLOG: this entry. STATE.md untouched.
+
+### Outcome
+The card-payment checkbox now sits beside the transaction type in both
+tables; column count and sort wiring unchanged.
+
+### In plain English
+The tick-box that marks a row as a card payment used to be the last
+column, far from the "debit/credit" label it relates to. It now sits
+right next to that label in both review screens. Nothing about what
+the tick-box does changed — only where it appears.
+
+### Next steps
+Manual (or headless-driver) verification of the screen work since
+Session 76, now including this reorder. Not merged to main: that waits
+on that verification. Then the Session 88 backlog (STATE.md
+reconciliation 61–94, Module 1).
