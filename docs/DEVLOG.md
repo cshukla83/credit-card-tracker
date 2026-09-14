@@ -11234,3 +11234,50 @@ sentence counting the files.
 Chandra's browser walk of the Upload tab -- now covering the row-level
 preview popup (Session 103) and these four copy/order changes -- then
 merge `feature/upload-ui` into `main`.
+
+## Session 108 — 2026-09-14
+
+### Goal
+Replace the password-needed message for the case where the bank is
+unknown, so it stops implying the file must be from one of the four
+known banks.
+
+### What happened
+Branch `feature/upload-ui` at `6d582b4`, clean (Sessions 103–107 were
+already committed from the previous prompt and were not re-run).
+
+**Source.** The message is frontend-originated: the backend's
+`password_needed` body from `/upload/detect` carries `status`, `bank:
+null`, `card_type: null` and `tried_env_keys` (Session 97), and the
+one from `/upload/preview` adds the card's bank and `password_env_key`
+(Session 99) -- neither carries any message text. So the change landed
+in `renderPasswordNeeded()` in `static/index.html`, at its one source.
+
+**What changed.** That function has two branches. The unknown-bank
+branch -- detect could open nothing, so it could not read the landmark
+and cannot know whether the file is from a supported bank at all -- is
+now exactly "Unknown File Password. Please update password in .env and
+retry", verbatim from the brief; the list of tried keys and the
+"<BANK>_SAMPLE_PASSWORD" guidance are gone from the copy. The
+bank-known branch (preview on a resolved card, where the exact `.env`
+key *can* be named) is a different message the brief did not quote and
+is unchanged. `tried_env_keys` is still returned by the endpoint and
+still tested; the screen just no longer prints it. Behaviour --
+nothing read, no partial import, start over -- is as it was. Script
+parsed under jsc: syntax OK. Manual verification only, per the tab's
+pattern.
+
+### Outcome
+A locked file the app cannot identify gets a message that does not
+presume its bank.
+
+### In plain English
+When a locked statement can't be opened with any saved password, the
+app previously told the user to add "the right bank's password" -- but
+it can't know the bank, or even whether the bank is one it supports,
+without opening the file. The message is now a plain "unknown file
+password, update it and retry", which is all that is actually known.
+
+### Next steps
+Chandra's browser walk of the Upload tab, then merge
+`feature/upload-ui` into `main`.
