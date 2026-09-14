@@ -1,11 +1,15 @@
 from datetime import date
 
-from fastapi import Depends, FastAPI, HTTPException
+import os
+import tempfile
+
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from storage.aggregate import DimensionsError, PeriodError, aggregate_spend, resolve_period
-from storage.cards import list_cards_with_statements
+from parsers.detect import NotAPdfError
+from storage.cards import CardAlreadyExistsError, create_card, get_card, list_cards_with_statements
 from storage.commentary import (
     CommentaryNotConfiguredError,
     CommentaryUnavailableError,
@@ -24,6 +28,7 @@ from storage.categories import (
     suggest_category,
 )
 from storage.db import get_connection, init_db
+from storage.upload import detect as detect_upload
 from storage.reads import (
     ReviewStatusError,
     get_transactions,
@@ -480,3 +485,63 @@ def write_category(body: CategoryAssignmentBatch, conn=Depends(get_db)):
         # The same id with two different values for one field in one request.
         raise HTTPException(status_code=422, detail=str(e))
     return {"updated": updated}
+
+
+# --- cards (Session 97) -----------------------------------------------------
+
+
+class CardCreate(BaseModel):
+    bank: str = Field(min_length=1)
+    card_type: str = Field(min_length=1)
+    nickname: str | None = None
+
+    @field_validator("bank", "card_type", "nickname")
+    @classmethod
+    def _strip(cls, value):
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("must not be blank")
+        return value
+
+
+@app.post("/cards", status_code=201)
+def write_card(body: CardCreate, conn=Depends(get_db)):
+    # Thin wrapper over storage.cards.create_card -- the same call the CLI's
+    # create_card tool makes, so the same UNIQUE(bank, card_type, nickname)
+    # rule applies; a collision is the user's error here too (409), not a
+    # silent skip. Values are stripped but not case-normalised: create_card
+    # stores what it is given, and the open-flag asymmetry (case-sensitive
+    # UNIQUE vs. case-insensitive dispatch) is left where it was.
+    try:
+        card_id = create_card(conn, body.bank, body.card_type, body.nickname)
+    except CardAlreadyExistsError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return get_card(conn, card_id)
+
+
+# --- upload (Session 97) ----------------------------------------------------
+
+
+def _with_uploaded_pdf(upload: UploadFile, fn):
+    """Spool the upload to a temp file, call fn(path), delete the file.
+
+    Every parser takes a path (pdfplumber.open on a filename), so the upload
+    is written out once rather than teaching each parser about streams.
+    """
+    fd, path = tempfile.mkstemp(suffix=".pdf")
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(upload.file.read())
+        return fn(path)
+    finally:
+        os.unlink(path)
+
+
+@app.post("/upload/detect")
+def upload_detect(file: UploadFile = File(...), conn=Depends(get_db)):
+    try:
+        return _with_uploaded_pdf(file, lambda path: detect_upload(conn, path))
+    except NotAPdfError as e:
+        raise HTTPException(status_code=422, detail=f"Could not read the file as a PDF: {e}")

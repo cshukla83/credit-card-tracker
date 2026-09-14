@@ -10,14 +10,10 @@ Example:
 import argparse
 import os
 import sys
-from typing import Callable, NamedTuple
 
 from dotenv import load_dotenv
 
-import parsers.hdfc as hdfc_dispatch
-import parsers.icici as icici_dispatch
-import parsers.indusind as indusind_dispatch
-import parsers.sbi as sbi_dispatch
+from parsers.registry import BANKS
 from storage.adapters import from_parsed_statement
 from storage.cards import get_card
 from storage.db import get_connection, init_db
@@ -25,27 +21,10 @@ from storage.writes import insert_statement
 
 load_dotenv()
 
-
-class _Bank(NamedTuple):
-    """Everything bank-specific about importing a statement, in one place."""
-
-    password_env_key: str
-    # The bank's dispatch package (parsers/<bank>/__init__.py), not a
-    # card-type-specific parser: card_type routing happens inside it.
-    parse: Callable[..., dict]
-
-
 # Bank name (as stored in cards.bank) -> its import config. Generalized in
-# Session 30 against two real banks: what used to be a one-entry
-# _BANK_PASSWORD_ENV_KEYS dict plus a hardcoded parsers.hdfc call is now a
-# single registry, so adding a third bank is one entry here rather than edits
-# scattered across this module.
-_BANKS = {
-    "HDFC": _Bank(password_env_key="HDFC_SAMPLE_PASSWORD", parse=hdfc_dispatch.parse),
-    "ICICI": _Bank(password_env_key="ICICI_SAMPLE_PASSWORD", parse=icici_dispatch.parse),
-    "SBI": _Bank(password_env_key="SBI_SAMPLE_PASSWORD", parse=sbi_dispatch.parse),
-    "IndusInd": _Bank(password_env_key="INDUSIND_SAMPLE_PASSWORD", parse=indusind_dispatch.parse),
-}
+# Session 30 against two real banks into a single registry; moved to
+# parsers/registry.py in Session 97 so the web upload endpoints share it.
+_BANKS = BANKS
 
 
 def main():

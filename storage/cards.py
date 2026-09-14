@@ -51,6 +51,52 @@ def find_card(
     return dict(row) if row is not None else None
 
 
+def find_cards_for_type(conn: sqlite3.Connection, bank: str, card_type: str) -> "list[dict]":
+    """Every card of one (bank, card_type), each with its most recent statement period.
+
+    Used by upload detection (Session 97) to resolve a detected bank/card
+    type to a card row. The comparison is case-insensitive on both columns,
+    matching the parsers' own case-insensitive card_type dispatch rather than
+    create_card()'s case-sensitive UNIQUE constraint (the known asymmetry in
+    STATE.md's open flags): a card created by hand as "diners" should still
+    be found when the PDF is detected as "Diners".
+
+    `last_statement_period` is {"period_start", "period_end"} of the
+    statement with the latest period_end, or None for a card with no
+    statements yet (two correlated scalar subqueries, same ordering, so the
+    pair always comes from one statement row). Ordered by card id so the
+    candidate list is stable.
+    """
+    rows = conn.execute(
+        """
+        SELECT cards.id, cards.bank, cards.card_type, cards.nickname,
+               (SELECT period_start FROM statements WHERE card_id = cards.id
+                ORDER BY period_end DESC, period_start DESC LIMIT 1) AS period_start,
+               (SELECT period_end FROM statements WHERE card_id = cards.id
+                ORDER BY period_end DESC, period_start DESC LIMIT 1) AS period_end
+        FROM cards
+        WHERE cards.bank = ? COLLATE NOCASE AND cards.card_type = ? COLLATE NOCASE
+        ORDER BY cards.id ASC
+        """,
+        (bank, card_type),
+    ).fetchall()
+    out = []
+    for row in rows:
+        period = None
+        if row["period_end"] is not None:
+            period = {"period_start": row["period_start"], "period_end": row["period_end"]}
+        out.append(
+            {
+                "card_id": row["id"],
+                "bank": row["bank"],
+                "card_type": row["card_type"],
+                "nickname": row["nickname"],
+                "last_statement_period": period,
+            }
+        )
+    return out
+
+
 def list_cards(conn: sqlite3.Connection) -> "list[dict]":
     rows = conn.execute("SELECT * FROM cards ORDER BY created_at").fetchall()
     return [dict(row) for row in rows]

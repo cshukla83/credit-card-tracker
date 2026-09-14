@@ -10248,3 +10248,129 @@ Module 1 (upload UI with auto-detect) on `feature/upload-ui`, after it
 is scoped in its own conversation. The manual browser walk of the
 screen work since Session 76 remains the gate before Module 2 is called
 verified; `scripts/headless_chrome.py` can cover the measurable parts.
+
+## Session 97 — 2026-09-14
+
+### Goal
+Module 1, step 1 of 5: `POST /cards` (a web wrapper on the CLI's card
+creation) and `POST /upload/detect` (identify the bank of an uploaded
+statement PDF and resolve it against the cards table). First session on
+`feature/upload-ui`.
+
+### What happened
+
+Branch confirmed `feature/upload-ui` at `bf47d76`, clean; DEVLOG's last
+heading was 96.
+
+**What the brief assumed that the code did not have.** The brief asked
+to reuse "whatever the `_BANKS` registry / parser layer already uses to
+recognize a bank's format from the PDF text". There was no such thing:
+`_BANKS` dispatches on the bank name stored in `cards.bank`, and no
+module anywhere sniffs a PDF for its bank (HDFC's `_detect_layout` tells
+two HDFC layouts apart, nothing more). So identification was built, as
+small as the samples allow. A scratch probe over all 18 local sample
+statements (page-1 text only, counting landmark hits, never printing
+content) established two things: every one of them is encrypted --
+opening without a password raises `PDFPasswordIncorrect` -- and page 1
+of each contains exactly one bank's marker and none of the other three:
+`HDFC Bank Credit Card`, `ICICI Bank Credit Card`, `SBI Card` (word
+boundary, because an HDFC page mentions the regulator "BCSBI"), and
+`IndusInd Bank`. The card *product* is not reliably on page 1 (no
+ICICI sample says "Coral", no SBI sample says "Titan"), so detection
+reports the bank's one parser-backed card type rather than reading it.
+
+**`parsers/registry.py`.** `_BANKS` moved out of
+`scripts/import_statement.py` verbatim and grew two fields per bank:
+`card_type` (the one type the dispatch routes) and `landmark` (the
+regex above). The CLI now does `from parsers.registry import BANKS` and
+keeps its `_BANKS` name as an alias, so nothing else in it changed.
+One registry for both entry points, per the brief's "not a parallel
+pipeline" rule.
+
+**`parsers/detect.py`.** `unlock(path)` tries the file with no
+password, then with each bank's `.env` password in registry order
+(the existing `<BANK>_SAMPLE_PASSWORD` keys, read at call time, nothing
+new), and returns the first page's text plus the password that opened
+it -- kept only so the parse step can reuse it; the *bank* is decided
+by the text, never by which password worked. A password failure is
+told apart from any other pdfplumber error by unwrapping
+`PdfminerException.args[0]` (`PDFPasswordIncorrect`); anything else is
+`NotAPdfError`. Nothing opens it: `PasswordNeededError` carrying the
+env keys that were tried. `identify(text)` returns `(bank, card_type)`
+when exactly one landmark matches; zero or two matches is None.
+
+**`storage/cards.find_cards_for_type()`** -- cards of one (bank,
+card_type) with each card's latest statement period (two correlated
+scalar subqueries ordered by `period_end DESC, period_start DESC`, so
+the pair always comes from one row; None for a card with no
+statements). The match is `COLLATE NOCASE` on both columns,
+deliberately siding with the parsers' case-insensitive dispatch over
+`create_card`'s case-sensitive UNIQUE (the open-flag asymmetry, left
+where it is): a card created by hand as "diners" is still found.
+
+**`storage/upload.py`.** `resolve_card()` maps that list to
+`matched` / `zero_match` / `multi_match` (candidates as `card_id`,
+`nickname`, `bank`, `card_type`, `last_statement_period`); `detect()`
+strings unlock -> identify -> resolve together and returns
+`unrecognized` when identify says None. **One status pulled forward
+from Session 3's scope:** a PDF that no `.env` password opens returns
+`{"status": "password_needed", "bank": null, "card_type": null,
+"tried_env_keys": [...]}` now rather than "unresolved". The brief left
+this to Session 3, but the only alternative today was to report a
+locked file as `unrecognized`, which would send the user to the
+LLM/best-effort options for a file nothing can read. Bank and card
+type are null here by necessity -- nothing was readable -- which is why
+the tried keys are listed instead; Session 3 adds the bank-known case
+on the preview side.
+
+**`main.py`.** `POST /cards` (201; body `bank`, `card_type`, optional
+`nickname`, each stripped and non-blank; 409 with the message from
+`CardAlreadyExistsError`; returns the row). `POST /upload/detect`
+(multipart `file`; the upload is spooled to a `mkstemp` temp file
+because every parser takes a path, and deleted after; 422 for a file
+pdfplumber cannot read as a PDF). `python-multipart` added to
+`requirements.txt` -- FastAPI needs it for `UploadFile` and it was not
+installed.
+
+**Tests** (`tests/test_upload_detect.py`, 44; `tests/conftest.py`,
+new). `conftest.py` gives every test file `make_pdf(lines)`: a small
+valid unencrypted single-page PDF built by hand (correct xref,
+Helvetica), whose `extract_text()` returns the lines newline-joined --
+so the endpoints are exercised end to end, multipart in, without the
+real samples. Covered: `identify` for all four banks, case
+insensitivity, the BCSBI boundary, unknown text, two banks on one page;
+`unlock` on an unencrypted file and the password-needed path (page
+reader monkeypatched to raise `PDFPasswordIncorrect`, env narrowed to
+one key, tried order asserted as `[None, that key]`); `resolve_card`
+zero / matched / matched-case-insensitively / multi with periods;
+`find_cards_for_type` picking the latest by `period_end`; the endpoint
+for all five statuses plus non-PDF (422) and missing file (422); `POST
+/cards` create, no nickname, conflict, strip-and-blank. Plus 18
+real-sample cases, one per local PDF, each asserting detection lands
+on its bank with `zero_match` in an empty DB -- they ran here (the
+`.env` and files are present) and skip elsewhere, the standing
+pattern. **576 passing** (532 + 44).
+
+### Outcome
+A PDF can be posted and comes back as matched / zero_match /
+multi_match / unrecognized / password_needed, and a card can be created
+over HTTP with the CLI's rules. Verified by the suite, including every
+real sample detecting as its own bank; not run against a live server.
+
+### In plain English
+The upload flow's first step exists: send a statement PDF and the app
+works out which bank it came from and whether it already knows a card
+for it -- one card, none, or several to choose from. It also learned to
+say plainly when a file is locked and none of the saved passwords open
+it, instead of guessing. Working this out meant checking what the
+statements actually contain rather than assuming: every one is
+password-protected, and each names its bank on the first page in a way
+the others don't. Creating a card can now happen from the app as well
+as the command line, with the same rules.
+
+### Next steps
+Session 98 (prompt Session 2): preview and confirm endpoints -- full
+parse, duplicate check, the reconciliation gate, in-memory preview
+cache. Deferred here: reading the card product off the page (no sample
+supports it yet); a bank-named `password_needed` (needs a resolved card,
+which preview has and detect does not).
