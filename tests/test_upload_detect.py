@@ -86,7 +86,7 @@ def test_unlock_reads_unencrypted_pdf_without_password(make_pdf, tmp_path):
     assert unlocked.first_page_text == "FAKE BANK statement\nsecond line"
 
 
-def test_unlock_raises_password_needed_listing_tried_keys(monkeypatch, tmp_path):
+def test_unlock_raises_password_needed_listing_tried_keys(monkeypatch, tmp_path, no_statement_passwords):
     from pdfminer.pdfdocument import PDFPasswordIncorrect
     from pdfplumber.utils.exceptions import PdfminerException
 
@@ -99,8 +99,6 @@ def test_unlock_raises_password_needed_listing_tried_keys(monkeypatch, tmp_path)
         raise PdfminerException(PDFPasswordIncorrect())
 
     monkeypatch.setattr(detect_module, "_first_page_text", fake_first_page_text)
-    for bank in BANKS.values():
-        monkeypatch.delenv(bank.password_env_key, raising=False)
     monkeypatch.setenv("SBI_SAMPLE_PASSWORD", "fake-sbi")
 
     with pytest.raises(PasswordNeededError) as excinfo:
@@ -204,7 +202,7 @@ def test_detect_unrecognized(client, make_pdf):
     assert response.json() == {"status": "unrecognized"}
 
 
-def test_detect_password_needed(client, monkeypatch):
+def test_detect_password_needed(client, monkeypatch, no_statement_passwords):
     from pdfminer.pdfdocument import PDFPasswordIncorrect
     from pdfplumber.utils.exceptions import PdfminerException
 
@@ -215,8 +213,6 @@ def test_detect_password_needed(client, monkeypatch):
         "_first_page_text",
         lambda path, password: (_ for _ in ()).throw(PdfminerException(PDFPasswordIncorrect())),
     )
-    for bank in BANKS.values():
-        monkeypatch.delenv(bank.password_env_key, raising=False)
     monkeypatch.setenv("HDFC_SAMPLE_PASSWORD", "x")
 
     body = _upload(client, b"%PDF-1.4 locked").json()
@@ -300,3 +296,116 @@ def test_real_statement_detected_as_its_bank(bank, pdf_path, client):
 
     body = _upload(client, Path(pdf_path).read_bytes()).json()
     assert body == {"status": "zero_match", "bank": bank, "card_type": BANKS[bank].card_type}
+
+
+# --- Session 111: any *_SAMPLE_PASSWORD in the environment is tried -------------
+
+
+@pytest.fixture
+def opens_with(monkeypatch):
+    """Make the page reader accept exactly one password and refuse all others,
+    returning the given page-1 text on success."""
+    from pdfminer.pdfdocument import PDFPasswordIncorrect
+    from pdfplumber.utils.exceptions import PdfminerException
+
+    import parsers.detect as detect_module
+
+    def install(accepted, text):
+        attempts = []
+
+        def reader(path, password):
+            attempts.append(password)
+            if password == accepted:
+                return text
+            raise PdfminerException(PDFPasswordIncorrect())
+
+        monkeypatch.setattr(detect_module, "_first_page_text", reader)
+        return attempts
+
+    return install
+
+
+def test_candidate_passwords_is_every_suffix_key_sorted(monkeypatch, no_statement_passwords):
+    from parsers.detect import candidate_passwords
+
+    monkeypatch.setenv("SBI_SAMPLE_PASSWORD", "s")
+    monkeypatch.setenv("AXIS_SAMPLE_PASSWORD", "a")
+    monkeypatch.setenv("HDFC_SAMPLE_PASSWORD", "h")
+    monkeypatch.setenv("GEMINI_API_KEY", "not-a-password")
+    monkeypatch.setenv("SAMPLE_PASSWORD_AXIS", "wrong-shape")
+    monkeypatch.setenv("EMPTY_SAMPLE_PASSWORD", "")
+    assert candidate_passwords() == [
+        ("AXIS_SAMPLE_PASSWORD", "a"),
+        ("HDFC_SAMPLE_PASSWORD", "h"),
+        ("SBI_SAMPLE_PASSWORD", "s"),
+    ]
+
+
+def test_unregistered_bank_password_opens_file_and_is_unrecognized(client, monkeypatch, no_statement_passwords, opens_with):
+    monkeypatch.setenv("HDFC_SAMPLE_PASSWORD", "hdfc-pw")
+    monkeypatch.setenv("AXIS_SAMPLE_PASSWORD", "axis-pw")
+    attempts = opens_with("axis-pw", "FAKE AXIS BANK statement of account")
+
+    body = _upload(client, b"%PDF-1.4 locked").json()
+    assert body == {"status": "unrecognized"}
+    assert attempts == [None, "axis-pw"]  # alphabetical: AXIS before HDFC, and it opened
+
+
+def test_unregistered_bank_password_with_known_landmark_still_resolves(client, conn, monkeypatch, no_statement_passwords, opens_with):
+    # Which key opened the file never decides the bank; the text does.
+    card_id = create_card(conn, "SBI", "Titan")
+    monkeypatch.setenv("AXIS_SAMPLE_PASSWORD", "axis-pw")
+    opens_with("axis-pw", "SBI Card statement")
+    assert _upload(client, b"%PDF-1.4 locked").json()["card_id"] == card_id
+
+
+def test_registered_bank_password_behaviour_unchanged(client, conn, monkeypatch, no_statement_passwords, opens_with):
+    card_id = create_card(conn, "HDFC", "Diners")
+    monkeypatch.setenv("HDFC_SAMPLE_PASSWORD", "hdfc-pw")
+    attempts = opens_with("hdfc-pw", "HDFC Bank Credit Card statement")
+    body = _upload(client, b"%PDF-1.4 locked").json()
+    assert body["status"] == "matched" and body["card_id"] == card_id
+    assert attempts == [None, "hdfc-pw"]
+
+
+def test_non_suffix_variable_is_never_tried(client, monkeypatch, no_statement_passwords, opens_with):
+    monkeypatch.setenv("AXIS_PASSWORD", "axis-pw")  # wrong shape
+    monkeypatch.setenv("GEMINI_API_KEY", "axis-pw")  # would open it, must not be tried
+    attempts = opens_with("axis-pw", "FAKE AXIS BANK")
+    body = _upload(client, b"%PDF-1.4 locked").json()
+    assert body["status"] == "password_needed"
+    assert body["tried_env_keys"] == []
+    assert attempts == [None]
+
+
+def test_no_suffix_key_opens_it_is_password_needed_listing_all_tried(client, monkeypatch, no_statement_passwords, opens_with):
+    monkeypatch.setenv("AXIS_SAMPLE_PASSWORD", "a")
+    monkeypatch.setenv("HDFC_SAMPLE_PASSWORD", "h")
+    attempts = opens_with("something-else", "irrelevant")
+    body = _upload(client, b"%PDF-1.4 locked").json()
+    assert body["status"] == "password_needed"
+    assert body["tried_env_keys"] == ["AXIS_SAMPLE_PASSWORD", "HDFC_SAMPLE_PASSWORD"]
+    assert attempts == [None, "a", "h"]
+
+
+def test_preview_for_unregistered_bank_card_uses_the_scan_too(client, conn, monkeypatch, no_statement_passwords, opens_with):
+    # The reason the scan lives in the shared unlock(): after detect says
+    # unrecognized, the best-effort preview on a card of that bank must
+    # open the same file with the same key, or the path dies one step later.
+    import parsers.generic_fallback as fallback
+
+    monkeypatch.setenv("AXIS_SAMPLE_PASSWORD", "axis-pw")
+    opens_with("axis-pw", "FAKE AXIS BANK")
+    monkeypatch.setattr(fallback, "extract_all_text", lambda path, password: (
+        ["Statement Period: 01/01/2026 to 31/01/2026", "05/01/2026 FAKE SHOP 100.00"]
+        if password == "axis-pw" else (_ for _ in ()).throw(AssertionError("wrong password reached the parser"))
+    ))
+    card = create_card(conn, "Axis", "Magnus")
+    response = client.post(
+        "/upload/preview?strategy=best_effort",
+        files={"file": ("s.pdf", b"%PDF-1.4 locked", "application/pdf")},
+        data={"card_id": str(card)},
+    )
+    body = response.json()
+    assert body["status"] == "preview", body
+    assert body["transaction_count"] == 1

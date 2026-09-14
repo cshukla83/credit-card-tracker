@@ -377,7 +377,7 @@ def test_unknown_strategy_is_422(client, card_id, make_pdf):
 
 
 @pytest.fixture
-def locked_pdf(monkeypatch):
+def locked_pdf(monkeypatch, no_statement_passwords):
     """Every open attempt fails as a wrong/missing password."""
     from pdfminer.pdfdocument import PDFPasswordIncorrect
     from pdfplumber.utils.exceptions import PdfminerException
@@ -390,8 +390,6 @@ def locked_pdf(monkeypatch):
     monkeypatch.setattr(detect_module, "_first_page_text", refuse)
     from parsers.registry import BANKS
 
-    for bank in BANKS.values():
-        monkeypatch.delenv(bank.password_env_key, raising=False)
 
 
 def test_preview_password_missing_names_bank_and_key(client, card_id, locked_pdf):
@@ -422,7 +420,7 @@ def test_preview_password_needed_for_bank_without_key(client, conn, locked_pdf):
     assert body["password_env_key"] is None
 
 
-def test_detect_password_wrong_is_password_needed(client, monkeypatch):
+def test_detect_password_wrong_is_password_needed(client, monkeypatch, no_statement_passwords):
     # Detect side of the same rule: a set-but-wrong key is tried and listed.
     from pdfminer.pdfdocument import PDFPasswordIncorrect
     from pdfplumber.utils.exceptions import PdfminerException
@@ -438,8 +436,6 @@ def test_detect_password_wrong_is_password_needed(client, monkeypatch):
     monkeypatch.setattr(detect_module, "_first_page_text", refuse)
     from parsers.registry import BANKS
 
-    for bank in BANKS.values():
-        monkeypatch.delenv(bank.password_env_key, raising=False)
     monkeypatch.setenv("ICICI_SAMPLE_PASSWORD", "wrong")
     body = client.post(
         "/upload/detect", files={"file": ("s.pdf", b"%PDF-1.4 locked", "application/pdf")}
@@ -457,8 +453,9 @@ def test_real_statement_with_wrong_password_is_password_needed(bank, pdf_path, c
         pytest.skip(f"{BANKS[bank].password_env_key} not set in .env")
     if not Path(pdf_path).exists():
         pytest.skip(f"{pdf_path} not present locally")
-    for entry in BANKS.values():
-        monkeypatch.setenv(entry.password_env_key, "definitely-wrong")
+    for key in list(os.environ):
+        if key.endswith("_SAMPLE_PASSWORD"):
+            monkeypatch.setenv(key, "definitely-wrong")
 
     card = create_card(conn, bank, BANKS[bank].card_type)
     body = _preview(client, Path(pdf_path).read_bytes(), card).json()

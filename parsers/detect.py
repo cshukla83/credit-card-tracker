@@ -66,14 +66,29 @@ def _is_password_error(exc: PdfminerException) -> bool:
     return bool(exc.args) and isinstance(exc.args[0], PDFPasswordIncorrect)
 
 
+PASSWORD_KEY_SUFFIX = "_SAMPLE_PASSWORD"
+
+
 def candidate_passwords() -> "list[tuple[str, str]]":
-    """(env key, password) for every bank whose password is set in .env."""
-    out = []
-    for bank in BANKS.values():
-        value = os.environ.get(bank.password_env_key)
-        if value:
-            out.append((bank.password_env_key, value))
-    return out
+    """(env key, password) for every non-empty environment variable named
+    *_SAMPLE_PASSWORD, alphabetically by key.
+
+    Convention-based since Session 111, not a maintained list: the four
+    registry banks' keys follow this shape and are still tried exactly as
+    before, and a key for a bank with no parser (say AXIS_SAMPLE_PASSWORD)
+    is tried too -- that is what lets a locked statement from an unknown
+    bank decrypt far enough to be reported as unrecognized and offered the
+    best-attempt / LLM readers. The accepted trade-off: anything else in
+    the environment with that suffix is also tried as a PDF password. The
+    order does not affect the outcome -- the bank is decided from the text,
+    never from which key opened the file -- it is fixed only so tests can
+    assert it.
+    """
+    return sorted(
+        (key, value)
+        for key, value in os.environ.items()
+        if key.endswith(PASSWORD_KEY_SUFFIX) and value
+    )
 
 
 def unlock(pdf_path: str) -> Unlocked:

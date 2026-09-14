@@ -129,10 +129,15 @@ restart:
 
 - `<BANK>_SAMPLE_PASSWORD` — the statement password for one bank, per
   bank not per card: `HDFC_SAMPLE_PASSWORD`, `ICICI_SAMPLE_PASSWORD`,
-  `SBI_SAMPLE_PASSWORD`, `INDUSIND_SAMPLE_PASSWORD`. The registry in
-  `parsers/registry.py` is the list; the CLI importer, the upload
-  endpoints and the real-statement tests all read it from there. A new
-  bank means a new registry entry and a new key of this shape.
+  `SBI_SAMPLE_PASSWORD`, `INDUSIND_SAMPLE_PASSWORD`, and any other key
+  of that shape. The registry in `parsers/registry.py` names the key
+  for each bank with a parser (the CLI importer and the real-statement
+  tests read it from there); the upload endpoints' unlock step
+  (Session 111) instead tries **every** `*_SAMPLE_PASSWORD` in the
+  environment, so a bank with no parser yet — say `AXIS_SAMPLE_PASSWORD`
+  — can be decrypted far enough to be offered the best-attempt or
+  LLM readers. Convention, not a list: anything else with that suffix
+  would be tried as a PDF password too, an accepted trade-off.
 - `GEMINI_API_KEY` (and optional `GEMINI_MODEL`) — the one LLM key,
   shared by the two places data leaves the machine: the dashboard
   commentary (Session 68, a narrowed payload of labels and amounts) and

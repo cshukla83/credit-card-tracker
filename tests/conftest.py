@@ -51,3 +51,15 @@ def build_pdf(lines: "list[str]") -> bytes:
 @pytest.fixture
 def make_pdf():
     return build_pdf
+
+
+@pytest.fixture
+def no_statement_passwords(monkeypatch):
+    """Remove every *_SAMPLE_PASSWORD from the environment (Session 111: the
+    password scan is convention-based, so clearing only the registry's four
+    keys is not enough -- the local .env may carry others)."""
+    import os
+
+    for key in list(os.environ):
+        if key.endswith("_SAMPLE_PASSWORD"):
+            monkeypatch.delenv(key, raising=False)

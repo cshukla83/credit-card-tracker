@@ -11379,3 +11379,90 @@ file" goes back to the start for a different statement.
 ### Next steps
 Chandra's browser walk of the Upload tab, then merge
 `feature/upload-ui` into `main`.
+
+## Session 111 — 2026-09-14
+
+### Goal
+Try every `*_SAMPLE_PASSWORD` in the environment when unlocking an
+uploaded PDF, not only the four registry banks' keys -- so a locked
+statement from a bank with no parser can be decrypted far enough to
+be reported as unrecognized and offered the best-attempt / LLM readers.
+
+### What happened
+
+Branch `feature/upload-ui` at `47a1ba3`, clean.
+
+**Scope, corrected against the code.** The brief scoped the scan to
+detect only, on the premise that preview "keeps checking that one
+specific bank's key". Preview never did that: `parsers.detect.unlock()`
+is one shared function, and preview cycled the same registry list as
+detect. Scoping the scan to detect alone would have made the new path
+fail one step later -- an Axis file decrypts at detect, comes back
+`unrecognized`, the user picks best-effort on an "Axis" card, and
+preview reports `password_needed` because a card outside the registry
+has no key and preview would never try `AXIS_SAMPLE_PASSWORD`. So the
+scan lives in the shared `unlock()`, and both stages use it; a test
+pins the preview side. Preview was not narrowed to the card's bank's
+key either: it never worked that way, and narrowing would change
+behaviour the brief said not to change.
+
+**`candidate_passwords()`** now returns `(key, value)` for every
+non-empty environment variable ending in `_SAMPLE_PASSWORD`, sorted by
+key -- convention-based, not a maintained list. The four registry keys
+have that shape, so they are tried exactly as before; the order changed
+from registry order to alphabetical, which cannot change an outcome
+(the bank is decided from the page text, never from which key opened
+the file -- a test opens a file with the Axis key and still resolves
+it as SBI from its landmark) and is fixed only so tests can assert it.
+`tried_env_keys` in `password_needed` lists the same scan. **The
+accepted trade-off, as the brief asked to record:** anything else in
+the environment with that suffix would also be tried as a PDF
+password. It costs one failed open per stray key and reveals nothing;
+it was judged the right side of the line against maintaining a list.
+The registry's per-bank `password_env_key` is untouched and still what
+the CLI importer, the real-statement tests, and preview's
+`password_needed` (naming the key to fix) use. CONVENTIONS.md's
+secrets section says all this.
+
+**The tests found the local `.env` ahead of the code.** The existing
+password tests isolated themselves by clearing only the four registry
+keys, and eleven of them failed at once under the scan -- the local
+`.env` already carries an `AXIS_SAMPLE_PASSWORD` (the motivating case,
+evidently added before this session), which the scan now correctly
+tried. A `no_statement_passwords` fixture in `conftest.py` clears every
+suffix key, and the affected tests and the real-sample wrong-password
+test (which now sets every suffix key wrong, not just four) use it.
+No password value appears in any test or in this entry.
+
+**Tests** (`tests/test_upload_detect.py`, +7): the scan returns every
+suffix key sorted and skips a non-suffix variable, a reversed-shape
+name, and an empty value; an unregistered key opens a file with no
+landmark -> `unrecognized`, tried in alphabetical order; an
+unregistered key opening a file with an SBI landmark -> that SBI card;
+a registry key behaves as before (`matched`, `[None, key]` attempted);
+a non-suffix variable holding the right password is never tried
+(`password_needed`, nothing listed); no key opens it -> all listed in
+order; and the preview side: a best-effort preview on an "Axis" card
+opens the locked file with the Axis key (the parser is monkeypatched
+to fail if it ever receives another). **744 passing** (737 + 7).
+
+### Outcome
+A locked statement from any bank whose password is in `.env` under the
+usual name can now be opened, identified or reported unrecognized, and
+taken through the best-attempt or LLM path. The four known banks are
+unaffected. Not run against a live server.
+
+### In plain English
+Until now the app only ever tried the four known banks' passwords on a
+locked statement, so a statement from any other bank could never get
+past the password screen -- even with its password saved under the
+usual name. It now tries every saved statement password, which means a
+new bank's statement can be opened and handed to the fallback readers.
+The one wrinkle found on the way: the scan also has to apply at the
+next step, when the statement is actually read, or the new bank would
+have got exactly one screen further and stopped.
+
+### Next steps
+Chandra's browser walk of the Upload tab -- now including a locked
+statement from a bank outside the four -- then merge
+`feature/upload-ui` into `main`.
