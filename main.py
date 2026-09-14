@@ -3,12 +3,12 @@ from datetime import date
 import os
 import tempfile
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from storage.aggregate import DimensionsError, PeriodError, aggregate_spend, resolve_period
-from parsers.detect import NotAPdfError
+from parsers.detect import NotAPdfError, PasswordNeededError
 from storage.cards import CardAlreadyExistsError, create_card, get_card, list_cards_with_statements
 from storage.commentary import (
     CommentaryNotConfiguredError,
@@ -28,7 +28,17 @@ from storage.categories import (
     suggest_category,
 )
 from storage.db import get_connection, init_db
-from storage.upload import detect as detect_upload
+from storage.upload import (
+    CardNotFoundError,
+    DuplicateStatementError,
+    PreviewExpiredError,
+    ReconciliationBlockedError,
+    StatementPeriodError,
+    UnsupportedCardError,
+    confirm as confirm_upload,
+    detect as detect_upload,
+    preview as preview_upload,
+)
 from storage.reads import (
     ReviewStatusError,
     get_transactions,
@@ -545,3 +555,45 @@ def upload_detect(file: UploadFile = File(...), conn=Depends(get_db)):
         return _with_uploaded_pdf(file, lambda path: detect_upload(conn, path))
     except NotAPdfError as e:
         raise HTTPException(status_code=422, detail=f"Could not read the file as a PDF: {e}")
+
+
+# --- upload preview / confirm (Session 98) ---------------------------------
+
+
+@app.post("/upload/preview")
+def upload_preview(file: UploadFile = File(...), card_id: int = Form(...), conn=Depends(get_db)):
+    # The PDF is re-sent with the resolved card_id rather than held from
+    # /upload/detect: detect keeps nothing, so a page reload between the two
+    # steps costs nothing but the second upload.
+    try:
+        return _with_uploaded_pdf(file, lambda path: preview_upload(conn, path, card_id))
+    except NotAPdfError as e:
+        raise HTTPException(status_code=422, detail=f"Could not read the file as a PDF: {e}")
+    except CardNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except (UnsupportedCardError, StatementPeriodError) as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except PasswordNeededError as e:
+        # Session 3 of this module gives this its own status body; until
+        # then it is a plain error naming the keys that were tried.
+        raise HTTPException(
+            status_code=422,
+            detail=f"{e} (tried: {', '.join(e.tried_env_keys) or 'no passwords set'})",
+        )
+
+
+class UploadConfirm(BaseModel):
+    upload_id: str = Field(min_length=1)
+    override_reconciliation: bool = False
+
+
+@app.post("/upload/confirm")
+def upload_confirm(body: UploadConfirm, conn=Depends(get_db)):
+    try:
+        return confirm_upload(conn, body.upload_id, body.override_reconciliation)
+    except PreviewExpiredError as e:
+        raise HTTPException(status_code=410, detail=str(e))
+    except ReconciliationBlockedError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except DuplicateStatementError as e:
+        raise HTTPException(status_code=409, detail=str(e))

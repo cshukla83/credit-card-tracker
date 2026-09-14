@@ -308,3 +308,18 @@ def list_card_types(
         params,
     ).fetchall()
     return [{"bank": row["bank"], "card_type": row["card_type"]} for row in rows]
+
+
+def find_statement(conn: sqlite3.Connection, card_id: int, period_start, period_end) -> "dict | None":
+    """The statement already imported for this (card_id, period_start, period_end), or None.
+
+    The same key insert_statement()'s UNIQUE dedup skips on -- read here
+    ahead of time (Session 98's upload preview) so a duplicate can be
+    reported before anything is parsed further, instead of surfacing as a
+    silent no-op at write time.
+    """
+    row = conn.execute(
+        "SELECT * FROM statements WHERE card_id = ? AND period_start = ? AND period_end = ?",
+        (card_id, to_date_str(period_start), to_date_str(period_end)),
+    ).fetchone()
+    return dict(row) if row is not None else None

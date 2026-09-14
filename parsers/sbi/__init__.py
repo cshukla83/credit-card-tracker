@@ -21,3 +21,20 @@ def parse(pdf_path: str, password: str, card_type: str) -> ParsedStatement:
         return sbi_titan.parse(pdf_path, password)
 
     raise NotImplementedError(f"SBI {card_type} parser not yet implemented")
+
+
+def extract_summary(pdf_path: str, password: str, card_type: str) -> dict:
+    """Route the page-1 summary-box extraction the same way parse() routes parsing.
+
+    The summary is the reconciliation side of an import (Session 98's upload
+    preview checks parsed debit/credit sums against it), so it needs the same
+    card_type routing as parse() rather than a direct import of one module.
+    """
+    normalized = card_type.strip().title()
+
+    if normalized == "Titan":
+        from parsers.sbi import sbi_titan
+
+        return sbi_titan.extract_summary(pdf_path, password)
+
+    raise NotImplementedError(f"SBI {card_type} parser not yet implemented")

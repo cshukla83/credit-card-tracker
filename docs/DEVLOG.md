@@ -10374,3 +10374,122 @@ parse, duplicate check, the reconciliation gate, in-memory preview
 cache. Deferred here: reading the card product off the page (no sample
 supports it yet); a bank-named `password_needed` (needs a resolved card,
 which preview has and detect does not).
+
+## Session 98 — 2026-09-14
+
+### Goal
+Module 1, step 2 of 5: `POST /upload/preview` (full parse, duplicate
+check, reconciliation, held in memory) and `POST /upload/confirm` (the
+write, gated on reconciliation unless overridden).
+
+### What happened
+
+Branch `feature/upload-ui` at `8ea9420`, clean.
+
+**Reconciliation had no function.** The brief says "run the existing
+reconciliation check". What existed was a rule, applied by hand in
+four test files: parsed debit sum against the summary box's purchases
+figure, parsed credit sum against its payments/credits figure, each
+within 0.01. The summary box comes from each card-type module's
+`extract_summary()`, whose dict keys differ per bank
+(`purchases_debit`/`payments_credits_received` for HDFC,
+`purchases_charges`/`payments_credits` for ICICI and IndusInd,
+`purchases_debits`/`payments_credits` for SBI). So: each bank's
+dispatch package gained an `extract_summary(pdf_path, password,
+card_type)` routed exactly as its `parse()` is; the registry gained
+`extract_summary` plus `summary_debit_key` / `summary_credit_key`,
+copied from the four real-statement tests; and `parsers/reconcile.py`
+holds the comparison. **One shape decision against the brief:** the
+brief's `{"status", "expected_total", "parsed_total", "delta"}` has one
+total; the project has always reconciled two sides, and a single total
+would hide which side is off (or let a debit overcount and a credit
+overcount cancel). The response is `{"status": "match"|"mismatch",
+"debit": {"expected", "parsed", "delta"}, "credit": {...}}` -- status is
+match only when both sides hold; a side whose figure the summary
+extraction did not find is `expected: null` and counts as a mismatch
+(unverifiable is not verified). The frontend is this module's only
+consumer, so the shape is internal.
+
+**`storage/reads.find_statement()`** -- the row already imported for
+(card_id, period_start, period_end), the same key `insert_statement()`
+dedups on, read ahead of time so a duplicate is reported at preview
+rather than surfacing as a silent no-op at write.
+
+**`storage/upload.preview()`.** `get_card` (404 if none) -> registry
+entry for its bank (422 "No parser configured" if none, the CLI's own
+message) -> `unlock` -> the registry's `parse()` and
+`extract_summary()` with the card's `card_type` (a `NotImplementedError`
+from dispatch, e.g. an HDFC card typed "Regalia", is 422 with the
+dispatch's message) -> a statement whose period the parser could not
+read is 422 (it cannot be identified, so it cannot be deduplicated or
+imported) -> duplicate check -> reconcile -> hold. The hold is a
+module-level dict `PREVIEWS[upload_id] = (card_id, parsed,
+reconciliation)`, `upload_id` a `uuid4().hex`; single process, no
+expiry, no persistence, as the brief allows. The response carries
+`"status": "preview"` alongside the brief's fields (`upload_id`,
+`card_id`, period, `transaction_count`, `reconciliation`) so the
+frontend branches on the one key every upload response has; a
+duplicate returns `{"status": "duplicate", "card_id", "statement_id",
+"period_start", "period_end"}` and caches nothing -- there is nothing
+to confirm. The PDF is re-sent as multipart with `card_id` as a form
+field: detect keeps nothing, so a reload between steps costs only the
+second upload. A locked PDF that no `.env` password opens is a plain
+422 naming the tried keys for now; Session 3 of the module gives it
+its status body.
+
+**`storage/upload.confirm()`.** Unknown `upload_id` (never previewed,
+already confirmed, server restarted) -> 410 "Preview expired or already
+imported -- upload the file again". Reconciliation not `match` and
+`override_reconciliation` not true -> 422 naming the flag, preview kept
+so the override can follow. Otherwise `insert_statement(conn,
+*from_parsed_statement(parsed, card_id))` -- the CLI's exact call -- and
+the entry is dropped. `insert_statement` returning None means the same
+statement landed between preview and confirm by another route (the
+CLI): 409, and the stale preview is dropped since it can never succeed.
+Duplicates never reach the override: the preview step caches nothing
+for them.
+
+**Tests** (`tests/test_upload_preview.py`, 40). The synthetic PDFs are
+HDFC current-layout text -- landmark, `PAYMENTS/CREDITS`, billing
+period, the `=` summary line, the `_` total line, three rows -- so the
+*real* `hdfc_diners` parser and summary extraction run end to end
+(checked in a scratch probe first: 3 rows, period read, summary keys
+populated). Covered: `reconcile()` match / one side off / within a
+paisa / missing figure; preview clean (nothing written, entry cached),
+mismatch with both sides reported, duplicate (hard stop, nothing
+cached), same period on another card is not a duplicate, unknown card
+404, bank without parser 422, card type without parser 422, unreadable
+period 422, non-PDF 422, missing `card_id` 422; confirm clean (rows
+land in order, entry cleared), twice -> 410, unknown id -> 410,
+mismatch blocked by default and with explicit false, overridden,
+raced duplicate 409 with the entry dropped, missing `upload_id` 422.
+Plus 18 real-sample cases, one per local PDF: a card of that bank,
+preview, `reconciliation.status == "match"` -- the one check that
+proves the registry's key pairs are the right ones, and the same
+assertion the four hand-written real-statement tests make. All ran
+here; skip elsewhere. **616 passing** (576 + 40).
+
+### Outcome
+A resolved card plus a PDF previews as period, count and a two-sided
+reconciliation, or as a duplicate; a preview confirms into the same
+atomic write the CLI uses, blocked on a mismatch unless overridden.
+Every real sample previews reconciled. Not run against a live server.
+
+### In plain English
+The middle of the upload flow is in: once the app knows which card a
+statement belongs to, it reads the whole statement and shows what it
+found -- the period, how many transactions, and whether the totals it
+added up agree with the totals printed on the statement -- without
+saving anything yet. If that statement was already imported, it says so
+and stops. Saving is a separate, deliberate step, and it refuses by
+default when the totals disagree unless the user says "import anyway".
+The check against the printed totals had only ever been done by hand in
+the test files; it is now a real piece of the app, and every sample
+statement on disk passes it through the new path.
+
+### Next steps
+Session 99 (prompt Session 3): the `password_needed` status on both
+endpoints (bank-named on preview), and the bank-agnostic best-attempt
+parser behind `?strategy=best_effort`. Deferred here: any expiry or
+size cap on the preview cache (single user, one process; revisit only
+if it ever matters).
