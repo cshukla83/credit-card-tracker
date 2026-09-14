@@ -41,9 +41,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 
-import pdfplumber
-
-from parsers.base import ParsedStatement, Transaction
+from parsers.base import ParsedStatement, Transaction, extract_all_text
 
 # (regex, strptime format). Order matters only for the alternation below.
 _DATE_SHAPES = [
@@ -162,13 +160,8 @@ def _extract_summary_from_text(text: str) -> dict:
     return summary
 
 
-def _all_text(pdf_path: str, password: "str | None") -> "list[str]":
-    with pdfplumber.open(pdf_path, password=password) as pdf:
-        return [page.extract_text() or "" for page in pdf.pages]
-
-
 def parse(pdf_path: str, password: "str | None") -> ParsedStatement:
-    pages = _all_text(pdf_path, password)
+    pages = extract_all_text(pdf_path, password)
     transactions: "list[Transaction]" = []
     for text in pages:
         for line in text.splitlines():
@@ -187,4 +180,4 @@ def parse(pdf_path: str, password: "str | None") -> ParsedStatement:
 
 
 def extract_summary(pdf_path: str, password: "str | None") -> dict:
-    return _extract_summary_from_text("\n".join(_all_text(pdf_path, password)))
+    return _extract_summary_from_text("\n".join(extract_all_text(pdf_path, password)))

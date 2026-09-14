@@ -10613,3 +10613,118 @@ Session 100 (prompt Session 4): the LLM-assisted parse behind
 better wrapped-row handling in the fallback (the ICICI misses) and a
 period search that tolerates interleaved lines (the IndusInd case) --
 both are bank-shaped knowledge the fallback is meant not to have.
+
+## Session 100 — 2026-09-14
+
+### Goal
+Module 1, step 4 of 5: the LLM-assisted parse behind
+`POST /upload/preview?strategy=llm_assist` -- one model call that turns a
+statement's text into a `ParsedStatement`, mocked entirely in tests.
+
+### What happened
+
+Branch `feature/upload-ui` at `b160f82`, clean.
+
+**Key name.** The brief said to pick one and document it. The project
+already has an LLM convention: `storage/commentary.py` (Session 68)
+calls Gemini over REST with `GEMINI_API_KEY` / `GEMINI_MODEL`, and
+those keys are already in the local `.env`. Inventing a second key for
+the same provider would be a second thing to configure for no reason,
+so the parse reuses the commentary module's constants (imported, not
+copied). CONVENTIONS.md gained a "Secrets in `.env`" section listing
+every key the app reads -- the per-bank passwords, the Gemini pair,
+`DB_PATH` -- which it had never had in one place. **Consequence for
+the brief's pause condition:** the key it expected to be missing is
+present, so the live check needs no `.env` edit -- but the stop after
+this session is honoured as written.
+
+**`parsers/llm_assist.py`.** `parse_with_summary(pdf_path, password)`
+-> `(ParsedStatement, summary)`: all pages' text via a new shared
+`parsers.base.extract_all_text` (moved out of `generic_fallback`, which
+now uses it too), redacted, sent with a fixed JSON schema to fill --
+period, rows as `{date, description, amount, type, is_payment}`, and
+`summary.{purchases_total, payments_credits_total}` for the statement's
+own printed figures, null where absent. Asking for the printed totals
+is what makes this path reconciliation-checkable: the sums are always
+computed here from the returned rows and compared against the model's
+reading of the summary box, so a model that drops or invents a row
+fails the gate like any other parser. `parse_reply()` is strict: not
+JSON (markdown fences tolerated and stripped), not an object, rows not
+a list, a bad or missing date, a blank description, a type outside
+debit/credit, a non-numeric or negative amount, a non-object summary --
+each is `LLMParseError` naming the field; a debit is never a payment
+whatever the reply says (the `parsers.base` rule). `_call_gemini` is
+the commentary module's shape with `responseMimeType:
+application/json` requested and a 60 s timeout; any failure -- HTTP,
+timeout, response shape -- is one `LLMParseError("model call failed:
+<type>")`. No key: `LLMNotConfiguredError` before any call. **Data
+leaving the machine:** this is the second place, and unlike the
+commentary's narrowed payload this one cannot be narrowed -- reading
+the statement is the point, so descriptions, dates and amounts go.
+The two limits, stated in the module docstring: it runs only on the
+user's explicit choice of this option for one upload, and runs of
+eight or more digits (card, account and reference numbers, masked or
+not) are replaced with `[number]` first -- an amount never has eight
+digits in a row, and a date never has more than four. One-off by
+design: no format is learned, nothing cached for the next upload; the
+Tier 4 auto-learn system in PRODUCT_VISION.md is a separate, later
+thing.
+
+**Wiring.** `Strategy` in `storage/upload.py` became one `run(path,
+password) -> (parsed, summary)` callable plus the two summary keys,
+instead of separate parse and summary functions: the LLM path is a
+single call that yields both, and running it twice would be a second
+model call with no guarantee of the same answer. Banks and the
+fallback compose their two functions into one `run`. `preview()` maps
+`LLMNotConfiguredError` to `{"status": "llm_not_configured",
+"api_key_env": "GEMINI_API_KEY"}` and `LLMParseError` to `{"status":
+"llm_failed", "reason": ...}` -- status bodies, like `password_needed`,
+so the frontend branches on one field and can offer the other
+strategy; nothing is cached in either case. The unlock step runs
+before the strategy, so a locked PDF is `password_needed` without a
+model call.
+
+**Tests** (`tests/test_llm_assist.py`, 33; every one replaces the
+call). `parse_reply` well-formed (types, dates, `is_payment`, summary),
+fenced, summary nulls and absent, debit-never-payment, and 14 malformed
+replies each rejected with the field named; redaction keeps amounts and
+dates and drops long digit runs; `parse_with_summary` sends the
+redacted text with the key, never calls without a key, and turns
+`ConnectError` / `ReadTimeout` / `ValueError` into `LLMParseError`; the
+real `_call_gemini` against an `httpx.MockTransport` (model from env,
+key as query param, JSON mode requested, reply text returned). Through
+the endpoint: well-formed reply previews, reconciles against the
+model's totals, confirms with rows and the payment flag in the DB;
+mismatched totals go through the gate (blocked, then overridden); no
+totals is a mismatch; a prose reply, a connection failure, and a
+missing key are each a clean status with nothing cached; a locked PDF
+is `password_needed` with no call made; a duplicate is still a hard
+stop. **716 passing** (683 + 33).
+
+### Outcome
+An unrecognised statement can be sent to the model and comes back
+through the same preview, reconciliation and confirm path as every
+other parser; a missing key or a failed call is a status the frontend
+can show. Not exercised against the live model -- no real call was
+made from this codebase -- and not run against a live server.
+
+### In plain English
+The last parsing option is in: for a statement from a bank the app
+doesn't know, the user can ask an AI model to read it. The model is
+handed the statement text and a strict template to fill in, and its
+answer is checked the same way as every other reader's -- the app adds
+up the rows itself and compares them with the totals printed on the
+statement, so a model that misses or invents a line gets caught by the
+same check as everything else. Because this sends the statement's
+contents to an outside service, it only ever happens when the user
+picks it, for that one file, and long number strings such as card
+numbers are blanked out first. If the model's key isn't set up or the
+call fails, the app says so plainly and offers the other option.
+
+### Next steps
+Stopped here per the brief's pause condition. Live verification of
+this path by Chandra: an upload of an unrecognised (or any) statement
+with `strategy=llm_assist` against the running server -- the key is
+already in `.env`, so no edit is needed first; the default model name
+has still never been exercised live from this codebase (Session 68's
+note stands). Then Session 101 (prompt Session 5): the Upload tab.

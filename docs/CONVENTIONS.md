@@ -119,6 +119,30 @@ externally, verify these files are not included — the `.gitignore` rule
 protects against normal `git add`/`push`, but manual uploads, zip
 archives, or alternative publishing methods could bypass it.
 
+## Secrets in `.env`
+
+Every secret the app reads lives in the git-ignored `.env` at the project
+root, loaded with `python-dotenv`. Nothing is ever hardcoded, and no
+prompt, DEVLOG entry, or test output may quote a value (see Data Handling
+above). The keys, all read at call time so a change to `.env` needs only a
+restart:
+
+- `<BANK>_SAMPLE_PASSWORD` — the statement password for one bank, per
+  bank not per card: `HDFC_SAMPLE_PASSWORD`, `ICICI_SAMPLE_PASSWORD`,
+  `SBI_SAMPLE_PASSWORD`, `INDUSIND_SAMPLE_PASSWORD`. The registry in
+  `parsers/registry.py` is the list; the CLI importer, the upload
+  endpoints and the real-statement tests all read it from there. A new
+  bank means a new registry entry and a new key of this shape.
+- `GEMINI_API_KEY` (and optional `GEMINI_MODEL`) — the one LLM key,
+  shared by the two places data leaves the machine: the dashboard
+  commentary (Session 68, a narrowed payload of labels and amounts) and
+  the LLM-assisted statement parse (Session 100, the statement's
+  extracted text with long digit runs redacted, only on the user's
+  explicit choice for one upload). A missing key is reported as a
+  status, never a stack trace, by both.
+- `DB_PATH` — where the SQLite file lives; defaults to `data/tracker.db`
+  and is pointed at a temp file by the tests.
+
 ## CLI Invocation
 
 **Rule:** every script under `scripts/` must be run as

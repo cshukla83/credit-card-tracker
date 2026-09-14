@@ -1,4 +1,4 @@
-"""The web upload path (Sessions 97-99): a new entry point onto the CLI's
+"""The web upload path (Sessions 97-100): a new entry point onto the CLI's
 import pipeline, not a parallel one.
 
 Step 1, detection (`detect()`): read the PDF's first page
@@ -18,9 +18,10 @@ frontend branches on one field:
                  that were tried are listed instead.
 
 Step 2, preview (`preview()`): with a card resolved, run the CLI's own
-pipeline -- the registry's parse() for the card's bank, or with
-strategy="best_effort" the bank-agnostic parsers.generic_fallback for a
-format no landmark recognised (Session 99) -- then check for a
+pipeline -- the registry's parse() for the card's bank, or for a format no
+landmark recognised either the bank-agnostic parsers.generic_fallback
+(strategy="best_effort", Session 99) or the model-backed
+parsers.llm_assist (strategy="llm_assist", Session 100) -- then check for a
 duplicate (same card, same period: the key insert_statement() dedups on),
 reconcile the parsed sums against the statement's summary box, and hold
 the parsed statement in memory under an opaque upload_id. Nothing is
@@ -40,7 +41,7 @@ import sqlite3
 import uuid
 from typing import Callable, NamedTuple
 
-from parsers import generic_fallback
+from parsers import generic_fallback, llm_assist
 from parsers.detect import PasswordNeededError, identify, unlock
 from parsers.reconcile import reconcile
 from parsers.registry import BANKS
@@ -81,18 +82,18 @@ class UnknownStrategyError(Exception):
 
 
 class Strategy(NamedTuple):
-    """How a preview parses: a parse function, its summary extraction, and
-    which two summary keys the debit and credit sums reconcile against --
-    the same three things a registry Bank carries, so a bank and the
-    fallback are interchangeable from here on."""
+    """How a preview parses: one call that yields the ParsedStatement and the
+    statement's summary figures together, plus which two summary keys the
+    debit and credit sums reconcile against. A registry bank composes its
+    parse() and extract_summary(); the LLM path is a single model call that
+    returns both -- which is why this is one callable, not two."""
 
-    parse: "Callable[[str, str | None], dict]"
-    extract_summary: "Callable[[str, str | None], dict]"
+    run: "Callable[[str, str | None], tuple[dict, dict]]"
     summary_debit_key: str
     summary_credit_key: str
 
 
-STRATEGIES = ("detected", "best_effort")
+STRATEGIES = ("detected", "best_effort", "llm_assist")
 
 
 class PendingUpload(NamedTuple):
@@ -151,18 +152,26 @@ def _strategy_for(card: dict, strategy: str) -> Strategy:
         # Bank-agnostic by definition: the card's bank need not be in the
         # registry (that is the point -- an unrecognised format).
         return Strategy(
-            parse=generic_fallback.parse,
-            extract_summary=generic_fallback.extract_summary,
+            run=lambda path, password: (
+                generic_fallback.parse(path, password),
+                generic_fallback.extract_summary(path, password),
+            ),
             summary_debit_key="purchases",
             summary_credit_key="payments_credits",
+        )
+    if strategy == "llm_assist":
+        return Strategy(
+            run=llm_assist.parse_with_summary,
+            summary_debit_key="purchases_total",
+            summary_credit_key="payments_credits_total",
         )
     if strategy == "detected":
         bank = _bank_for(card)
         card_type = card["card_type"]
         return Strategy(
-            parse=lambda path, password: bank.parse(path, password, card_type=card_type),
-            extract_summary=lambda path, password: bank.extract_summary(
-                path, password, card_type=card_type
+            run=lambda path, password: (
+                bank.parse(path, password, card_type=card_type),
+                bank.extract_summary(path, password, card_type=card_type),
             ),
             summary_debit_key=bank.summary_debit_key,
             summary_credit_key=bank.summary_credit_key,
@@ -200,10 +209,17 @@ def preview(
     except PasswordNeededError as e:
         return _password_needed(card, e)
     try:
-        parsed = chosen.parse(pdf_path, unlocked.password)
-        summary = chosen.extract_summary(pdf_path, unlocked.password)
+        parsed, summary = chosen.run(pdf_path, unlocked.password)
     except NotImplementedError as e:
         raise UnsupportedCardError(str(e)) from e
+    except llm_assist.LLMNotConfiguredError:
+        # Expected on first use: the key is added by hand to .env. A status
+        # the frontend can show, like password_needed, not an error.
+        return {"status": "llm_not_configured", "api_key_env": llm_assist.API_KEY_ENV}
+    except llm_assist.LLMParseError as e:
+        # The call failed or the reply was unusable; nothing was written and
+        # nothing is cached. The frontend offers the other strategy.
+        return {"status": "llm_failed", "reason": str(e)}
 
     period_start, period_end = parsed["period_start"], parsed["period_end"]
     if period_start is None or period_end is None:

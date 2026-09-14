@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Callable, Optional, TypedDict
 
+import pdfplumber
+
 
 class Transaction(TypedDict):
     date: datetime
@@ -42,3 +44,13 @@ class ParsedStatement(TypedDict):
 # The statement period is bank-agnostic (every credit card statement has one),
 # so it lives in this shared return shape rather than being Diners-specific.
 ParseFn = Callable[[str, str], ParsedStatement]
+
+
+def extract_all_text(pdf_path: str, password: "str | None") -> "list[str]":
+    """Every page's extract_text(), in order, empty string for a blank page.
+
+    Shared by the parsers that read a statement as plain text rather than
+    by layout (generic_fallback, llm_assist -- Sessions 99-100).
+    """
+    with pdfplumber.open(pdf_path, password=password) as pdf:
+        return [page.extract_text() or "" for page in pdf.pages]
