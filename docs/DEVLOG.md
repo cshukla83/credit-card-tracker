@@ -10959,3 +10959,67 @@ arc: the parser-tier roadmap. Deferred from here: the LLM follow-ups
 already recorded (HTTP status in `llm_failed.reason`; the default
 model name), and a "cards without statements" note on the other tabs'
 pickers, which still show only cards with imports by design.
+
+## Session 102 — 2026-09-14
+
+### Goal
+The two LLM follow-ups recorded by the verification pass before
+Session 101: put the HTTP status into `llm_failed.reason`, and replace
+the default Gemini model with one the key can actually call.
+
+### What happened
+
+Branch `feature/upload-ui` at `d266e49`, clean.
+
+**Fix 1 -- the status code.** `parse_with_summary()` in
+`parsers/llm_assist.py` caught every failure of the model call alike
+and reported only the exception's type name, which is how the
+verification pass came to see `model call failed: HTTPStatusError`
+with no way to tell a transient 429/503 from a rejected request. An
+`httpx.HTTPStatusError` is now caught first and reported as `model
+call failed: HTTPStatusError <status>`; every other failure --
+timeout, connection, response shape -- keeps the type-only reason it
+had. The reason stays a string, the shape this module's statuses have
+used since Session 100. Nothing from the response body goes into it:
+the body can echo the request, and the reason reaches the screen.
+
+**Fix 2 -- the default model.** The brief placed the default in
+`parsers/llm_assist.py`; it lives in `storage/commentary.py`
+(`DEFAULT_MODEL`), which the parse module imports rather than
+duplicating (Session 100). Changed there, from `gemini-1.5-flash` to
+`gemini-3.5-flash` -- a name that was in the key's own model listing
+during the verification pass -- which means the dashboard commentary's
+default changes with it. That is wider than the brief describes and
+is the right outcome: same key, same provider, and the old default
+was equally uncallable for both; the commentary docstring's "never
+exercised live" note was updated to say so. `GEMINI_MODEL` in `.env`
+still wins whenever set; nothing became required.
+
+**Tests** (`tests/test_llm_assist.py`, +5). HTTP errors at 429, 500
+and 400 each produce `model call failed: HTTPStatusError <code>`, and
+a 503 reaches the endpoint's `llm_failed` body with the code in it.
+The existing `ConnectError` case (`model call failed: ConnectError`)
+still passes unchanged -- the non-HTTP path is untouched. The override
+was already covered (`test_call_gemini_request_shape` sets
+`GEMINI_MODEL` to a fake name and checks the URL) and still passes
+against the new default; what was *not* covered was the default
+itself -- the local `.env` always sets the override, so no test had
+ever run without it -- so one new test unsets the env var and checks
+the request URL names `gemini-3.5-flash`. **723 passing** (718 + 5).
+
+### Outcome
+A failed model call now says which HTTP status it got, and the default
+model is one that exists. Both verified by the suite; not called live.
+
+### In plain English
+Two small loose ends from the live check. When the AI model's service
+refuses a request, the app now reports the kind of refusal -- a
+temporary "try again later" looks different from "this request was
+wrong" -- instead of just "it failed". And the model the app falls
+back to when none is configured was one that no longer exists; it is
+now a current one, for both the statement reader and the dashboard's
+commentary, which share the setting.
+
+### Next steps
+Chandra's browser walk of the Upload tab, then merge `feature/upload-ui`
+into `main`. Nothing further on Module 1.

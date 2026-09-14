@@ -179,6 +179,14 @@ def parse_with_summary(pdf_path: str, password: "str | None") -> "tuple[ParsedSt
     text = redact("\n".join(extract_all_text(pdf_path, password)))
     try:
         reply = _call_gemini(api_key, text)
-    except Exception as e:  # any failure -- HTTP, timeout, shape -- alike
+    except httpx.HTTPStatusError as e:
+        # The status is the one thing that tells a transient 429/503 from a
+        # rejected request (400, 403) -- Session 101's verification pass saw
+        # a first call fail and a retry succeed with no way to tell which
+        # this was. Nothing from the response body: it can echo the request.
+        raise LLMParseError(
+            f"model call failed: HTTPStatusError {e.response.status_code}"
+        ) from e
+    except Exception as e:  # every other failure -- timeout, network, shape -- alike
         raise LLMParseError(f"model call failed: {type(e).__name__}") from e
     return parse_reply(reply)

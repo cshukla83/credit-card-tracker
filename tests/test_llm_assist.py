@@ -200,6 +200,48 @@ def test_parse_with_summary_call_failure_is_parse_error(make_pdf, tmp_path, with
     assert type(exc).__name__ in str(excinfo.value)
 
 
+def _http_status_error(status_code):
+    request = httpx.Request("POST", "https://example.invalid/generateContent")
+    response = httpx.Response(status_code, request=request, json={"error": {"message": "x"}})
+    return httpx.HTTPStatusError("boom", request=request, response=response)
+
+
+@pytest.mark.parametrize("status_code", [429, 500, 400])
+def test_http_error_reason_carries_status_code(make_pdf, tmp_path, with_key, monkeypatch, status_code):
+    # Session 102: a transient 429/503 must be tellable from a rejected
+    # request, and the body never leaks into the reason.
+    monkeypatch.setattr(llm, "_call_gemini", _failing_call(_http_status_error(status_code)))
+    path = tmp_path / "s.pdf"
+    path.write_bytes(make_pdf(["x"]))
+    with pytest.raises(llm.LLMParseError) as excinfo:
+        llm.parse_with_summary(str(path), None)
+    assert str(excinfo.value) == f"model call failed: HTTPStatusError {status_code}"
+
+
+def test_http_error_status_reaches_the_llm_failed_body(client, card, make_pdf, with_key, monkeypatch):
+    monkeypatch.setattr(llm, "_call_gemini", _failing_call(_http_status_error(503)))
+    body = _preview_llm(client, make_pdf(["x"]), card).json()
+    assert body == {"status": "llm_failed", "reason": "model call failed: HTTPStatusError 503"}
+
+
+def test_default_model_is_used_when_env_is_unset(monkeypatch):
+    # Session 102: the default was never exercised before -- the local .env
+    # always sets GEMINI_MODEL -- and the old one was not a callable model.
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "{}"}]}}]})
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(llm.httpx, "post", lambda url, **kw: httpx.Client(transport=transport).post(url, **kw))
+    monkeypatch.delenv(llm.MODEL_ENV, raising=False)
+
+    llm._call_gemini("k", "text")
+    assert llm.DEFAULT_MODEL == "gemini-3.5-flash"
+    assert "models/gemini-3.5-flash:generateContent" in seen["url"]
+
+
 def test_call_gemini_request_shape(monkeypatch):
     # The one test of the real HTTP function, against a mock transport:
     # model from env, key as a query param, JSON response mode requested,

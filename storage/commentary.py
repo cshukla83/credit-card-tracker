@@ -25,7 +25,11 @@ import httpx
 
 API_KEY_ENV = "GEMINI_API_KEY"
 MODEL_ENV = "GEMINI_MODEL"
-DEFAULT_MODEL = "gemini-1.5-flash"
+# Shared with parsers.llm_assist (Session 100). Was gemini-1.5-flash until
+# Session 102: the verification pass found that name absent from the key's
+# own model listing, so the default could never have been called; the env
+# override in .env is what had been working. GEMINI_MODEL still wins when set.
+DEFAULT_MODEL = "gemini-3.5-flash"
 _NO_FILTER = "-"  # fixed sentinel so "no filter" always signs the same way
 _TIMEOUT_SECONDS = 20.0
 
@@ -124,9 +128,9 @@ def _call_gemini(api_key: str, payload: dict) -> str:
     Kept as one small function so tests replace it wholesale; nothing in
     the suite ever reaches the network. Any HTTP error, timeout, or
     unexpected response shape raises -- callers treat every failure alike.
-    Model is configurable via GEMINI_MODEL; the default has not been
-    exercised against the live API from this codebase (Session 68 made no
-    real calls), so a first live run should confirm it.
+    Model is configurable via GEMINI_MODEL; the default (see DEFAULT_MODEL)
+    is one the verification pass before Session 102 found in the key's own
+    model listing, and the env override is the one exercised live there.
     """
     model = os.environ.get(MODEL_ENV) or DEFAULT_MODEL
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
