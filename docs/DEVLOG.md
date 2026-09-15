@@ -11837,3 +11837,88 @@ Re-run the Axis statement through `llm_assist` (still pending from
 Session 114); Chandra's browser walk of the Upload tab, including this
 popup on a mismatch or unverified preview; then merge
 `feature/upload-ui` into `main`.
+
+## Session 116 — 2026-09-15
+
+### Goal
+The unrecognized-statement screen redesigned from a developer-facing
+error ("Unrecognized format", four bank names, a dropdown and three
+buttons that each did something different) into one user-facing flow
+with a single action. Frontend only.
+
+### What happened
+
+Branch `feature/upload-ui` at `61ad4bb`, clean.
+
+**What was wrong.** The screen told the user what had failed rather
+than what to do: the heading was "Unrecognized format" and the message
+listed the banks the app can read. Below it, two ways of choosing a
+card (a picker and a "Create card and continue" form), a "How should it
+be read?" dropdown that applied only to the new-card form, and two
+floating strategy buttons that applied only to the picker. Four
+controls, three of which silently ignored the others. This was the
+Module 1 carryover item -- the unrecognized-screen message rewrite --
+parked at Session 101's close-out; it grew into a redesign because the
+message was the smaller of the two problems.
+
+**The new screen** (`static/index.html`, `renderUnrecognized()`).
+Heading "New statement", then the file line, then: "We couldn't
+identify this statement's bank automatically. Tell us which card it's
+for and we'll read it for you." One section, "Which card is it for?"
+(the "1." dropped; there is no "2."), with the existing-card picker and
+the Bank / Card type / Nickname fields for a new card. Choosing an
+existing card disables and greys out the three fields and swaps the
+helper line to say the selected card is being used; clearing the picker
+back to "Choose a card…" re-enables them. Beneath, with no heading of
+its own, a checkbox "AI-assisted import" with the helper "Sends the
+statement text (long numbers blanked) to the configured model. Default
+reads locally." Off is `best_effort`, on is `llm_assist`, for either
+card path. Two buttons: "Continue to preview" (primary) and "Choose
+another file".
+
+"Continue to preview" reads the card from whichever path is in use --
+`{card_id}` for an existing card, a pending `{new_card}` cardRef for a
+new one (Session 112's deferred creation, unchanged) -- and the strategy
+from the checkbox, then calls `startPreview` or `createCardAndPreview`
+exactly as the old buttons did. If neither an existing card is chosen
+nor both Bank and Card type are filled, an inline error says so.
+Pressing Enter in any of the three fields submits the same way.
+
+Two small things beyond the brief. The field values and the toggle now
+live on the `upload` state (`newCard`, `aiAssist`, both reset by
+`resetUpload`), so a validation error's re-render no longer blanks what
+was typed -- the old `cardForm` lost the entries on that path. And the
+`KNOWN_BANKS` constant, whose only use was the removed message, is
+gone. `cardForm()` itself is still used by the zero-match screen and is
+untouched.
+
+**Not changed.** Every other upload screen (zero-match, multi-match,
+password-needed, preview, LLM-blocked, success); the "Read with" label
+on the preview; `GET /cards?all=true` as the picker's source; the
+strategy as a query parameter on `/upload/preview`; nothing in the
+backend, parsers, reconciliation or storage.
+
+**Verification.** Page script parsed under `jsc`. **788 passing**,
+unchanged -- the suite does not exercise the page. Browser verification
+is manual: the picker greying and re-enabling the fields, the toggle's
+value reaching the preview's "Read with" line, the inline error with
+nothing chosen, and typed values surviving that error.
+
+### Outcome
+One screen, one question, one button: which card, and continue.
+
+### In plain English
+When a statement comes from a bank the app does not have a parser for,
+the screen used to say so in the app's own terms -- "unrecognized
+format" and a list of banks -- and then offer a confusing spread of
+controls where it was not clear which button used which setting. It now
+simply says the bank could not be identified and asks which card the
+statement belongs to. Pick an existing card, or type in a new one; tick
+a box if the AI should read the statement instead of the built-in
+best-attempt reader; press Continue. Everything that happens after --
+the preview, the totals check, the import -- is exactly as before.
+
+### Next steps
+Re-run the Axis statement through the AI-assisted path (pending from
+Session 114); Chandra's browser walk of the Upload tab, this screen
+included; then merge `feature/upload-ui` into `main`.

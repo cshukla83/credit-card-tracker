@@ -569,6 +569,33 @@
     color: var(--ink);
     font-size: 0.92rem;
   }
+  .upload-form input[type="text"]:disabled {
+    background: var(--hover);
+    color: var(--muted);
+    border-color: var(--rule);
+    cursor: not-allowed;
+  }
+  .upload-toggle {
+    margin: 0.2rem 0 1.2rem;
+  }
+  .upload-toggle > label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  .upload-toggle input[type="checkbox"] {
+    width: 1.05rem;
+    height: 1.05rem;
+    accent-color: var(--accent);
+    margin: 0;
+  }
+  .upload-toggle .help {
+    margin: 0.3rem 0 0 1.6rem;
+    font-size: 0.82rem;
+    color: var(--muted);
+  }
   .upload-choices {
     list-style: none;
     margin: 0 0 1rem;
@@ -4000,7 +4027,6 @@
     // -> preview | duplicate -> confirm -> success. The file is held in
     // memory and re-sent to preview with the resolved card_id, since detect
     // keeps nothing server-side. Nothing here touches the filter bar.
-    const KNOWN_BANKS = ["HDFC", "ICICI", "SBI", "IndusInd"];
     const upload = {
       step: "empty",      // empty | zero_match | multi_match | unrecognized |
                           // password_needed | preview | llm_blocked | success
@@ -4012,6 +4038,8 @@
       llm: null,          // llm_not_configured / llm_failed reply
       allCards: [],       // GET /cards?all=true, for the unrecognized screen
       chosenCardId: "",   // unrecognized screen's picker
+      newCard: { bank: "", cardType: "", nickname: "" },  // unrecognized screen's create fields (Session 116)
+      aiAssist: false,    // unrecognized screen's toggle: off = best_effort, on = llm_assist
       cardRef: null,      // {card_id} or {new_card} the preview was made for (Session 112)
       showDetail: false,  // reconciliation detail expanded
       rowsSeen: false,    // the row-level preview has been opened and closed (Session 103)
@@ -4022,8 +4050,8 @@
     function resetUpload() {
       Object.assign(upload, {
         step: "empty", file: null, detect: null, preview: null, result: null,
-        strategy: "detected", llm: null, chosenCardId: "", cardRef: null, showDetail: false,
-        rowsSeen: false, busy: false, error: "",
+        strategy: "detected", llm: null, chosenCardId: "", newCard: { bank: "", cardType: "", nickname: "" },
+        aiAssist: false, cardRef: null, showDetail: false, rowsSeen: false, busy: false, error: "",
       });
       renderUpload();
     }
@@ -4307,43 +4335,80 @@
       ];
     }
 
+    // The unrecognized-statement screen (Session 116). One flow: pick the
+    // card -- an existing one from the picker, or bank/type/nickname for a
+    // new one -- flip the AI toggle if wanted, and continue. Choosing an
+    // existing card greys out the create fields; clearing the picker
+    // re-enables them. Card creation is still deferred to confirm (Session
+    // 112): a new card goes as a pending cardRef, an existing one as
+    // card_id; the toggle is the strategy query parameter on preview.
+    // Field values live on `upload` so a validation error's re-render does
+    // not blank what was typed.
     function renderUnrecognized() {
       const cards = upload.allCards;
+      const draft = upload.newCard;
+      const existingChosen = !!upload.chosenCardId;
+
+      const textInput = (key, placeholder) => el("input", {
+        type: "text", value: draft[key], placeholder,
+        disabled: existingChosen ? "" : null,
+        oninput: (event) => { draft[key] = event.target.value; },
+      });
+      const bankEl = textInput("bank", "e.g. HDFC");
+      const typeEl = textInput("cardType", "e.g. Diners");
+      const nickEl = textInput("nickname", "optional, e.g. Primary");
+
       const picker = el("select", {
-        onchange: (event) => { upload.chosenCardId = event.target.value; },
-      }, [el("option", { value: "", text: cards.length ? "Choose a card…" : "(no cards yet)" })].concat(
-        cards.map((c) => el("option", { value: String(c.id), text: c.bank + " · " + cardLabel(c) }))
+        onchange: (event) => {
+          upload.chosenCardId = event.target.value;
+          upload.error = "";
+          renderUpload();  // re-render: the create fields enable/disable with the choice
+        },
+      }, [el("option", { value: "", text: cards.length ? "Choose a card\u2026" : "(no cards yet)" })].concat(
+        cards.map((c) => el("option", { value: String(c.id), text: c.bank + " \u00b7 " + cardLabel(c) }))
       ));
       picker.value = upload.chosenCardId;
-      const withStrategy = (strategy) => {
-        if (!upload.chosenCardId) { upload.error = "Pick a card first, or create one below."; renderUpload(); return; }
-        startPreview({ card_id: Number(upload.chosenCardId) }, strategy);
+
+      const toggle = el("input", {
+        type: "checkbox", checked: upload.aiAssist ? "" : null,
+        onchange: (event) => { upload.aiAssist = event.target.checked; },
+      });
+
+      const continueToPreview = () => {
+        const strategy = upload.aiAssist ? "llm_assist" : "best_effort";
+        if (existingChosen) return startPreview({ card_id: Number(upload.chosenCardId) }, strategy);
+        const b = draft.bank.trim(), t = draft.cardType.trim();
+        if (!b || !t) {
+          upload.error = "Choose an existing card, or fill in both Bank and Card type to create one.";
+          renderUpload();
+          return;
+        }
+        createCardAndPreview(b, t, draft.nickname.trim(), strategy);
       };
-      let newCardStrategy = "best_effort";
+
       return [
-        el("h2", { text: "Unrecognized format" }),
+        el("h2", { text: "New statement" }),
         fileLine(),
-        el("p", {}, ["This statement is not from a bank the app can read directly (",
-          KNOWN_BANKS.join(", "), "). It can still be imported two ways; either lands on the same preview, ",
-          "and the totals check decides whether it is trusted."]),
+        el("p", { text: "We couldn\u2019t identify this statement\u2019s bank automatically. Tell us which card it\u2019s for and we\u2019ll read it for you." }),
         errorLine(),
-        el("h2", { text: "1. Which card is it for?" }),
+        el("h2", { text: "Which card is it for?" }),
         el("div", { class: "upload-form" }, [el("label", {}, ["Existing card", picker])]),
-        el("p", { class: "muted", text: "Or create one (bank and card type are not read from an unrecognized statement):" }),
-        cardForm("", "", "Create card and continue", (b, t, n) => createCardAndPreview(b, t, n, newCardStrategy)),
-        el("h2", { text: "2. How should it be read?" }),
-        el("div", { class: "upload-form" }, [el("label", {}, ["For a new card", el("select", {
-          onchange: (event) => { newCardStrategy = event.target.value; },
-        }, [
-          el("option", { value: "best_effort", text: "Best-attempt parse" }),
-          el("option", { value: "llm_assist", text: "LLM-assisted parse" }),
-        ])])]),
+        el("p", { class: "muted", text: existingChosen
+          ? "Using the selected card. Clear the picker to create a new card instead."
+          : "Or create one (bank and card type are not read from an unrecognized statement):" }),
+        el("form", { class: "upload-form", onsubmit: (event) => { event.preventDefault(); continueToPreview(); } }, [
+          el("label", {}, ["Bank", bankEl]),
+          el("label", {}, ["Card type", typeEl]),
+          el("label", {}, ["Nickname", nickEl]),
+        ]),
+        el("div", { class: "upload-toggle" }, [
+          el("label", {}, [toggle, "AI-assisted import"]),
+          el("p", { class: "help", text: "Sends the statement text (long numbers blanked) to the configured model. Default reads locally." }),
+        ]),
         el("div", { class: "upload-actions" }, [
-          uploadButton("Try LLM-assisted parse", () => withStrategy("llm_assist"), { primary: true }),
-          uploadButton("Best-attempt parse", () => withStrategy("best_effort")),
+          uploadButton("Continue to preview", continueToPreview, { primary: true }),
           startOverButton(),
         ]),
-        el("p", { class: "muted", text: "LLM-assisted sends the statement's text (long numbers blanked out) to the configured model. Best-attempt reads it locally with generic rules." }),
       ];
     }
 
