@@ -221,6 +221,27 @@ The discipline this project is built under, session after session:
   corresponds to. Explicit numbering keeps both conversations in sync
   without relying on manual tracking. (Added in Session 59.)
 
+## Prompt and Carry-Over Format
+
+How the planning conversation hands work to Claude Code, and how one
+session hands context to the next:
+
+- **Claude Code prompts are always markdown code blocks.** In the
+  planning conversation, a prompt is presented as a fenced markdown code
+  block (with a copy icon), never as inline prose. This keeps a prompt
+  unambiguous, copy-pasteable as one unit, and visually distinct from the
+  discussion around it — what is inside the block is the instruction;
+  what is outside it is the conversation about the instruction.
+- **Carry-over documents are standalone markdown files.** A
+  session-to-session carry-over — the briefing that lets a fresh planning
+  conversation pick up where the last one left off — is written as its
+  own markdown file, downloadable from the planning conversation and
+  uploaded to the Claude project's knowledge space. Carry-overs are
+  pointers and briefings: they say where things stand and what to read.
+  They are not a replacement for `docs/STATE.md`, `docs/DEVLOG.md`, or
+  this file, which remain the source of truth; a carry-over that
+  disagrees with them is the one that is wrong.
+
 ## Verification Tooling
 
 Ad hoc scripts used to manually verify behavior (curl one-liners, quick
