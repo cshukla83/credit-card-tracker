@@ -478,6 +478,42 @@ system font stack.
   visible, which does not by itself fix it and would still need (a)
   alongside.
 
+- **LLM-assist redaction does not cover names or addresses** (raised
+  Session 117, recorded, not built). `parsers/llm_assist.redact()` blanks
+  runs of eight or more digits -- card, account and reference numbers --
+  and nothing else. The full extracted text goes to the model otherwise,
+  and a check of the four banks' real samples shows the cardholder's
+  name in six or more shapes (`MR. <NAME>`, `<NAME> Credit Card Number`,
+  `TRANSACTIONS FOR <NAME>` once per cardholder including add-ons,
+  `Payment Details for MR <NAME>`, `<NAME> [CKYC ID : …]`), multi-line
+  address blocks whose shape differs per bank, six-digit PIN codes, and
+  e-mail addresses. There is no cross-bank textual marker for "this is
+  the customer", so heuristics alone cannot do it reliably. The proposal
+  on the table, sized as one session: (1) an `LLM_REDACT_TERMS` list in
+  `.env` -- names including add-on cardholders, address fragments, PIN
+  -- matched case-insensitively, multi-word names also matched word by
+  word (three letters or more) so every printed form is caught, replaced
+  with `[name]` / `[address]`; (2) three config-free heuristics on top:
+  e-mail addresses, six-digit PINs guarded against amounts (`560 099`
+  and `- 400093` forms included), and honorific-plus-capitalised-words
+  (`MR`/`MRS`/`MS`/`DR`/`SHRI`/`SMT` + up to four words); (3) tests on
+  fabricated text plus a real-sample check that none of the configured
+  terms survive; (4) only then may the unrecognized screen's helper text
+  say names and addresses are removed -- until then it says only what is
+  true (card and account numbers). Known cost: a word-level name match
+  also blanks that word inside a merchant description (`PRAKASH STORES`
+  → `[name] STORES`), harmless to parsing. The alternative -- a
+  cardholder-name field per card in the DB with a UI to set it -- is more
+  correct long-term but is a schema and UI change and still would not
+  cover add-on cardholders without more UI; `.env` first, DB later.
+  Separately: **what the model provider retains is not something this
+  app can promise.** Google's terms for the Gemini API differ by tier
+  (free-tier prompts may be used to improve products and reviewed by
+  humans; paid-tier prompts are not used for training but may be logged
+  for a period for abuse monitoring). Any in-app wording about storage
+  or training must be checked against the current terms for the tier in
+  use at the time it is written, and should not claim "not stored".
+
 ## Next arc
 
 The Tier 1 parser arc (Sessions 27–35) is complete: all four known bank

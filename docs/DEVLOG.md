@@ -11922,3 +11922,75 @@ the preview, the totals check, the import -- is exactly as before.
 Re-run the Axis statement through the AI-assisted path (pending from
 Session 114); Chandra's browser walk of the Upload tab, this screen
 included; then merge `feature/upload-ui` into `main`.
+
+## Session 117 — 2026-09-15
+
+### Goal
+Two visual tweaks on Session 116's unrecognized-statement screen: the
+AI option is a sliding toggle instead of a checkbox, and its helper
+text describes what the option does with the user's data rather than
+how the system works.
+
+### What happened
+
+Branch `feature/upload-ui` at `ee86013`, clean.
+
+**Toggle** (`static/index.html`, CSS only). The checkbox stays in the
+DOM -- it is still what `upload.aiAssist` reads and still receives
+focus, Space and the label click -- but is drawn off-screen (1px,
+opacity 0). Its sibling `span.track` is the visible control: a
+pill-shaped track in `--rule-strong` with a white round knob; on
+`:checked` the track fills with `--accent` and the knob slides right.
+`:focus-visible` on the checkbox puts the app's `--focus` ring on the
+track. No JS change beyond adding the span (`aria-hidden`) inside the
+label; the label text still reads "AI-assisted import".
+
+**Helper text.** The brief supplied "Uses AI to read the statement. No
+personal information is sent — card numbers and identifiers are removed
+before processing." That first claim is not true of what
+`parsers/llm_assist.py` sends: only runs of eight or more digits are
+blanked, and merchant descriptions, dates and amounts go in full --
+the module docstring says so in as many words, because reading the
+statement is the point. On the one screen where the user opts in to
+sending data out, the sentence has to be accurate, so the shipped text
+is: "Uses AI to read the statement. Card and account numbers are
+removed first; transaction descriptions, dates and amounts are sent to
+the model." Same shape as the brief -- what it does, then what happens
+to the data -- without the overclaim. Flagged for Chandra to accept or
+reword.
+
+**Redacting names and addresses -- proposed, parked.** The discussion
+went one step further: if the sentence should be able to say names and
+addresses are removed, the code has to remove them. A look at the four
+banks' real samples found the cardholder's name printed in six or more
+shapes and address blocks with no common form, so it is not a regex
+tweak. The proposal -- an `LLM_REDACT_TERMS` list in `.env` plus
+e-mail, PIN and honorific heuristics, tests, and only then the stronger
+sentence -- is recorded in full in STATE.md's open flags, with a note
+that what the model provider retains is governed by its own terms and
+is not something the app can promise.
+
+**Verification.** Page script parsed under `jsc`. **788 passing**,
+unchanged. Browser check is manual: the knob slides and the track
+colours on click and on Space with the toggle focused; the focus ring
+shows on the track; the preview's "Read with" line still follows the
+toggle.
+
+### Outcome
+The AI option looks like an on/off switch, and the sentence under it
+tells the user what leaves the machine.
+
+### In plain English
+The little checkbox for "AI-assisted import" is now a proper sliding
+switch, the shape people recognise for turning a mode on or off. The
+explanation under it used to talk about "the configured model" and
+"long numbers blanked" -- system language. It now says plainly that
+the AI reads the statement, that card and account numbers are stripped
+out before anything is sent, and that the transaction descriptions,
+dates and amounts do go to the AI service. It does not claim that no
+personal information is sent, because that would not be true.
+
+### Next steps
+Chandra's call on the helper wording; re-run the Axis statement
+through the AI-assisted path (pending from Session 114); the browser
+walk of the Upload tab; merge `feature/upload-ui` into `main`.
