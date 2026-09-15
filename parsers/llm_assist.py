@@ -8,9 +8,12 @@ same preview / reconciliation / confirm path. A one-off parse of this one
 file: no format is learned, nothing is cached for the next upload (the Tier
 4 auto-learn system in PRODUCT_VISION.md is a different, later thing).
 
-The model is also asked for the statement's own printed totals, so the
-parsed sums have something to reconcile against; the sums themselves are
-always computed here from the returned rows, never taken from the model.
+The model is also asked to list the components of the statement's own
+summary box (each labelled line with its amount and side), so the parsed
+sums have something to reconcile against; the expected totals are summed
+here from those components, and the parsed sums are always computed here
+from the returned rows -- neither total is taken from the model as a
+single interpreted figure (Session 114; Sessions 100-113 asked for two).
 
 **This is the second place data leaves the machine**, after the dashboard
 commentary, and unlike that one the payload cannot be narrowed: the point
@@ -67,19 +70,22 @@ def _prompt(text: str) -> str:
         '    {"date": "YYYY-MM-DD", "description": "...", "amount": 123.45, '
         '"type": "debit" or "credit", "is_payment": true or false}\n'
         "  ],\n"
-        '  "summary": {"total_debits": 123.45 or null, "total_credits": 123.45 or null}\n'
+        '  "balance_summary": [{"label": "...", "amount": 123.45, "side": "debit" or "credit"}]\n'
         "}\n"
         "Rules: one entry per transaction line, in statement order; amount is a positive "
         "number; type is credit for money coming back to the cardholder (payments, refunds, "
         "reversals, cashback) and debit for everything else; is_payment is true only for a "
-        "credit that is the cardholder paying the card bill, never for a refund. summary "
-        "holds the statement's own printed grand totals — total_debits is the single total "
-        "of ALL debit charges on the statement (purchases, fees, interest, GST, EMI, cash "
-        "advances, and any other charges combined — not a subtotal for just one category); "
-        "total_credits is the single total of ALL credits (payments, refunds, reversals "
-        "combined). Use the highest-level total the statement prints for each side. null "
-        "where the statement does not print one. Do not invent rows. No prose, no markdown "
-        "fences.\n\n"
+        "credit that is the cardholder paying the card bill, never for a refund. "
+        "balance_summary lists every financial component from the statement's summary or "
+        "balance breakdown box — each with the label as printed on the statement, the "
+        "amount as a positive number, and side as debit or credit. Debit includes purchases, "
+        "fees, interest, GST, EMI, cash advances, charges. Credit includes payments received, "
+        "refunds, reversals, cashback. Determine the side from the statement's own "
+        "indicators — Dr/Cr, D/C, column position, or a sign convention. Do not include "
+        "balances or amounts due (previous or opening balance, closing balance, total amount "
+        "due, minimum amount due, credit limit, available credit): only the components that "
+        "flowed in or out during the period. If the statement has no summary box at all, "
+        "return an empty array []. Do not invent rows. No prose, no markdown fences.\n\n"
         + text
     )
 
@@ -146,6 +152,34 @@ def _transaction(raw, index: int) -> Transaction:
     )
 
 
+def _component(raw, index: int) -> "tuple[str, float]":
+    """One balance_summary entry -> (side, amount), or LLMParseError."""
+    field = f"balance_summary[{index}]"
+    if not isinstance(raw, dict):
+        raise LLMParseError(f"{field}: expected an object")
+    label = raw.get("label")
+    if not isinstance(label, str) or not label.strip():
+        raise LLMParseError(f"{field}.label: expected non-empty text")
+    side = raw.get("side")
+    if side not in ("debit", "credit"):
+        raise LLMParseError(f"{field}.side: expected debit or credit")
+    return side, _amount(raw.get("amount"), f"{field}.amount")
+
+
+def _summary(raw) -> dict:
+    """balance_summary -> {"total_debits", "total_credits"}: each side summed
+    from its components here, or None where the model listed none (Session
+    114). An empty array is the model saying the statement has no summary
+    box; both totals are None and reconciliation reports unverified."""
+    if not isinstance(raw, list):
+        raise LLMParseError("balance_summary: expected a list")
+    totals = {"debit": None, "credit": None}
+    for i, entry in enumerate(raw):
+        side, amount = _component(entry, i)
+        totals[side] = round((totals[side] or 0.0) + amount, 2)
+    return {"total_debits": totals["debit"], "total_credits": totals["credit"]}
+
+
 def parse_reply(reply: str) -> "tuple[ParsedStatement, dict]":
     """The model's text -> (ParsedStatement, summary), or LLMParseError."""
     try:
@@ -162,14 +196,7 @@ def parse_reply(reply: str) -> "tuple[ParsedStatement, dict]":
         period_end=_date(data.get("period_end"), "period_end"),
         transactions=[_transaction(raw, i) for i, raw in enumerate(rows)],
     )
-    raw_summary = data.get("summary") or {}
-    if not isinstance(raw_summary, dict):
-        raise LLMParseError("summary: expected an object")
-    summary = {
-        "total_debits": _optional_amount(raw_summary.get("total_debits"), "summary.total_debits"),
-        "total_credits": _optional_amount(raw_summary.get("total_credits"), "summary.total_credits"),
-    }
-    return parsed, summary
+    return parsed, _summary(data.get("balance_summary"))
 
 
 def parse_with_summary(pdf_path: str, password: "str | None") -> "tuple[ParsedStatement, dict]":

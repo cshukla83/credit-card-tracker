@@ -5,10 +5,16 @@ parsed debit sum must equal the summary's purchases figure and the parsed
 credit sum its payments/credits figure, each within a paisa (0.01). Both
 sides are reported separately -- a mismatch on one side is a different
 finding from a mismatch on the other, and collapsing them into one total
-would hide which -- and the status is "match" only when both hold. A side
-whose expected figure the summary extraction could not find is reported
-with `expected: None` and counts as a mismatch: unverifiable is not
-verified.
+would hide which -- and the status is "match" only when both hold.
+
+A side whose expected figure the summary extraction could not find is
+reported with `expected: None` and the status is "unverified" (Session
+114): the rows were read but there was nothing to check them against,
+which is a different finding from "mismatch", where both figures exist
+and disagree. Unverified is not verified -- the confirm gate treats it
+exactly like a mismatch -- but the user is told which of the two they
+are looking at. A registry bank parser always returns both figures, so
+it never reports unverified; best_effort and llm_assist can.
 """
 
 from __future__ import annotations
@@ -32,5 +38,10 @@ def reconcile(
 ) -> dict:
     debit = _side(sum(t["amount"] for t in transactions if t["type"] == "debit"), expected_debit)
     credit = _side(sum(t["amount"] for t in transactions if t["type"] == "credit"), expected_credit)
-    status = "match" if _matches(debit) and _matches(credit) else "mismatch"
+    if debit["expected"] is None or credit["expected"] is None:
+        status = "unverified"
+    elif _matches(debit) and _matches(credit):
+        status = "match"
+    else:
+        status = "mismatch"
     return {"status": status, "debit": debit, "credit": credit}

@@ -110,10 +110,27 @@ def test_reconcile_within_a_paisa_matches():
     assert reconcile(_txns(), 150.004, 75.0)["status"] == "match"
 
 
-def test_reconcile_missing_summary_figure_is_mismatch():
+def test_reconcile_missing_summary_figure_is_unverified():
+    # Session 114: a missing expected figure is a third status, not a mismatch.
     result = reconcile(_txns(), None, 75.0)
-    assert result["status"] == "mismatch"
+    assert result["status"] == "unverified"
     assert result["debit"] == {"expected": None, "parsed": 150.0, "delta": None}
+    assert result["credit"] == {"expected": 75.0, "parsed": 75.0, "delta": 0.0}
+
+
+def test_reconcile_missing_credit_figure_is_unverified():
+    assert reconcile(_txns(), 150.0, None)["status"] == "unverified"
+
+
+def test_reconcile_both_missing_is_unverified():
+    result = reconcile(_txns(), None, None)
+    assert result["status"] == "unverified"
+    assert result["debit"]["delta"] is None and result["credit"]["delta"] is None
+
+
+def test_reconcile_missing_figure_wins_over_a_mismatch_on_the_other_side():
+    # One side unknown, the other off: still unverified -- mismatch needs both figures.
+    assert reconcile(_txns(), None, 80.0)["status"] == "unverified"
 
 
 # --- preview -----------------------------------------------------------------
@@ -324,8 +341,8 @@ def test_best_effort_previews_unknown_bank(client, conn, make_pdf):
     assert body["strategy"] == "best_effort"
     assert body["transaction_count"] == 3
     assert body["period_start"] == "2026-01-01"
-    # No summary figures on this page: unverifiable, so a mismatch by rule.
-    assert body["reconciliation"]["status"] == "mismatch"
+    # No summary figures on this page: unverified (Session 114), not mismatch.
+    assert body["reconciliation"]["status"] == "unverified"
     assert body["reconciliation"]["debit"] == {"expected": None, "parsed": 150.0, "delta": None}
 
 
@@ -339,7 +356,7 @@ def test_best_effort_can_reconcile_when_figures_are_on_the_page(client, conn, ma
 def test_best_effort_confirms_through_the_same_gate(client, conn, make_pdf):
     card = create_card(conn, "FAKE BANK", "Platinum")
     upload_id = _preview_with(client, make_pdf(_unknown_statement()), card, "best_effort").json()["upload_id"]
-    assert _confirm(client, upload_id).status_code == 422  # blocked: mismatch
+    assert _confirm(client, upload_id).status_code == 422  # blocked: unverified
     assert _confirm(client, upload_id, override=True).status_code == 200
     statement = find_statement(conn, card, date(2026, 1, 1), date(2026, 1, 31))
     assert statement is not None

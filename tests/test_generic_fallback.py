@@ -181,5 +181,5 @@ def test_real_statement_as_unrecognised_is_checkable(bank, pdf_path):
     assert parsed["period_start"] <= parsed["period_end"]
     assert all(t["type"] in ("debit", "credit") for t in parsed["transactions"])
     result = reconcile(parsed["transactions"], None, None)
-    assert result["status"] in ("match", "mismatch")
+    assert result["status"] == "unverified"  # no expected figures given (Session 114)
     assert result["debit"]["parsed"] > 0

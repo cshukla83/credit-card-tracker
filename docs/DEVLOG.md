@@ -11646,3 +11646,123 @@ Re-run the Axis statement through `llm_assist` to confirm the summary
 now reconciles; consider a `response_schema` on the Gemini request so
 the field names are enforced rather than described; then Chandra's
 browser walk of the Upload tab and merge `feature/upload-ui` into `main`.
+
+## Session 114 — 2026-09-15
+
+### Goal
+The LLM-assisted parse stops being asked to *interpret* which printed
+figure is the statement's total; it lists the summary box's components
+and the code sums them. And reconciliation gains a third status,
+`unverified`, for the case where there was nothing to check against.
+
+### What happened
+
+Branch `feature/upload-ui` at `7d0f146`, clean.
+
+**Why Session 113 was not enough.** Renaming the prompt's fields to
+`total_debits` / `total_credits` was semantically right, but on the
+same Axis statement the model then returned `null` for both: no line
+in its Payment Summary is labelled anything like "total debits", and a
+model asked to copy a printed figure under a name that matches nothing
+correctly reports that it found nothing. The row parsing was again
+unaffected. Two lessons, one per change below: don't ask the model to
+choose the right total, and don't call "nothing to check against" a
+mismatch.
+
+**Change 1 -- `balance_summary` components** (`parsers/llm_assist.py`).
+The prompt's summary field is now an array,
+`balance_summary: [{label, amount, side}]`: every financial component
+in the statement's summary or balance-breakdown box, with the label as
+printed, a positive amount, and `side` as debit or credit, decided from
+the statement's own Dr/Cr, D/C, column or sign convention. Debit covers
+purchases, fees, interest, GST, EMI, cash advances, charges; credit
+covers payments received, refunds, reversals, cashback. An empty array
+means the statement has no summary box. The transaction part of the
+prompt is untouched.
+
+One sentence was added beyond the brief: the model is told *not* to
+include balances or amounts due -- previous/opening balance, closing
+balance, total amount due, minimum amount due, credit limit, available
+credit -- only components that flowed in or out during the period.
+Every Indian bank's summary box prints those figures next to the
+purchase and payment lines, and a literal "every financial component"
+would have summed them in. If real statements show the model reading
+this sentence too broadly (dropping a legitimate charge line), it is
+the first thing to revisit.
+
+`parse_reply()` validates the array (`_component`: label non-empty
+string, side exactly debit/credit, amount positive number; each error
+names `balance_summary[i].<field>`) and `_summary()` sums each side,
+rounded to the paisa, returning the same `{total_debits,
+total_credits}` dict Session 113 introduced -- `None` for a side with
+no components. `storage/upload.py` is unchanged: its `llm_assist`
+Strategy already reads those two keys. The module docstring was
+updated to describe the components contract.
+
+**Change 2 -- `unverified`** (`parsers/reconcile.py`). `reconcile()` now
+returns `"unverified"` when either expected figure is `None`; `"match"`
+and `"mismatch"` both require both figures present. The per-side shape
+is unchanged (`expected: null, delta: null` on the unknown side). The
+confirm gate in `storage/upload.py` is `status != "match"`, so
+`unverified` is blocked without `override_reconciliation` exactly as a
+mismatch is -- no change there. Registry bank parsers always return
+both figures, so they never report it; `best_effort` (which finds no
+summary on most real statements) and `llm_assist` do.
+
+**Frontend** (`static/index.html`). A third pill, "Unverified", in
+amber (`.pill.unverified`), rendered from a status→label map alongside
+Match and Mismatch. On `unverified` the preview's lead line reads
+"Totals not found in statement — review the preview rows before
+importing."; Import is disabled and "Import anyway…" is offered, whose
+modal is titled "Totals could not be checked" and explains that no
+printed totals were found (rather than that the numbers disagree). The
+show/hide-detail table already rendered a `null` expected figure as
+"not found" and needed no change. Page script parsed under `jsc`.
+
+**Tests.** `tests/test_llm_assist.py`: every mock reply now carries a
+`balance_summary` array (the default has two debit components and one
+credit, summing to the same 150 / 75 as before, so the well-formed
+preview and confirm tests are unchanged in effect). New: components
+summed per side; empty array → both `None`; one side only; float drift
+(0.1 + 0.2 = 0.3); eight invalid-component cases each naming its field;
+the index is named for a bad later element; a non-list or absent
+`balance_summary` is rejected; components summing to a wrong total is
+`mismatch` through the endpoint; an empty array through the endpoint is
+`unverified`, blocked at confirm, overridable; a missing credit side is
+`unverified`. `tests/test_upload_preview.py`: the null-figure reconcile
+test now asserts `unverified` (plus credit-missing, both-missing, and
+"one side missing beats a mismatch on the other"); the best-effort
+no-summary preview asserts `unverified`. `tests/test_generic_fallback.py`:
+the real-statement reconcile smoke test, which passes no expected
+figures, asserts `unverified`. The match and mismatch tests are as they
+were. **780 passing** (763 + 17), zero failures.
+
+Not done here: re-running the real Axis statement through `llm_assist`
+-- the PDF is not in the repo, and it is a network call with statement
+text in the payload. That is the verification this session needs.
+
+### Outcome
+The model is asked a question it can answer by copying -- "list the
+lines in the summary box" -- instead of one that needs judgement; the
+arithmetic is ours. And a preview that could not be checked says so,
+instead of claiming a disagreement that never happened.
+
+### In plain English
+When the AI reads a statement we also ask it about the statement's own
+summary box, so we can check the transactions it read against what the
+bank printed. Twice now the question has been phrased as "what is the
+total?", and twice the AI has answered a slightly different question --
+first copying a subtotal, then finding nothing under a name the
+statement does not use. The question is now "list every line in the
+summary box, with its amount and whether it is money out or money in";
+we add them up ourselves. Separately, the totals check used to say
+"mismatch" both when the numbers disagreed and when there were no
+numbers to compare against. Those are different situations, so the
+second one now shows an amber "Unverified" badge with its own wording.
+Importing still needs an explicit "import anyway" in both cases.
+
+### Next steps
+Re-run the Axis statement through `llm_assist` and confirm the summary
+reconciles (or read what the model returned in `balance_summary` if
+not); Session 115's preview-detail row truncation; then Chandra's
+browser walk of the Upload tab and merge `feature/upload-ui` into `main`.

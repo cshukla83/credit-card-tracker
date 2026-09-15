@@ -610,6 +610,7 @@
   .upload-facts dd { margin: 0; }
   .pill.match { color: var(--credit); background: #e8f5ee; border-color: #cfe9d9; }
   .pill.mismatch { color: var(--danger); background: #fdf0ef; border-color: #f3c9c5; }
+  .pill.unverified { color: #8a5a00; background: #fdf4e3; border-color: #f0d9a6; }
   button.pill-toggle {
     background: none;
     border: none;
@@ -4365,13 +4366,17 @@
       ];
     }
 
+    // Three statuses (Session 114): match, mismatch (both printed totals
+    // found, at least one disagrees) and unverified (a printed total was not
+    // found on one or both sides, so there was nothing to check against).
+    const RECON_PILL = { match: "Match", mismatch: "Mismatch", unverified: "Unverified" };
+
     function reconciliationBlock(recon) {
-      const matched = recon.status === "match";
       const toggle = el("button", {
         type: "button", class: "pill-toggle", "aria-expanded": upload.showDetail ? "true" : "false",
         onclick: () => { upload.showDetail = !upload.showDetail; renderUpload(); },
       }, [
-        el("span", { class: "pill " + (matched ? "match" : "mismatch"), text: matched ? "Match" : "Mismatch" }),
+        el("span", { class: "pill " + recon.status, text: RECON_PILL[recon.status] || recon.status }),
         el("span", { class: "hint", text: upload.showDetail ? "hide detail" : "show detail" }),
       ]);
       if (!upload.showDetail) return [toggle];
@@ -4463,6 +4468,7 @@
       const p = upload.preview;
       const duplicate = p.status === "duplicate";
       const matched = !duplicate && p.reconciliation.status === "match";
+      const unverified = !duplicate && p.reconciliation.status === "unverified";
       const strategyLabel = { detected: "bank parser", best_effort: "best-attempt parse", llm_assist: "LLM-assisted parse" }[upload.strategy];
       const facts = el("dl", { class: "upload-facts" }, [
         el("dt", { text: "Period" }), el("dd", { text: p.period_start + " → " + p.period_end }),
@@ -4490,7 +4496,13 @@
       } else {
         actions.push(uploadButton("Import", () => {}, { primary: true, disabled: true }));
         actions.push(uploadButton("Import anyway…", () => {
-          showModal({
+          showModal(unverified ? {
+            title: "Totals could not be checked",
+            message: "No printed totals were found on this statement, so the " + p.transaction_count +
+              " transactions read from it could not be checked against anything. Importing anyway saves them as read; " +
+              "check them on Review & Assign afterwards.",
+            confirmLabel: "Import anyway",
+          } : {
             title: "Totals do not match",
             message: "The transactions read from this statement do not add up to the totals it prints. " +
               "Importing anyway saves " + p.transaction_count + " transactions as read; check them on Review & Assign afterwards.",
@@ -4507,7 +4519,9 @@
               " already uploaded. Please choose another statement"])
           : matched
             ? el("p", { class: "muted", text: "Nothing has been saved yet. The debits and credits read from the statement add up to the totals it prints." })
-            : el("p", { class: "muted", text: "Nothing has been saved yet. The totals read from the statement do not match what it prints, so importing is off by default." }),
+            : unverified
+              ? el("p", { class: "muted", text: "Nothing has been saved yet. Totals not found in statement \u2014 review the preview rows before importing." })
+              : el("p", { class: "muted", text: "Nothing has been saved yet. The totals read from the statement do not match what it prints, so importing is off by default." }),
         errorLine(),
         facts,
         el("div", { class: "upload-actions" }, actions),

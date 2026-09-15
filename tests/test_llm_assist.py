@@ -62,7 +62,11 @@ def _good_reply(**overrides):
             {"date": "2026-01-10", "description": "FAKE SHOP TWO", "amount": 50, "type": "debit", "is_payment": False},
             {"date": "2026-01-15", "description": "PAYMENT RECEIVED", "amount": 75.0, "type": "credit", "is_payment": True},
         ],
-        "summary": {"total_debits": 150.0, "total_credits": 75.0},
+        "balance_summary": [
+            {"label": "Purchases", "amount": 120.0, "side": "debit"},
+            {"label": "Fees & Charges", "amount": 30, "side": "debit"},
+            {"label": "Payments Received", "amount": 75.0, "side": "credit"},
+        ],
     }
     data.update(overrides)
     return json.dumps(data)
@@ -112,11 +116,64 @@ def test_parse_reply_tolerates_markdown_fences():
     assert len(parsed["transactions"]) == 3
 
 
-def test_parse_reply_summary_nulls_and_absent():
-    _, summary = llm.parse_reply(_good_reply(summary={"total_debits": None, "total_credits": None}))
+# --- balance_summary (Session 114): components summed here, per side ---------
+
+
+def test_balance_summary_components_are_summed_per_side():
+    _, summary = llm.parse_reply(_good_reply(balance_summary=[
+        {"label": "Purchase", "amount": 1000.5, "side": "debit"},
+        {"label": "Other Debit&Charges", "amount": 99.25, "side": "debit"},
+        {"label": "Interest", "amount": 0.25, "side": "debit"},
+        {"label": "Payment", "amount": 500, "side": "credit"},
+        {"label": "Refund", "amount": 12.5, "side": "credit"},
+    ]))
+    assert summary == {"total_debits": 1100.0, "total_credits": 512.5}
+
+
+def test_balance_summary_empty_means_both_totals_null():
+    _, summary = llm.parse_reply(_good_reply(balance_summary=[]))
     assert summary == {"total_debits": None, "total_credits": None}
-    _, summary = llm.parse_reply(_good_reply(summary=None))
-    assert summary == {"total_debits": None, "total_credits": None}
+
+
+def test_balance_summary_one_side_only_leaves_other_null():
+    _, summary = llm.parse_reply(_good_reply(balance_summary=[
+        {"label": "Purchases", "amount": 10, "side": "debit"},
+    ]))
+    assert summary == {"total_debits": 10.0, "total_credits": None}
+
+
+def test_balance_summary_sum_avoids_float_drift():
+    _, summary = llm.parse_reply(_good_reply(balance_summary=[
+        {"label": "a", "amount": 0.1, "side": "debit"},
+        {"label": "b", "amount": 0.2, "side": "debit"},
+    ]))
+    assert summary["total_debits"] == 0.3
+
+
+@pytest.mark.parametrize(
+    "component, message",
+    [
+        ({"amount": 1, "side": "debit"}, "balance_summary[0].label"),
+        ({"label": "", "amount": 1, "side": "debit"}, "balance_summary[0].label"),
+        ({"label": "x", "amount": 1, "side": "dr"}, "balance_summary[0].side"),
+        ({"label": "x", "amount": 1}, "balance_summary[0].side"),
+        ({"label": "x", "amount": -1, "side": "debit"}, "balance_summary[0].amount"),
+        ({"label": "x", "amount": "1.00", "side": "debit"}, "balance_summary[0].amount"),
+        ({"label": "x", "side": "debit"}, "balance_summary[0].amount"),
+        ("not an object", "balance_summary[0]: expected an object"),
+    ],
+)
+def test_balance_summary_rejects_invalid_component(component, message):
+    with pytest.raises(llm.LLMParseError) as excinfo:
+        llm.parse_reply(_good_reply(balance_summary=[component]))
+    assert message in str(excinfo.value)
+
+
+def test_balance_summary_invalid_component_names_its_index():
+    good = {"label": "ok", "amount": 1, "side": "debit"}
+    with pytest.raises(llm.LLMParseError) as excinfo:
+        llm.parse_reply(_good_reply(balance_summary=[good, good, {"label": "x", "amount": 1, "side": "both"}]))
+    assert "balance_summary[2].side" in str(excinfo.value)
 
 
 def test_parse_reply_debit_is_never_a_payment():
@@ -141,8 +198,9 @@ def test_parse_reply_debit_is_never_a_payment():
         (_good_reply(transactions=[{"date": "2026-01-05", "description": "X", "amount": "1.00", "type": "debit"}]), "amount"),
         (_good_reply(transactions=[{"date": "2026-01-05", "description": "X", "amount": -1, "type": "debit"}]), "positive"),
         (_good_reply(transactions=[{"date": "2026-13-05", "description": "X", "amount": 1, "type": "debit"}]), "date"),
-        (_good_reply(summary={"total_debits": "150"}), "summary.total_debits"),
-        (_good_reply(summary=[1, 2]), "summary: expected an object"),
+        (_good_reply(balance_summary={"total_debits": 150}), "balance_summary: expected a list"),
+        (_good_reply(balance_summary=None), "balance_summary: expected a list"),
+        (json.dumps({"period_start": "2026-01-01", "period_end": "2026-01-31", "transactions": []}), "balance_summary: expected a list"),
         ("", "not JSON"),
     ],
 )
@@ -296,18 +354,39 @@ def test_preview_llm_well_formed_reconciles_and_confirms(client, conn, card, mak
 
 
 def test_preview_llm_mismatch_goes_through_the_gate(client, card, make_pdf, with_key, monkeypatch):
-    monkeypatch.setattr(llm, "_call_gemini", _fake_call(_good_reply(summary={"total_debits": 999.0, "total_credits": 75.0})))
+    # Components that sum to the wrong debit total: mismatch, not unverified.
+    monkeypatch.setattr(llm, "_call_gemini", _fake_call(_good_reply(balance_summary=[
+        {"label": "Purchases", "amount": 900.0, "side": "debit"},
+        {"label": "Fees", "amount": 99.0, "side": "debit"},
+        {"label": "Payments", "amount": 75.0, "side": "credit"},
+    ])))
     body = _preview_llm(client, make_pdf(["x"]), card).json()
     assert body["reconciliation"]["status"] == "mismatch"
+    assert body["reconciliation"]["debit"] == {"expected": 999.0, "parsed": 150.0, "delta": -849.0}
     assert client.post("/upload/confirm", json={"upload_id": body["upload_id"]}).status_code == 422
     assert client.post("/upload/confirm", json={"upload_id": body["upload_id"], "override_reconciliation": True}).status_code == 200
 
 
-def test_preview_llm_no_totals_is_mismatch(client, card, make_pdf, with_key, monkeypatch):
-    monkeypatch.setattr(llm, "_call_gemini", _fake_call(_good_reply(summary=None)))
+def test_preview_llm_no_summary_box_is_unverified(client, card, make_pdf, with_key, monkeypatch):
+    # Session 114: an empty balance_summary is "no summary box found" --
+    # unverified, gated like a mismatch, overridable like one.
+    monkeypatch.setattr(llm, "_call_gemini", _fake_call(_good_reply(balance_summary=[])))
     body = _preview_llm(client, make_pdf(["x"]), card).json()
-    assert body["reconciliation"]["status"] == "mismatch"
-    assert body["reconciliation"]["debit"]["expected"] is None
+    assert body["reconciliation"]["status"] == "unverified"
+    assert body["reconciliation"]["debit"] == {"expected": None, "parsed": 150.0, "delta": None}
+    assert body["reconciliation"]["credit"] == {"expected": None, "parsed": 75.0, "delta": None}
+    assert client.post("/upload/confirm", json={"upload_id": body["upload_id"]}).status_code == 422
+    assert client.post("/upload/confirm", json={"upload_id": body["upload_id"], "override_reconciliation": True}).status_code == 200
+
+
+def test_preview_llm_credit_side_missing_is_unverified(client, card, make_pdf, with_key, monkeypatch):
+    monkeypatch.setattr(llm, "_call_gemini", _fake_call(_good_reply(balance_summary=[
+        {"label": "Purchases", "amount": 150.0, "side": "debit"},
+    ])))
+    body = _preview_llm(client, make_pdf(["x"]), card).json()
+    assert body["reconciliation"]["status"] == "unverified"
+    assert body["reconciliation"]["debit"]["delta"] == 0.0
+    assert body["reconciliation"]["credit"]["expected"] is None
 
 
 def test_preview_llm_malformed_reply_is_clean_status(client, card, make_pdf, with_key, monkeypatch):
