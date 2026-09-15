@@ -11580,3 +11580,69 @@ else about which imports are allowed has changed.
 ### Next steps
 Chandra's browser walk of the Upload tab, then merge
 `feature/upload-ui` into `main`.
+
+## Session 113 — 2026-09-15
+
+### Goal
+The LLM-assisted parse asks the model for the statement's grand totals
+under names that no longer steer it towards a subcategory line.
+
+### What happened
+
+Branch `feature/upload-ui` at `727e3df`, clean.
+
+**Diagnosis.** A real Axis Bank statement went through the `llm_assist`
+strategy. Every transaction row was parsed correctly, but reconciliation
+flagged a debit mismatch: the model had returned the "Purchase"
+subtotal from the statement's Payment Summary rather than the grand
+total. That summary splits debits into "Purchase" and "Other
+Debit&Charges", and the prompt's field was named
+`summary.purchases_total` -- the model did what the name said and
+picked the line labelled Purchase. The row parsing was not at fault;
+the field name was.
+
+**Prompt** (`parsers/llm_assist.py`, `_prompt()`). The summary fields
+are renamed `total_debits` / `total_credits`, and the one sentence
+describing them now says explicitly that each is the single grand
+total for its side -- all debit charges combined (purchases, fees,
+interest, GST, EMI, cash advances, anything else), all credits combined
+(payments, refunds, reversals) -- and to use the highest-level total
+the statement prints, `null` where none is printed. Nothing else in
+the prompt changed. `parse_reply()` reads and returns the new names;
+the file has no other reference to the old ones.
+
+**Upload** (`storage/upload.py`). The `llm_assist` `Strategy` carries
+`summary_debit_key="total_debits"` / `summary_credit_key="total_credits"`.
+The detected (bank registry) and best-effort strategies keep their own
+keys and are untouched, as are every bank parser, `generic_fallback`,
+and `reconcile`. The frontend never sees these names -- the preview
+response already labels the two sides generically -- so no frontend
+change.
+
+**Tests** (`tests/test_llm_assist.py`). Mock replies and assertions
+renamed; no new tests, since the behaviour under test (parse, validate,
+reconcile against whatever the model returned) is unchanged. No
+`response_schema` on the request yet -- that is a separate follow-up.
+**763 passing**, unchanged.
+
+### Outcome
+The model is now asked for "the total of all debits" and "the total of
+all credits" in so many words, instead of a name that happened to match
+one subcategory on some statements.
+
+### In plain English
+When the AI reads a statement, it is also asked to copy out the
+statement's own printed totals so we can check its work against them.
+The question used to be phrased as "what is the purchases total?" -- and
+on a statement that prints a separate "Purchase" line next to an "Other
+charges" line, the AI faithfully copied the Purchase line, so the check
+reported a mismatch even though every transaction had been read
+correctly. The question now asks for the grand total of all charges and
+the grand total of all credits, and spells out that subcategory lines
+are not what we want. The transactions themselves were never affected.
+
+### Next steps
+Re-run the Axis statement through `llm_assist` to confirm the summary
+now reconciles; consider a `response_schema` on the Gemini request so
+the field names are enforced rather than described; then Chandra's
+browser walk of the Upload tab and merge `feature/upload-ui` into `main`.

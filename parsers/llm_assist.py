@@ -67,15 +67,19 @@ def _prompt(text: str) -> str:
         '    {"date": "YYYY-MM-DD", "description": "...", "amount": 123.45, '
         '"type": "debit" or "credit", "is_payment": true or false}\n'
         "  ],\n"
-        '  "summary": {"purchases_total": 123.45 or null, "payments_credits_total": 123.45 or null}\n'
+        '  "summary": {"total_debits": 123.45 or null, "total_credits": 123.45 or null}\n'
         "}\n"
         "Rules: one entry per transaction line, in statement order; amount is a positive "
         "number; type is credit for money coming back to the cardholder (payments, refunds, "
         "reversals, cashback) and debit for everything else; is_payment is true only for a "
         "credit that is the cardholder paying the card bill, never for a refund. summary "
-        "holds the statement's own printed totals for purchases/debits and for "
-        "payments/credits, or null where the statement does not print one. Do not invent "
-        "rows. No prose, no markdown fences.\n\n"
+        "holds the statement's own printed grand totals — total_debits is the single total "
+        "of ALL debit charges on the statement (purchases, fees, interest, GST, EMI, cash "
+        "advances, and any other charges combined — not a subtotal for just one category); "
+        "total_credits is the single total of ALL credits (payments, refunds, reversals "
+        "combined). Use the highest-level total the statement prints for each side. null "
+        "where the statement does not print one. Do not invent rows. No prose, no markdown "
+        "fences.\n\n"
         + text
     )
 
@@ -162,10 +166,8 @@ def parse_reply(reply: str) -> "tuple[ParsedStatement, dict]":
     if not isinstance(raw_summary, dict):
         raise LLMParseError("summary: expected an object")
     summary = {
-        "purchases_total": _optional_amount(raw_summary.get("purchases_total"), "summary.purchases_total"),
-        "payments_credits_total": _optional_amount(
-            raw_summary.get("payments_credits_total"), "summary.payments_credits_total"
-        ),
+        "total_debits": _optional_amount(raw_summary.get("total_debits"), "summary.total_debits"),
+        "total_credits": _optional_amount(raw_summary.get("total_credits"), "summary.total_credits"),
     }
     return parsed, summary
 

@@ -177,8 +177,8 @@ def _strategy_for(card: dict, strategy: str) -> Strategy:
     if strategy == "llm_assist":
         return Strategy(
             run=llm_assist.parse_with_summary,
-            summary_debit_key="purchases_total",
-            summary_credit_key="payments_credits_total",
+            summary_debit_key="total_debits",
+            summary_credit_key="total_credits",
         )
     if strategy == "detected":
         bank = _bank_for(card)

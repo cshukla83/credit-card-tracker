@@ -62,7 +62,7 @@ def _good_reply(**overrides):
             {"date": "2026-01-10", "description": "FAKE SHOP TWO", "amount": 50, "type": "debit", "is_payment": False},
             {"date": "2026-01-15", "description": "PAYMENT RECEIVED", "amount": 75.0, "type": "credit", "is_payment": True},
         ],
-        "summary": {"purchases_total": 150.0, "payments_credits_total": 75.0},
+        "summary": {"total_debits": 150.0, "total_credits": 75.0},
     }
     data.update(overrides)
     return json.dumps(data)
@@ -104,7 +104,7 @@ def test_parse_reply_well_formed():
     ]
     assert parsed["transactions"][0]["date"] == datetime(2026, 1, 5)
     assert parsed["transactions"][0]["reward_points"] is None
-    assert summary == {"purchases_total": 150.0, "payments_credits_total": 75.0}
+    assert summary == {"total_debits": 150.0, "total_credits": 75.0}
 
 
 def test_parse_reply_tolerates_markdown_fences():
@@ -113,10 +113,10 @@ def test_parse_reply_tolerates_markdown_fences():
 
 
 def test_parse_reply_summary_nulls_and_absent():
-    _, summary = llm.parse_reply(_good_reply(summary={"purchases_total": None, "payments_credits_total": None}))
-    assert summary == {"purchases_total": None, "payments_credits_total": None}
+    _, summary = llm.parse_reply(_good_reply(summary={"total_debits": None, "total_credits": None}))
+    assert summary == {"total_debits": None, "total_credits": None}
     _, summary = llm.parse_reply(_good_reply(summary=None))
-    assert summary == {"purchases_total": None, "payments_credits_total": None}
+    assert summary == {"total_debits": None, "total_credits": None}
 
 
 def test_parse_reply_debit_is_never_a_payment():
@@ -141,7 +141,7 @@ def test_parse_reply_debit_is_never_a_payment():
         (_good_reply(transactions=[{"date": "2026-01-05", "description": "X", "amount": "1.00", "type": "debit"}]), "amount"),
         (_good_reply(transactions=[{"date": "2026-01-05", "description": "X", "amount": -1, "type": "debit"}]), "positive"),
         (_good_reply(transactions=[{"date": "2026-13-05", "description": "X", "amount": 1, "type": "debit"}]), "date"),
-        (_good_reply(summary={"purchases_total": "150"}), "summary.purchases_total"),
+        (_good_reply(summary={"total_debits": "150"}), "summary.total_debits"),
         (_good_reply(summary=[1, 2]), "summary: expected an object"),
         ("", "not JSON"),
     ],
@@ -296,7 +296,7 @@ def test_preview_llm_well_formed_reconciles_and_confirms(client, conn, card, mak
 
 
 def test_preview_llm_mismatch_goes_through_the_gate(client, card, make_pdf, with_key, monkeypatch):
-    monkeypatch.setattr(llm, "_call_gemini", _fake_call(_good_reply(summary={"purchases_total": 999.0, "payments_credits_total": 75.0})))
+    monkeypatch.setattr(llm, "_call_gemini", _fake_call(_good_reply(summary={"total_debits": 999.0, "total_credits": 75.0})))
     body = _preview_llm(client, make_pdf(["x"]), card).json()
     assert body["reconciliation"]["status"] == "mismatch"
     assert client.post("/upload/confirm", json={"upload_id": body["upload_id"]}).status_code == 422
