@@ -366,6 +366,14 @@ def preview_detail(conn: sqlite3.Connection, upload_id: str) -> dict:
     the two samples combined. The breakdown runs over every parsed row,
     not just the samples, with rows the engine has no suggestion for
     counted under NO_SUGGESTION so the counts always sum to total_rows.
+
+    Preview depth follows the confidence gap (Session 115): the samples
+    are for a preview whose totals reconciled ("match"), where the
+    statement's own figures vouch for the rows between them. On
+    "mismatch" or "unverified" the rows are the only evidence there is,
+    so every one is returned -- in sample_start, with sample_end empty,
+    which the frontend already renders as a single run. `sampled` says
+    whether any row was left out.
     """
     pending = PREVIEWS.get(upload_id)
     if pending is None:
@@ -381,10 +389,18 @@ def preview_detail(conn: sqlite3.Connection, upload_id: str) -> dict:
         counts[key] = counts.get(key, 0) + 1
     breakdown = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
 
+    if pending.reconciliation["status"] == "match":
+        start = [_sample_row(t) for t in transactions[:SAMPLE_ROWS]]
+        end = [_sample_row(t) for t in transactions[-SAMPLE_ROWS:]] if transactions else []
+    else:
+        start = [_sample_row(t) for t in transactions]
+        end = []
+
     return {
         "upload_id": upload_id,
         "total_rows": len(transactions),
-        "sample_start": [_sample_row(t) for t in transactions[:SAMPLE_ROWS]],
-        "sample_end": [_sample_row(t) for t in transactions[-SAMPLE_ROWS:]] if transactions else [],
+        "sampled": len(start) + len(end) < len(transactions),
+        "sample_start": start,
+        "sample_end": end,
         "category_breakdown": [{"category": value, "count": count} for value, count in breakdown],
     }

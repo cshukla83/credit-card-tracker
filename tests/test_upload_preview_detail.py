@@ -53,10 +53,10 @@ def _row(day, description, amount=10.0, txn_type="debit"):
     }
 
 
-def _hold(rows, card_id=1, upload_id="held"):
+def _hold(rows, card_id=1, upload_id="held", status="match"):
     parsed = {"period_start": date(2026, 1, 1), "period_end": date(2026, 1, 31), "transactions": rows}
     upload_module.PREVIEWS[upload_id] = PendingUpload(
-        card_id=card_id, new_card=None, parsed=parsed, reconciliation={"status": "match"}
+        card_id=card_id, new_card=None, parsed=parsed, reconciliation={"status": status}
     )
     return upload_id
 
@@ -110,7 +110,7 @@ def test_empty_statement(conn):
     upload_id = _hold([])
     detail = preview_detail(conn, upload_id)
     assert detail == {
-        "upload_id": upload_id, "total_rows": 0, "sample_start": [], "sample_end": [], "category_breakdown": [],
+        "upload_id": upload_id, "total_rows": 0, "sampled": False, "sample_start": [], "sample_end": [], "category_breakdown": [],
     }
 
 
@@ -175,6 +175,56 @@ def test_suggest_for_descriptions_matches_engine_shape(conn):
     assert set(miss) == {"value", "confidence", "match_type"}
 
 
+# --- preview depth follows reconciliation (Session 115) -------------------------
+
+
+def test_match_long_statement_is_sampled(conn):
+    upload_id = _hold([_row(d, f"ROW {d}") for d in range(1, 24)], status="match")  # 23 rows
+    detail = preview_detail(conn, upload_id)
+    assert detail["sampled"] is True
+    assert len(detail["sample_start"]) == 5 and len(detail["sample_end"]) == 5
+    assert detail["total_rows"] == 23
+
+
+def test_match_short_statement_is_not_sampled(conn):
+    upload_id = _hold([_row(d, f"ROW {d}") for d in range(1, 8)], status="match")  # 7 rows
+    detail = preview_detail(conn, upload_id)
+    assert detail["sampled"] is False
+    # Unchanged Session 103 shape: overlapping slices, the frontend de-duplicates.
+    assert len(detail["sample_start"]) == 5 and len(detail["sample_end"]) == 5
+
+
+@pytest.mark.parametrize("status", ["mismatch", "unverified"])
+def test_non_match_returns_every_row(conn, status):
+    upload_id = _hold([_row(d, f"ROW {d}") for d in range(1, 24)], status=status)  # 23 rows
+    detail = preview_detail(conn, upload_id)
+    assert detail["sampled"] is False
+    assert [r["description"] for r in detail["sample_start"]] == [f"ROW {d}" for d in range(1, 24)]
+    assert detail["sample_end"] == []
+    assert detail["total_rows"] == 23
+
+
+@pytest.mark.parametrize("status", ["mismatch", "unverified"])
+def test_non_match_short_statement_returns_every_row_once(conn, status):
+    upload_id = _hold([_row(d, f"ROW {d}") for d in range(1, 4)], status=status)  # 3 rows
+    detail = preview_detail(conn, upload_id)
+    assert detail["sampled"] is False
+    assert len(detail["sample_start"]) == 3 and detail["sample_end"] == []
+
+
+def test_non_match_breakdown_still_covers_every_row(conn):
+    upload_id = _hold([_row(d, f"ROW {d}") for d in range(1, 24)], status="mismatch")
+    detail = preview_detail(conn, upload_id)
+    assert sum(b["count"] for b in detail["category_breakdown"]) == 23
+
+
+def test_endpoint_non_match_returns_every_row(client, conn):
+    upload_id = _hold([_row(d, f"ROW {d}") for d in range(1, 13)], status="unverified")
+    body = client.get(f"/upload/{upload_id}/preview-detail").json()
+    assert body["sampled"] is False
+    assert len(body["sample_start"]) == 12 and body["sample_end"] == []
+
+
 # --- endpoint -------------------------------------------------------------------
 
 
@@ -184,6 +234,7 @@ def test_endpoint_returns_detail(client, conn):
     assert response.status_code == 200
     body = response.json()
     assert body["total_rows"] == 12
+    assert body["sampled"] is True
     assert len(body["sample_start"]) == 5 and len(body["sample_end"]) == 5
     assert body["category_breakdown"] == [{"category": NO_SUGGESTION, "count": 12}]
 

@@ -11766,3 +11766,74 @@ Re-run the Axis statement through `llm_assist` and confirm the summary
 reconciles (or read what the model returned in `balance_summary` if
 not); Session 115's preview-detail row truncation; then Chandra's
 browser walk of the Upload tab and merge `feature/upload-ui` into `main`.
+
+## Session 115 — 2026-09-15
+
+### Goal
+The Show Preview popup shows every parsed row when the totals check did
+not pass, and says how many rows it is showing when it samples.
+
+### What happened
+
+Branch `feature/upload-ui` at `e0d19c2`, clean.
+
+**Principle.** Preview depth follows the confidence gap. When the totals
+reconcile ("match"), the statement's own printed figures vouch for the
+rows between the first five and last five, and a sample is enough. On
+"mismatch" or "unverified" (Session 114) nothing vouches for anything:
+the rows are the only evidence the user has before deciding to import
+anyway, so they should all be on screen.
+
+**Backend** (`storage/upload.py`, `preview_detail()`). The held
+preview's reconciliation status was already in `PREVIEWS` next to the
+parsed rows. On `match` the response is exactly as Session 103 built
+it: `sample_start` = first `SAMPLE_ROWS`, `sample_end` = last
+`SAMPLE_ROWS`, overlapping on short statements. On any other status
+every row goes in `sample_start` and `sample_end` is empty -- a shape
+the frontend's "short statement" branch already rendered as one run,
+so the response keys did not change. One key was added: `sampled`,
+true only when rows were left out (match with more than ten rows).
+`SAMPLE_ROWS`, the breakdown, and the preview and confirm endpoints
+are untouched.
+
+**Frontend** (`static/index.html`, `rowsTable()`). Branches on
+`detail.sampled` instead of re-deriving it from the lengths. The gap
+row, only drawn when sampled, now states both counts:
+"… 16 more rows not shown (showing first 5 and last 5 of 26) …".
+Session 114's question -- does the popup say "showing 10 of 26"? -- was
+"no": it said "26 transactions" up top and "16 more rows" in the gap
+and left the subtraction to the reader. When every row is shown there
+is no gap row and the subtitle's "N transactions" already states the
+count, so nothing was added there. Page script parsed under `jsc`;
+browser verification is manual (the Chrome extension was not connected
+this session).
+
+**Tests** (`tests/test_upload_preview_detail.py`). The `_hold` helper
+takes a `status`. New: match with 23 rows is sampled 5 + 5; match with
+7 rows is not sampled and keeps the overlapping Session 103 shape;
+mismatch and unverified with 23 rows return all 23 in `sample_start`
+with `sample_end` empty; the same with 3 rows; the breakdown still
+counts every row on a non-match; the endpoint returns all rows on
+unverified. The existing endpoint test asserts `sampled` true; the
+empty-statement exact-shape assertion gained the new key -- the one
+existing test touched. **788 passing** (780 + 8), zero failures.
+
+### Outcome
+A preview the system cannot vouch for shows everything it read; a
+preview it can vouch for shows a sample and says so in numbers.
+
+### In plain English
+The "Show Preview" popup used to show the first five and last five
+transactions no matter what. That is fine when the totals check has
+passed -- the bank's own printed totals confirm the rows in between add
+up. But when the check fails, or could not be run, those hidden rows
+are exactly what the user needs to look at before choosing to import
+anyway. Now the popup shows every row in those cases. And when it does
+sample, the divider line says plainly how many rows are shown out of
+how many, instead of leaving the arithmetic to the reader.
+
+### Next steps
+Re-run the Axis statement through `llm_assist` (still pending from
+Session 114); Chandra's browser walk of the Upload tab, including this
+popup on a mismatch or unverified preview; then merge
+`feature/upload-ui` into `main`.

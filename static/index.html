@@ -4404,6 +4404,10 @@
     // the preview screen; the import controls appear once it has been
     // closed. Their state (match / mismatch / duplicate) is computed exactly
     // as before; only their visibility is gated.
+    //
+    // Session 115: the server sends a sample only when the totals matched;
+    // on mismatch / unverified every row arrives (sample_end empty) and the
+    // table is one unbroken run. `detail.sampled` says which.
     function rowsTable(detail) {
       const cell = (tag, text, cls) => el(tag, cls ? { class: cls, text } : { text });
       const rowEl = (r) => el("tr", {}, [
@@ -4412,14 +4416,18 @@
       const total = detail.total_rows;
       const start = detail.sample_start, end = detail.sample_end;
       const body = [];
-      if (total <= start.length + end.length) {
-        // Short statement: the two samples overlap or cover it; show each row once.
-        const overlap = start.length + end.length - total;
+      if (!detail.sampled) {
+        // Every row is here: the two samples overlap, cover it, or the full
+        // set came in sample_start. Show each row once.
+        const overlap = Math.max(0, start.length + end.length - total);
         for (const r of start) body.push(rowEl(r));
         for (const r of end.slice(overlap)) body.push(rowEl(r));
       } else {
+        const shown = start.length + end.length;
         for (const r of start) body.push(rowEl(r));
-        body.push(el("tr", { class: "gap" }, [el("td", { colspan: "4", text: "\u2026 " + (total - start.length - end.length) + " more rows \u2026" })]));
+        body.push(el("tr", { class: "gap" }, [el("td", { colspan: "4",
+          text: "\u2026 " + (total - shown) + " more rows not shown (showing first " + start.length +
+            " and last " + end.length + " of " + total + ") \u2026" })]));
         for (const r of end) body.push(rowEl(r));
       }
       return el("table", { class: "preview-rows" }, [
