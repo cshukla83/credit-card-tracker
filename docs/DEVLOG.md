@@ -11994,3 +11994,71 @@ personal information is sent, because that would not be true.
 Chandra's call on the helper wording; re-run the Axis statement
 through the AI-assisted path (pending from Session 114); the browser
 walk of the Upload tab; merge `feature/upload-ui` into `main`.
+
+## Session 118 — 2026-09-15
+
+### Goal
+The AI-failed screen tells the user what happened in plain words, with
+the technical reason kept in small print underneath.
+
+### What happened
+
+Branch `feature/upload-ui` at `69cd71b`, clean.
+
+**Before.** When the model call failed the screen said "LLM parse
+failed" and "The model did not return a usable statement (model call
+failed: HTTPStatusError 503). Nothing was imported…". The parenthetical
+is the backend's `reason` string, made deliberately technical in
+Session 102 so a transient 429/503 could be told from a rejected 400 --
+useful to whoever is debugging, meaningless to whoever is uploading.
+
+**After** (`static/index.html`). A small `llmFailureMessage(reason)`
+maps the raw string to one sentence: `HTTPStatusError 503` or `429`,
+or any httpx timeout (`ReadTimeout`, `ConnectTimeout`, `WriteTimeout`,
+`PoolTimeout`) → "The AI service is temporarily unavailable.";
+`ConnectError` → "Could not reach the AI service."; anything else
+(a 400/403, a non-JSON reply, a schema violation) → "The AI could not
+read this statement." Every case is followed by "Nothing was imported.
+Try again, or use the best-attempt parse instead." The raw reason sits
+beneath in a muted monospace line, in parentheses, for anyone who needs
+it. The brief named `503`, `429` and `ReadTimeout`; the status codes are
+matched in their `HTTPStatusError` context rather than as bare digits,
+and the other three httpx timeout types the backend can pass through are
+treated the same as `ReadTimeout` -- they are the same failure to the
+user. Checked against eight sample reasons under `jsc`.
+
+The heading is "AI import failed", matching Sessions 116–117's
+"AI-assisted import". The same renderer's other heading, for a missing
+key, became "AI import not set up" and its sentence says "the AI
+service's API key" rather than "the model's" -- same screen, same
+change. The preview's "Read with: LLM-assisted parse" label is on
+another screen, was explicitly kept in Session 116, and is untouched;
+if "LLM" is to leave user-facing text entirely, that label and the
+insight panel's wording are the remaining places.
+
+The three buttons -- Best-attempt parse, Try again, Choose another file
+-- are exactly as they were. No backend change; `reason` is unchanged.
+
+**Verification.** Page script parsed under `jsc`. **788 passing**,
+unchanged. Browser check is manual: the sentence, the small-print
+reason, and the buttons on a real failure (the quickest way to force
+one is an invalid `GEMINI_API_KEY`, which yields a 400 → "could not
+read").
+
+### Outcome
+A failure the user can act on reads like one; the detail an engineer
+needs is still on the page.
+
+### In plain English
+When the AI service could not read a statement, the screen used to
+show the error the way the code sees it -- status codes and exception
+names. It now says in ordinary words whether the service was
+unavailable, unreachable, or simply could not make sense of the file,
+and what to do next. The technical detail is still there in small grey
+text for anyone chasing a problem.
+
+### Next steps
+Re-run the Axis statement through the AI-assisted path (pending from
+Session 114); the redaction session recorded in STATE.md's open flags;
+Chandra's browser walk of the Upload tab; merge `feature/upload-ui`
+into `main`.

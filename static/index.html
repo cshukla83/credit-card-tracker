@@ -620,6 +620,11 @@
   .upload-toggle input:checked + .track { background: var(--accent); }
   .upload-toggle input:checked + .track::after { transform: translateX(1.05rem); }
   .upload-toggle input:focus-visible + .track { box-shadow: var(--focus); }
+  .upload-reason {
+    margin-top: -0.4rem;
+    font-size: 0.82rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
   .upload-toggle .help {
     margin: 0.35rem 0 0 3.05rem;
     font-size: 0.82rem;
@@ -4441,17 +4446,31 @@
       ];
     }
 
+    // The backend's `reason` is deliberately technical -- "model call
+    // failed: HTTPStatusError 503", "reply is not JSON: ..." -- so a
+    // transient outage can be told from a rejected request (Session 102).
+    // The user gets a plain sentence chosen from it (Session 118); the raw
+    // reason stays underneath in small print for whoever needs it.
+    function llmFailureMessage(reason) {
+      const r = reason || "";
+      if (/HTTPStatusError (503|429)|ReadTimeout|ConnectTimeout|WriteTimeout|PoolTimeout/.test(r)) {
+        return "The AI service is temporarily unavailable.";
+      }
+      if (/ConnectError/.test(r)) return "Could not reach the AI service.";
+      return "The AI could not read this statement.";
+    }
+
     function renderLlmBlocked() {
       const r = upload.llm;
       const notConfigured = r.status === "llm_not_configured";
       return [
-        el("h2", { text: notConfigured ? "LLM not configured" : "LLM parse failed" }),
+        el("h2", { text: notConfigured ? "AI import not set up" : "AI import failed" }),
         fileLine(),
         notConfigured
-          ? el("p", {}, ["The model's API key is not set. Add ", el("code", { text: r.api_key_env }),
+          ? el("p", {}, ["The AI service's API key is not set. Add ", el("code", { text: r.api_key_env }),
               " to ", el("code", { text: ".env" }), ", restart the server, and try again -- or use the best-attempt parse instead."])
-          : el("p", {}, ["The model did not return a usable statement (", r.reason || "unknown reason",
-              "). Nothing was imported. Try again, or use the best-attempt parse instead."]),
+          : el("p", { text: llmFailureMessage(r.reason) + " Nothing was imported. Try again, or use the best-attempt parse instead." }),
+        notConfigured ? null : el("p", { class: "muted upload-reason", text: "(" + (r.reason || "unknown reason") + ")" }),
         el("div", { class: "upload-actions" }, [
           uploadButton("Best-attempt parse", () => startPreview(upload.cardRef, "best_effort"), { primary: true }),
           notConfigured ? null : uploadButton("Try again", () => startPreview(upload.cardRef, "llm_assist")),
