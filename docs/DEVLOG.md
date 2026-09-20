@@ -12062,3 +12062,91 @@ Re-run the Axis statement through the AI-assisted path (pending from
 Session 114); the redaction session recorded in STATE.md's open flags;
 Chandra's browser walk of the Upload tab; merge `feature/upload-ui`
 into `main`.
+
+## Session 119 — 2026-09-20
+
+### Goal
+Close out the manual browser walk of `feature/upload-ui`, record the one
+item it could not exercise, and merge the branch into `main`.
+
+### What happened
+
+Branch `feature/upload-ui` at `7be7d8f`, clean, 24 commits ahead of
+`main` and 0 behind.
+
+**The walk.** Chandra ran the 18-item manual browser walk of the upload
+work (Sessions 97–118) against a running server, in a separate terminal
+as the convention requires. **17 of the 18 items were verified live.**
+This is the walk that STATE.md has named since Session 101 as the gate
+before Module 1 could be called verified, and it is the first time the
+frontend built in this branch has been seen rendered rather than only
+traced.
+
+**The eighteenth item.** Multi-match upload resolution could not be
+exercised. The branch fires only when a statement's detected bank *and*
+card type match two or more cards on file --
+`storage.upload.resolve_card()` returns `multi_match` with the candidate
+list, and the Upload tab renders `renderMultiMatch()`: the "Which card?"
+radio list showing each candidate's nickname and last statement period,
+then Continue into preview with the chosen `card_id`. No two cards
+currently on file share a bank and a card type, so the screen is
+unreachable with the present data. The code is unchanged since Session
+101 and has been read through end to end, but it has not been observed
+running. Recorded in STATE.md's open flags in the project's existing
+"traced, not seen" phrasing: a **test-data gap, not a suspected bug**,
+open until sample data exists with two or more cards sharing a bank and
+card type. Nothing was changed to make the branch reachable and no
+workaround was invented -- manufacturing a duplicate card to light up a
+screen would verify the fixture, not the user's path.
+
+**STATE.md.** Besides the new flag, two statements in that file had been
+made false by the walk and were corrected rather than left to rot: the
+"Manual visual verification gap" flag now records that the walk happened
+in Session 119 and what it did and did not cover, and the "Next arc"
+section no longer says the Upload tab is "not yet manually verified in a
+browser". Both corrections are scoped to the walk's actual result -- 17
+verified, one flagged -- and neither claims coverage of the Session
+43–58 screens the walk was not scoped to re-check.
+
+**The merge.** `feature/upload-ui` merged into `main`. `main` had no
+commits of its own since the branch was cut, so this is a
+fast-forward -- the branch's history becomes `main`'s history unchanged,
+and this session's docs commit is the tip. The feature branch was not
+deleted; deleting it was not asked for.
+
+**No code changes.** This session's diff is **docs-only** --
+`docs/STATE.md` and `docs/DEVLOG.md` -- plus the merge. No file under
+`main.py`, `storage/`, `parsers/`, `static/`, or `tests/` was touched,
+which is the expected shape for a close-out session.
+
+**Verification.** Full suite re-run after the merge: **788 passing**,
+matching Session 118 exactly, as a docs-only change should.
+
+### Outcome
+Module 1's upload flow has been seen working in a browser, not just
+traced: 17 of 18 walk items verified live, the one unreachable screen
+recorded as an open flag with the condition that would close it. The
+upload work is on `main`, and the test count is unchanged at 788.
+
+### In plain English
+The upload feature had been built over many sittings and checked mostly
+by reading the code. This session it was finally used by hand, screen by
+screen, against a running copy of the app — eighteen things to try, and
+seventeen of them behaved as intended.
+
+The eighteenth could not be tried at all. One screen only appears when
+two cards of the same bank and the same type are on file, asking which
+of them a statement belongs to, and no such pair exists in the data
+today. Rather than fake a second card to make the screen appear, it was
+written down as a known, unchecked corner, along with exactly what would
+have to be true to check it later.
+
+With that recorded, the upload work was folded into the main line of the
+project. Nothing in the program itself changed this sitting — only the
+written record — and every test still passes, the same number as before.
+
+### Next steps
+Create sample data with two or more cards sharing a bank and card type
+and walk the multi-match screen; re-run the Axis statement through the
+AI-assisted path (pending from Session 114); the LLM-assist redaction
+session recorded in STATE.md's open flags.

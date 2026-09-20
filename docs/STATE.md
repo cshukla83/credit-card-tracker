@@ -411,6 +411,13 @@ system font stack.
   bounding rects, classes, or anything else the page can evaluate. It
   found and confirmed the fix for Session 93's scroll reset; frontend
   sessions should reach for it before writing "traced, not seen".
+  **The walk happened in Session 119.** Chandra ran the 18-item manual
+  browser walk for `feature/upload-ui` (Sessions 97-118) against a
+  running server and verified 17 of the 18 items live; the eighteenth,
+  the multi-match upload screen, is recorded as its own flag below. This
+  gap bullet stays open only for whatever the walk did not cover: it was
+  scoped to the upload work and the screens it touches, not to a
+  re-verification of every Session 43-58 behaviour listed above.
 - **The selection count can include rows that are not on screen.** After
   a bulk accept from the multi-select bar (Session 57) the selection is
   deliberately kept whole and the post-reload prune is skipped, so the
@@ -514,6 +521,25 @@ system font stack.
   or training must be checked against the current terms for the tier in
   use at the time it is written, and should not claim "not stored".
 
+- **Multi-match upload screen: traced, not seen** (Session 101's
+  `multi_match` branch; recorded Session 119). When a statement's
+  detected bank and card type match two or more cards on file,
+  `storage.upload.resolve_card()` returns `multi_match` with the
+  candidate list and the Upload tab renders `renderMultiMatch()` -- the
+  "Which card?" radio list, each option showing the card's nickname and
+  its last statement period, then Continue into preview with the chosen
+  `card_id`. It is the one item of the 18-item browser walk
+  (Sessions 97-118) that could **not** be exercised live: no two cards
+  currently on file share a bank *and* a card type, so the branch never
+  fires. The code is unchanged since Session 101, is covered by tests,
+  and has been read through end to end -- but it has not been observed
+  running in a browser, so its behaviour is what the code specifies, not
+  what has been seen. This is a test-data gap, not a suspected bug, and
+  it is not closed: it stays open until sample data exists with two or
+  more cards sharing a bank and card type and the screen is walked for
+  real. No workaround was invented and nothing was changed to make it
+  reachable.
+
 ## Next arc
 
 The Tier 1 parser arc (Sessions 27–35) is complete: all four known bank
@@ -529,10 +555,13 @@ and step 4 (Module 1, upload with auto-detect — Sessions 97–101:
 `strategy=detected|best_effort|llm_assist`, `/upload/confirm`, the
 shared `parsers/registry.py`, and the Upload tab). The upload endpoints
 were verified live once, under an explicit one-time exception recorded
-in CONVENTIONS.md; the Upload tab, like every other frontend screen
-since Session 43, is **not yet manually verified in a browser** (see
-Open flags). That walk — now covering Review & assign, the dashboard,
-and the Upload tab — is the gate before any module is called verified.
+in CONVENTIONS.md. The manual browser walk that was the gate before
+calling the module verified **was run in Session 119**: 18 items, 17 of
+them verified live by Chandra against a running server, the eighteenth
+(the multi-match upload screen) recorded as an open flag because no two
+cards on file share a bank and card type, so the screen cannot be
+reached with the current data. `feature/upload-ui` was merged into
+`main` in the same session.
 
 What is next is not on this arc: the parser-tier roadmap in
 docs/PRODUCT_VISION.md (config schema, then the Tier 4 auto-learn that
