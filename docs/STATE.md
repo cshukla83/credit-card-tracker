@@ -352,11 +352,17 @@ system font stack.
   `id` ASC instead. In practice these agree, since SQLite's
   `AUTOINCREMENT` id is assigned in insertion order, but it's a real (if
   inert) divergence between the two functions, not an accident.
-- Card identity has two known, unfixed asymmetries: `storage.cards.
-  create_card`'s bank/card_type matching is case-sensitive, but
-  `parsers/hdfc`'s dispatch is case-insensitive; and cards with a `NULL`
-  nickname can silently accumulate duplicates, since SQLite treats each
-  `NULL` as distinct.
+- Card identity asymmetries, now confined to the write side (re-checked
+  Session 120). The read side is fixed: `storage.cards.find_cards_for_type()`
+  (Session 97), the only production lookup used by upload resolution,
+  compares bank and card_type with `COLLATE NOCASE`, and `find_card()`
+  uses an explicit `nickname IS NULL` for unnamed cards. What remains:
+  `create_card()` still relies on the case-sensitive
+  `UNIQUE(bank, card_type, nickname)` constraint, so `POST /cards` and
+  `scripts/create_card.py` will happily create `hdfc/diners` beside
+  `HDFC/Diners`; and cards with a `NULL` nickname can still accumulate
+  duplicates, since SQLite treats each `NULL` as distinct
+  (`tests/test_cards.py` pins this behaviour). Not fixed; recorded.
 - Card identity convention clarified during Session 25 verification, and
   now backed by a real field as of Session 26: `nickname` must identify
   the physical card (e.g. `Primary`), never a statement period —
@@ -380,6 +386,9 @@ system font stack.
   Neither was built because the brief scoped that session to the system
   font stack and to styling within the existing layout. Both are open for
   a future, separately scoped frontend session; neither blocks anything.
+  Note (Session 120): Session 44's DEVLOG plain-English summary says "a
+  cleaner typeface" shipped; it did not -- `static/index.html` still uses
+  the system font stack, and this flag is the accurate record.
 - No min/max-date endpoint (Session 46). The frontend bounds the Start
   and End date inputs by the earliest and latest transaction dates in the
   undated filtered set. When no date filter is set, the table's own
@@ -389,35 +398,20 @@ system font stack.
   project's data size the extra fetch is negligible. Revisit — a small
   `GET /transactions/date-range` taking the same filters — only if real
   usage shows the undated fetch's cost.
-- **Manual visual verification gap.** Every frontend session from 43
-  through 58 was verified by parsing the script (system JavaScriptCore)
-  and reasoning through the code — **none of it has been seen rendered
-  by Claude Code**, because the browser extension was unavailable in each
-  of those sessions, and the project's convention keeps live-server
-  verification with Chandra. That covers: the Review & assign screen and
-  both grouping modes, the Bank/Card cascade and narrowing, the visual
-  refresh, collapsible groups, the sticky bar and header parking, the
-  Category/Merchant toggle, and all three label columns with their
-  editors. Each of those sessions' DEVLOG entries says so plainly and
-  lists what a manual walk should cover; until that walk happens, the
-  frontend's behaviour is what the code specifies, not what has been
-  observed. Two real bugs were caught by code trace alone in that stretch
-  (a disabled-buttons regression in Session 43, a dropdown-clipping bug in
-  Session 44); more may be waiting. **Since Session 93 there is a way to
-  see it without the extension:** `scripts/headless_chrome.py` drives a
-  headless Chrome over the DevTools protocol — stdlib only, needs just a
-  Chrome/Chromium binary — so a session can run the app on a scratchpad
-  copy of the database, load a page, click, and measure scroll positions,
-  bounding rects, classes, or anything else the page can evaluate. It
-  found and confirmed the fix for Session 93's scroll reset; frontend
-  sessions should reach for it before writing "traced, not seen".
-  **The walk happened in Session 119.** Chandra ran the 18-item manual
-  browser walk for `feature/upload-ui` (Sessions 97-118) against a
-  running server and verified 17 of the 18 items live; the eighteenth,
-  the multi-match upload screen, is recorded as its own flag below. This
-  gap bullet stays open only for whatever the walk did not cover: it was
-  scoped to the upload work and the screens it touches, not to a
-  re-verification of every Session 43-58 behaviour listed above.
+- **Manual visual verification gap, Sessions 43-58.** The frontend work
+  of those sessions was verified by parsing the script and reasoning
+  through the code, never by seeing it rendered: the Review & assign
+  screen and both grouping modes, the Bank/Card cascade and narrowing,
+  the visual refresh, collapsible groups, the sticky bar and header
+  parking, the Category/Merchant toggle, and all three label columns with
+  their editors. Two real bugs were caught by code trace alone in that
+  stretch (Session 43 disabled-buttons regression, Session 44
+  dropdown-clipping); more may be waiting. Session 119's 18-item browser
+  walk covered the upload work (Sessions 97-118) and the screens it
+  touches, **not** a re-verification of the list above, so this stays
+  open for exactly that list. `scripts/headless_chrome.py` (Session 93)
+  can drive it without the browser extension; frontend sessions should
+  reach for it before writing "traced, not seen".
 - **The selection count can include rows that are not on screen.** After
   a bulk accept from the multi-select bar (Session 57) the selection is
   deliberately kept whole and the post-reload prune is skipped, so the

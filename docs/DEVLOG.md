@@ -12150,3 +12150,97 @@ Create sample data with two or more cards sharing a bank and card type
 and walk the multi-match screen; re-run the Axis statement through the
 AI-assisted path (pending from Session 114); the LLM-assist redaction
 session recorded in STATE.md's open flags.
+
+## Session 120 — 2026-09-20
+
+### Goal
+Audit every entry in STATE.md's open flags against the code, since some
+were suspected of describing work that had since been completed.
+
+### What happened
+
+Branch `main` at `ff73608`, clean.
+
+Each of the fourteen open bullets was checked against the source, not
+against DEVLOG prose. The findings, with the evidence used:
+
+- `list_cards()` / `list_cards_with_statements()` ordering divergence —
+  still present (`storage/cards.py:113` orders by `created_at`; `:91` and
+  `:157` by `cards.id ASC`).
+- Pagination / result cap — no `limit` or `offset` anywhere in `main.py`.
+- `StarletteDeprecationWarning` — reproduced by running the suite: 788
+  passed, 1 warning from `fastapi/testclient.py:1`. No `filterwarnings`
+  configuration exists.
+- Review & assign status line — `static/index.html:149` is still a plain
+  `color: var(--muted)` rule.
+- Distinct typeface — `static/index.html:37` is still the system font
+  stack; no `@font-face`, no font stylesheet.
+- Date-range endpoint — no such route in `main.py`, no client reference.
+- Sticky table header — no `<thead>` has `position: sticky`; only the
+  multi-select bar and the group headers are sticky.
+- Collapse all / expand all — no matching control or function name.
+- Group "accept all" and credit rows — `acceptPairs()` (`:2290`) still
+  iterates every row with no `isSelectable()` gate; `:2733` calls it on
+  `group.txns`.
+- Selection count including off-screen rows — the prune at `:2200-2211`
+  is unchanged.
+- LLM-assist redaction — `parsers/llm_assist.redact()` is still one
+  line: long digit runs only. No `LLM_REDACT_TERMS`.
+- Suggestion-endpoint reshaping, multi-match traced-not-seen — informational
+  or recorded last session; nothing to re-check.
+
+**Conclusion: no flag was complete.** Three were, however, stale or
+overstated, and were rewritten:
+
+1. **Card identity asymmetries.** The original bullet described the
+   problem as though nothing had changed since Session 25. In fact the
+   read side has been fixed since Session 97: `find_cards_for_type()`,
+   the only production lookup (called from `storage/upload.py:125`), uses
+   `COLLATE NOCASE` on both columns, and `find_card()` handles
+   `nickname IS NULL` explicitly. What remains is the write side —
+   `create_card()` via `POST /cards` and `scripts/create_card.py` still
+   relies on the case-sensitive `UNIQUE` constraint and still permits
+   duplicate `NULL`-nickname cards (`tests/test_cards.py` pins both). The
+   bullet now says exactly that.
+2. **Manual visual verification gap.** The bullet had grown by accretion
+   into a history of the headless-Chrome script and Session 119's walk.
+   Its operative content is one claim — Sessions 43-58 have not been
+   re-walked, and Session 119 covered only the upload screens — so it was
+   collapsed to that claim plus the list of what such a walk would cover.
+   The `headless_chrome.py` narrative was dropped; the script's own
+   docstring and *Current state* already carry it.
+3. **Deferred typeface.** Session 44's "In plain English" says "a cleaner
+   typeface" shipped. The code says otherwise, and so does the flag. A
+   one-line note was added to the flag so the two records are reconciled
+   in the direction of the code; the Session 44 entry was left as
+   written, since DEVLOG entries are not retrofitted.
+
+No code changed. The audit method — grep for the concrete artefact each
+flag names (a CSS rule, a route, a function name, a warning), rather than
+searching DEVLOG for a session that says it was done — was chosen
+because DEVLOG summaries are what had drifted in the first place.
+
+### Outcome
+STATE.md's open flags now match the code on every bullet checked. Two
+bullets that overstated the debt (card identity) or buried the point
+(verification gap) are shorter and accurate; one documented conflict
+between DEVLOG and code is recorded. Test count unchanged at 788.
+
+### In plain English
+The project keeps a running list of known loose ends. The suspicion was
+that some had quietly been tied up over the last many sittings without
+the list being updated. So each one was checked against the actual
+program rather than against the notes about the program.
+
+None turned out to be finished. But two of them were telling an out-of-
+date story: one described a problem as untouched when half of it had
+been fixed along the way, and one had swollen into a paragraph of
+history around a single still-true sentence. Both were rewritten to say
+just what is true today. A third case turned up where an earlier note
+claimed a change that was never actually made; the loose-ends list was
+already right, and a line was added so the disagreement is on record.
+
+### Next steps
+Unchanged from Session 119: sample data with two cards sharing a bank and
+card type so the multi-match screen can be walked; re-run the Axis
+statement through the AI-assisted path; the redaction session.
