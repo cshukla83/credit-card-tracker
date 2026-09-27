@@ -1,76 +1,136 @@
-# Project Name
+# Credit Card Statement Tracker
 
-One or two sentences: what does this project do, and why did you build it?
+A local-first web application that parses Indian bank credit card statement
+PDFs, extracts transactions, and gives you a searchable, categorised view of
+your spending — with an analytics dashboard and optional AI-assisted parsing
+for unsupported banks.
 
-## Prerequisites
+Built with Python, FastAPI, and SQLite. Everything runs on your machine;
+your data never leaves it (see [SECURITY.md](SECURITY.md) for the one
+optional exception).
 
-- [Claude Code](https://claude.com/product/claude-code) must be installed and set up
-- Python 3.x installed
-- (Add any other tools/accounts needed, e.g. an API key)
+## Supported Banks
 
-## What this project does
+| Bank | Card Types | Parser |
+|------|-----------|--------|
+| HDFC | Diners (current + legacy format) | Dedicated |
+| ICICI | Coral | Dedicated |
+| SBI | SimplyClick / Titan | Dedicated |
+| IndusInd | Legend | Dedicated |
+| Any other bank | — | AI-assisted (Google Gemini) or best-effort heuristic |
 
-A slightly longer explanation for a visitor with no context — what problem it solves,
-what the end result looks like (screenshot/GIF if possible once built).
+## Features
 
-## Project structure
+- **Upload & parse** — drop a PDF, enter the password, preview extracted
+  transactions before importing
+- **Auto-categorisation** — learns from your manual category assignments and
+  applies them to future transactions by merchant match
+- **Verification workflow** — each transaction is Verified, Mismatch, or
+  Unverified; bulk-accept supported
+- **Analytics dashboard** — spend breakdown by category, subcategory, or
+  merchant across configurable time periods
+- **AI commentary** — optional natural-language spending summary powered by
+  Gemini (toggle-controlled)
+- **CLI tools** — create cards, import statements, and query transactions
+  from the command line
 
-```
-project-name/
-├── main.py              # entry point
-├── requirements.txt      # Python dependencies
-├── venv/                 # local virtual environment (not tracked in git)
-├── docs-internal/
-│   └── DEVLOG.md         # detailed build log (internal, not published)
-└── README.md             # this file
-```
+## Tech Stack
 
-## Setup
+- **Backend:** Python 3.10+, FastAPI, Uvicorn
+- **Database:** SQLite (single file, zero config)
+- **PDF parsing:** pdfplumber
+- **AI (optional):** Google Gemini API
+- **Frontend:** Single-page HTML/JS (no build step)
+- **Tests:** pytest (788 tests)
+
+## Quick Start
 
 ```bash
-git clone <repo-url>
-cd project-name
+# Clone and set up
+git clone https://github.com/cshukla83/credit-card-tracker.git
+cd credit-card-tracker
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-```
 
-`python-docx` is included in `requirements.txt` but is not used by the
-app at runtime. It is needed only by `scripts/generate_prd_docx.py`,
-which renders `docs-internal/PRD.docx` from the PRD content. Skip it if you only
-intend to run the tracker.
+# Configure
+cp .env.example .env
+# Edit .env — add your bank statement PDF passwords
+# Optionally add GEMINI_API_KEY for AI features
 
-## Running the app
-
-```bash
-source venv/bin/activate
+# Run
 uvicorn main:app --reload
 ```
 
-Then open http://127.0.0.1:8000/ in your browser.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000) in your browser.
 
-## Running the CLIs
+## CLI Scripts
 
-The project's command-line scripts live under `scripts/` and must be run as
-modules (`-m`), not invoked directly (`python scripts/foo.py`) — running a
-script directly puts *that script's own directory* on `sys.path`, not the
-project root, so its top-level `from storage...`/`from parsers...` imports
-fail with `ModuleNotFoundError`. Always run from the project root, with the
-venv active:
+Run from the project root with the venv active. Always use `python -m`
+(not `python scripts/foo.py`) so imports resolve correctly.
+
+```bash
+# Create a card
+python -m scripts.create_card --bank HDFC --card-type Diners --nickname "Primary"
+
+# Import a statement
+python -m scripts.import_statement data/statements/hdfc_aug2026.pdf --card-id 1
+
+# Query transactions
+python -m scripts.query_transactions --card-id 1 --start 2026-08-01 --end 2026-08-31
+```
+
+## Running Tests
 
 ```bash
 source venv/bin/activate
-python -m scripts.create_card --bank HDFC --card-type Diners --nickname Primary
-python -m scripts.import_statement data/statements/hdfc_sample.pdf --card-id 1
-python -m scripts.query_transactions --card-id 1 --start 2026-06-01 --end 2026-06-30
+pytest
 ```
 
-## Learning notes
+All 788 tests run without a database, API key, or statement files — they
+use synthetic PDFs generated in the test fixtures.
 
-This project was built while learning Claude Code hands-on. The full session-by-session
-build log — including every command run and what it means — is in
-`docs-internal/DEVLOG.md` (kept out of the public repo).
+## Project Structure
 
-## Status
+```
+credit-card-tracker/
+├── main.py                  # FastAPI app — all API endpoints
+├── parsers/                 # Bank-specific + generic PDF parsers
+│   ├── hdfc/                #   HDFC Diners (current + legacy)
+│   ├── icici/               #   ICICI Coral
+│   ├── sbi/                 #   SBI Titan
+│   ├── indusind/            #   IndusInd Legend
+│   ├── detect.py            #   Bank detection from PDF landmarks
+│   ├── generic_fallback.py  #   Best-effort parser for unknown banks
+│   ├── llm_assist.py        #   Gemini-powered parser (optional)
+│   ├── reconcile.py         #   Parsed totals vs. statement summary
+│   └── registry.py          #   Bank → parser routing
+├── storage/                 # SQLite data layer
+│   ├── db.py                #   Connection factory (reads DB_PATH)
+│   ├── schema.py            #   Table definitions
+│   ├── cards.py             #   Card CRUD
+│   ├── reads.py             #   Transaction queries
+│   ├── writes.py            #   Transaction writes
+│   ├── upload.py            #   Web upload pipeline
+│   ├── categories.py        #   Auto-categorisation engine
+│   ├── aggregate.py         #   Dashboard aggregation
+│   └── commentary.py        #   AI spending commentary
+├── scripts/                 # CLI utilities
+├── static/index.html        # Single-page frontend
+├── tests/                   # 788 pytest tests
+├── requirements.txt         # Python dependencies
+├── pyproject.toml           # Project metadata + pytest config
+├── .env.example             # Environment variable template
+├── SECURITY.md              # Privacy & data handling
+└── LICENSE                  # MIT
+```
 
-🚧 In progress — last updated: <date>
+## Documentation
+
+- [SECURITY.md](SECURITY.md) — what stays local, what the AI toggle sends,
+  how passwords are handled
+- [.env.example](.env.example) — all configuration options with comments
+
+## License
+
+[MIT](LICENSE)
