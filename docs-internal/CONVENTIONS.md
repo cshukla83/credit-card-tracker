@@ -26,6 +26,15 @@ session work — DEVLOG entries, STATE.md updates, learning summaries,
 convention changes — is read from and written to `docs-internal/`.
 Do not recreate any of these files under `docs/`.
 
+## Script Library
+
+`docs-internal/SCRIPT_LIBRARY.md` and its companion `SCRIPT_LIBRARY.xlsx`
+catalogue every `.py` file in the project (excluding `tests/` and `venv/`)
+with a description and gitignore status. **Whenever a new `.py` file is
+created or an existing one is deleted or renamed, update both files in the
+same session.** This keeps the inventory accurate for future sessions and
+for anyone reviewing the codebase.
+
 ## DEVLOG Entry Structure
 
 Every session entry in docs-internal/DEVLOG.md follows the same five-section shape:

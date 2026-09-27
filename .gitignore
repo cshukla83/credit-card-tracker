@@ -21,3 +21,12 @@ docs/PRD.docx
 # Claude Design mockups (local reference only)
 UI design/
 docs-internal/
+
+# Internal tooling scripts (not needed by users)
+scripts/generate_prd_docx.py
+scripts/headless_chrome.py
+
+# Root-level exploration/scratch scripts
+explore_*.py
+read_statement.py
+run_*_parser.py
