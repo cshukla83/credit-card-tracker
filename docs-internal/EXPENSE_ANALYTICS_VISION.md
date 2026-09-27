@@ -1,6 +1,6 @@
 # Product Vision — Expense Categorization & Analytics
 
-Parallel arc to docs/PRODUCT_VISION.md (parser tiers), chosen ahead of the
+Parallel arc to docs-internal/PRODUCT_VISION.md (parser tiers), chosen ahead of the
 Tier 2/3/4 parser decision. Captured during Session 37 planning.
 
 ## The goal

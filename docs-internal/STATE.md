@@ -2,8 +2,8 @@
 
 Always-current snapshot of the credit card statement tracker. Read this
 first — it's the fastest way to get oriented. For the full session-by-
-session history, see docs/DEVLOG.md. For process rules, see
-docs/CONVENTIONS.md.
+session history, see docs-internal/DEVLOG.md. For process rules, see
+docs-internal/CONVENTIONS.md.
 
 ## What this is
 
@@ -43,7 +43,7 @@ in the DEVLOG, between Sessions 43 and 44).
 arc.** `transactions` carries three nullable free-text labels —
 `category`, `subcategory`, `merchant` — each added by the same
 `table_xinfo`-guarded migration, each Title-Cased on write by one shared
-rule, `NULL` the only representation of "unset" (`docs/DATA_MODEL.md`).
+rule, `NULL` the only representation of "unset" (`docs-internal/DATA_MODEL.md`).
 Three suggestion engines, deliberately different in shape, run off one
 labelled-rows query per request:
 
@@ -558,7 +558,7 @@ reached with the current data. `feature/upload-ui` was merged into
 `main` in the same session.
 
 What is next is not on this arc: the parser-tier roadmap in
-docs/PRODUCT_VISION.md (config schema, then the Tier 4 auto-learn that
+docs-internal/PRODUCT_VISION.md (config schema, then the Tier 4 auto-learn that
 Module 1's one-off LLM parse deliberately is not), on hold until
 scoped. Two small follow-ups recorded in the DEVLOG's verification-pass
 entry: the LLM path's `llm_failed.reason` should carry the HTTP status,
@@ -570,7 +570,7 @@ second-bank/generalization work that followed it are both done.
 
 ## How this project works
 
-See docs/CONVENTIONS.md for the full session methodology, DEVLOG entry
+See docs-internal/CONVENTIONS.md for the full session methodology, DEVLOG entry
 structure, learning summary format, data handling rules, and CLI
 invocation convention. In short: scope is locked before code, Claude
 Code builds, Chandra verifies in a separate terminal, and every session

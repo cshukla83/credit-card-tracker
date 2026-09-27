@@ -24,7 +24,7 @@ numbers, reference numbers, masked or not) are replaced with a marker
 before sending -- an amount never has eight digits in a row.
 
 Configuration is the commentary module's: GEMINI_API_KEY and GEMINI_MODEL
-from .env (documented in docs/CONVENTIONS.md). A missing key is reported as
+from .env (documented in docs-internal/CONVENTIONS.md). A missing key is reported as
 a distinct status (the frontend says which key to add), not an exception.
 The call itself is one small function tests replace wholesale; nothing in
 the suite reaches the network.

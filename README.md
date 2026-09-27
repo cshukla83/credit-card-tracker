@@ -20,8 +20,8 @@ project-name/
 ├── main.py              # entry point
 ├── requirements.txt      # Python dependencies
 ├── venv/                 # local virtual environment (not tracked in git)
-├── docs/
-│   └── DEVLOG.md         # detailed, step-by-step build log
+├── docs-internal/
+│   └── DEVLOG.md         # detailed build log (internal, not published)
 └── README.md             # this file
 ```
 
@@ -37,7 +37,7 @@ pip install -r requirements.txt
 
 `python-docx` is included in `requirements.txt` but is not used by the
 app at runtime. It is needed only by `scripts/generate_prd_docx.py`,
-which renders `docs/PRD.docx` from the PRD content. Skip it if you only
+which renders `docs-internal/PRD.docx` from the PRD content. Skip it if you only
 intend to run the tracker.
 
 ## Running the app
@@ -69,7 +69,7 @@ python -m scripts.query_transactions --card-id 1 --start 2026-06-01 --end 2026-0
 
 This project was built while learning Claude Code hands-on. The full session-by-session
 build log — including every command run and what it means — is in
-[`docs/DEVLOG.md`](docs/DEVLOG.md).
+`docs-internal/DEVLOG.md` (kept out of the public repo).
 
 ## Status
 

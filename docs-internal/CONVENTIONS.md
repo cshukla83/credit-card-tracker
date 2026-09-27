@@ -2,12 +2,33 @@
 
 Process rules that govern how this project is worked on and documented.
 For code-level invariants (rules about how shared code must behave), see
-the "Invariants" section at the top of docs/DEVLOG.md instead — those
+the "Invariants" section at the top of docs-internal/DEVLOG.md instead — those
 live near the code log by design.
+
+## Internal vs. Public Documentation
+
+**As of 27 Sep 2026, this project's build documentation lives in
+`docs-internal/`, not `docs/`.** `docs-internal/` holds the session-by-
+session build log (`DEVLOG.md`), the always-current state snapshot
+(`STATE.md`), this conventions file, the data model, the product/vision
+documents, and `learnings/` — all of it written for the person and
+Claude Code building this project, not for an outside reader. It is
+excluded from git via `.gitignore` and is never pushed to the public
+GitHub repository.
+
+`docs/` is reserved for public-facing documentation only — currently
+the user guide. Anything written there should be usable by a stranger
+who has cloned the repo and never seen a session number.
+
+**Every rule below that references a `docs/<file>.md` path by its old
+name now means the file at `docs-internal/<file>.md`.** All future
+session work — DEVLOG entries, STATE.md updates, learning summaries,
+convention changes — is read from and written to `docs-internal/`.
+Do not recreate any of these files under `docs/`.
 
 ## DEVLOG Entry Structure
 
-Every session entry in docs/DEVLOG.md follows the same five-section shape:
+Every session entry in docs-internal/DEVLOG.md follows the same five-section shape:
 Goal, What happened, Outcome, In plain English, and Next steps.
 
 - **Goal** — one or two sentences on what the session set out to do.
@@ -34,14 +55,14 @@ through 23 predate this convention and are not retrofitted.
 
 ## Learning Summary Convention
 
-**Location & naming:** `docs/learnings/learning_summary_DD-Mon-YYYY.md`
+**Location & naming:** `docs-internal/learnings/learning_summary_DD-Mon-YYYY.md`
 (e.g. `learning_summary_20-Aug-2026.md`). One file per day worked on the
 project.
 
 **Cadence:** Created at the end of each day that has DEVLOG.md session
 entries — not proactively, only for days with actual recorded work.
 
-**Source of truth:** `docs/DEVLOG.md` is the only source. Every claim in
+**Source of truth:** `docs-internal/DEVLOG.md` is the only source. Every claim in
 the summary must trace back to something actually recorded there for that
 day — no aspirational statements, no claims about "what's next" or "what
 this means for the project" unless that was explicitly discussed and
@@ -193,7 +214,7 @@ The discipline this project is built under, session after session:
   future instance requires Chandra's explicit approval at the time it
   comes up, regardless of what was granted previously.
 - **Documentation is never a separate step.** Every prompt that makes real
-  build progress updates `docs/DEVLOG.md` in the same session. There is no
+  build progress updates `docs-internal/DEVLOG.md` in the same session. There is no
   such thing as "code now, document later."
 - **One commit per session.** All of a session's changes — code, tests,
   docs, dependency changes — land in a single commit, so the git history
@@ -214,7 +235,7 @@ The discipline this project is built under, session after session:
   what was built, wherever it is delivered: terminal, chat interface, or
   any other surface — must explicitly name the session number it just
   completed, matching the number used in that session's own
-  `docs/DEVLOG.md` entry; e.g. "Session 59 committed as `<hash>`."
+  `docs-internal/DEVLOG.md` entry; e.g. "Session 59 committed as `<hash>`."
   **Why:** Chandra relays these reports into a separate Claude
   conversation used for scoping and review, and that conversation has no
   independent way to confirm which session number a given report
@@ -238,7 +259,7 @@ session hands context to the next:
   own markdown file, downloadable from the planning conversation and
   uploaded to the Claude project's knowledge space. Carry-overs are
   pointers and briefings: they say where things stand and what to read.
-  They are not a replacement for `docs/STATE.md`, `docs/DEVLOG.md`, or
+  They are not a replacement for `docs-internal/STATE.md`, `docs-internal/DEVLOG.md`, or
   this file, which remain the source of truth; a carry-over that
   disagrees with them is the one that is wrong.
 

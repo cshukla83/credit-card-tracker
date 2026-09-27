@@ -1,11 +1,11 @@
-"""Render docs/PRD.docx from docs/PRD.md.
+"""Render docs-internal/PRD.docx from docs-internal/PRD.md.
 
 Run from the project root, with the venv active:
     python3 -m scripts.generate_prd_docx
 
 Optional arguments:
-    --source docs/PRD.md    input markdown
-    --out    docs/PRD.docx  output Word document
+    --source docs-internal/PRD.md    input markdown
+    --out    docs-internal/PRD.docx  output Word document
 
 The markdown file is the single source of truth: this script reads it and
 renders it, rather than carrying its own copy of the PRD content. Keeping the
@@ -36,8 +36,8 @@ except ModuleNotFoundError:  # pragma: no cover - environment-dependent
         "It is needed only for PRD export, not for running the app."
     )
 
-DEFAULT_SOURCE = "docs/PRD.md"
-DEFAULT_OUT = "docs/PRD.docx"
+DEFAULT_SOURCE = "docs-internal/PRD.md"
+DEFAULT_OUT = "docs-internal/PRD.docx"
 
 # Inline spans: **bold** or `code`. Captured with a single alternation so the
 # text is split in one pass and the delimiters stay attached to their content.
@@ -171,7 +171,7 @@ def render(markdown: str) -> "Document":
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Render docs/PRD.docx from docs/PRD.md.")
+    parser = argparse.ArgumentParser(description="Render docs-internal/PRD.docx from docs-internal/PRD.md.")
     parser.add_argument("--source", default=DEFAULT_SOURCE)
     parser.add_argument("--out", default=DEFAULT_OUT)
     args = parser.parse_args()
