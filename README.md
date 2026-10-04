@@ -24,9 +24,10 @@ optional exception).
 - **Upload & parse** — drop a PDF, enter the password, preview extracted
   transactions before importing
 - **Auto-categorisation** — learns from your manual category assignments and
-  applies them to future transactions by merchant match
-- **Verification workflow** — each transaction is Verified, Mismatch, or
-  Unverified; bulk-accept supported
+  applies them to future transactions by merchant match; bulk-accept
+  suggestions for selected transactions
+- **Totals check** — each upload is reconciled against the statement's printed
+  totals (Match, Mismatch or Unverified) before you import
 - **Analytics dashboard** — spend breakdown by category, subcategory, or
   merchant across configurable time periods
 - **AI commentary** — optional natural-language spending summary powered by

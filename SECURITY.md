@@ -12,18 +12,20 @@ SQLite file (`data/tracker.db` by default) and never leaves your computer
 When you enable the **LLM-assist toggle** for a statement upload (used for
 banks without a dedicated parser), the application sends the statement's
 extracted text to the Google Gemini API for parsing. Similarly, the
-**analytics dashboard commentary** feature sends aggregated spending labels
-and totals to Gemini for a natural-language summary.
+**analytics dashboard commentary** feature sends category, subcategory and
+merchant names with their amounts for the chosen period to Gemini for a
+natural-language summary.
 
 **What is sent:**
 - Transaction descriptions, dates, and amounts
-- Aggregated category labels and period totals (commentary)
+- Category, subcategory and merchant names with amounts, plus period totals (commentary)
 
 **What is never sent:**
 - Card numbers or account numbers (stripped before the API call)
 - PDF files or raw binary data
 - Statement passwords
 - Your database
+- Raw transaction descriptions or dates in the commentary request
 
 Both features require a `GEMINI_API_KEY` in your `.env` file and do nothing
 without one. If you prefer fully offline operation, leave the key unset —
