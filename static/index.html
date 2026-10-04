@@ -427,8 +427,26 @@
     margin-bottom: 1.25rem;
     position: relative;
   }
-  #dash-table td.negative {
+  #dash-table td.negative,
+  #dash-txns-table td.negative {
     color: var(--credit);
+  }
+  .dash-txns {
+    margin-top: 1.5rem;
+  }
+  .dash-txns-title {
+    margin: 0 0 0.6rem;
+    font-size: 1rem;
+  }
+  .dash-txns-pager {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.6rem;
+  }
+  .dash-txns-range {
+    color: var(--muted);
+    font-size: 0.9rem;
   }
   #dash-table .toggle {
     width: 1.6rem;
@@ -1450,6 +1468,32 @@
       </thead>
       <tbody id="dash-body"></tbody>
     </table>
+
+    <!-- Drill-down transactions: the rows behind the current drill path
+         (any of the three label filters set), for the dashboard's period.
+         Hidden at "All". Server-side pages of 25. -->
+    <section id="dash-txns" class="dash-txns" style="display: none;">
+      <h3 class="dash-txns-title">Transactions</h3>
+      <div id="dash-txns-status" class="dash-status" style="display: none;"></div>
+      <table id="dash-txns-table" style="display: none;">
+        <thead>
+          <tr>
+            <th>date</th>
+            <th>merchant</th>
+            <th>category</th>
+            <th>subcategory</th>
+            <th>card</th>
+            <th class="num amount">amount</th>
+          </tr>
+        </thead>
+        <tbody id="dash-txns-body"></tbody>
+      </table>
+      <div id="dash-txns-pager" class="dash-txns-pager" style="display: none;">
+        <button type="button" id="dash-txns-prev" class="small">&larr; Prev</button>
+        <span id="dash-txns-range" class="dash-txns-range"></span>
+        <button type="button" id="dash-txns-next" class="small">Next &rarr;</button>
+      </div>
+    </section>
   </div>
 
   <!-- Upload (Session 101): one panel, rebuilt from upload.step by
@@ -3397,6 +3441,14 @@
     const dashInsightLabelEl = document.getElementById("dash-insight-label");
     const dashInsightTextEl = document.getElementById("dash-insight-text");
     const dashBodyEl = document.getElementById("dash-body");
+    const dashTxnsEl = document.getElementById("dash-txns");
+    const dashTxnsStatusEl = document.getElementById("dash-txns-status");
+    const dashTxnsTableEl = document.getElementById("dash-txns-table");
+    const dashTxnsBodyEl = document.getElementById("dash-txns-body");
+    const dashTxnsPagerEl = document.getElementById("dash-txns-pager");
+    const dashTxnsPrevEl = document.getElementById("dash-txns-prev");
+    const dashTxnsNextEl = document.getElementById("dash-txns-next");
+    const dashTxnsRangeEl = document.getElementById("dash-txns-range");
 
     // Period state. Defaults: the last calendar month back from today. The
     // absolute pickers are seeded with the current month / quarter / year so
@@ -3566,8 +3618,10 @@
       const seq = ++dashSeq;
       dashErrorEl.style.display = "none";
       renderCrumbs(filters); // reflect the new position at once, not after the fetch
+      if (!hasDrillPath(filters)) hideDashTxns(); // back at "All": no list, at once
       const built = aggregateParams(filters);
       if (!built.params) {
+        hideDashTxns();
         dashStatusEl.textContent = built.hint;
         dashStatusEl.style.display = "";
         dashSummaryEl.style.display = "none";
@@ -3583,9 +3637,13 @@
           if (seq !== dashSeq) return;
           dash.data = data;
           renderDashboard(data);
+          // Every reload of the dashboard (drill path, period, order, or any
+          // other filter) restarts the list at page 1.
+          loadDashTxns(filters, data.period, 1);
         })
         .catch((error) => {
           if (seq !== dashSeq) return;
+          hideDashTxns();
           dashStatusEl.style.display = "none";
           dashErrorEl.textContent = "Couldn\u2019t load spend: " + error.message;
           dashErrorEl.style.display = "";
@@ -3595,6 +3653,122 @@
           dashTableEl.style.display = "none";
         });
     }
+
+    // --- drill-down transactions --------------------------------------------
+    // The drill path IS the three label filters (see dash.order), so each
+    // breadcrumb maps to its filter by dimension name -- category,
+    // subcategory, merchant -- never by level position. The list sends the
+    // same filters the aggregate call does (bank, card, the three labels)
+    // plus the period exactly as the aggregate resolved it, and asks
+    // GET /transactions for one page. Rows are every debit and credit the
+    // filters select, payments included -- the list is not reconciled
+    // against the chart's net amounts.
+    let dashTxnsSeq = 0;
+    const dashTxns = { filters: null, period: null, page: 1, total: 0 };
+
+    function hasDrillPath(filters) {
+      return LABEL_FILTERS.some((d) => filters[d]);
+    }
+
+    function hideDashTxns() {
+      dashTxnsSeq += 1; // drop any in-flight page
+      dashTxnsEl.style.display = "none";
+    }
+
+    function loadDashTxns(filters, period, page) {
+      if (!hasDrillPath(filters) || !period) {
+        hideDashTxns();
+        return;
+      }
+      const seq = ++dashTxnsSeq;
+      Object.assign(dashTxns, { filters, period, page });
+      const params = new URLSearchParams();
+      if (filters.bank) params.set("bank", filters.bank);
+      if (filters.cardId) params.set("card_id", filters.cardId);
+      for (const key of LABEL_FILTERS) if (filters[key]) params.set(key, filters[key]);
+      params.set("start", period.start);
+      params.set("end", period.end);
+      params.set("page", String(page));
+
+      dashTxnsEl.style.display = "";
+      dashTxnsStatusEl.classList.remove("error");
+      dashTxnsStatusEl.textContent = "Loading…";
+      dashTxnsStatusEl.style.display = "";
+      dashTxnsPrevEl.disabled = true;
+      dashTxnsNextEl.disabled = true;
+      fetchJSON(withParams("/transactions", params))
+        .then((body) => {
+          if (seq !== dashTxnsSeq) return;
+          renderDashTxns(body);
+        })
+        .catch((error) => {
+          if (seq !== dashTxnsSeq) return;
+          dashTxnsTableEl.style.display = "none";
+          dashTxnsPagerEl.style.display = "none";
+          dashTxnsStatusEl.classList.add("error");
+          dashTxnsStatusEl.textContent = "Couldn’t load transactions: " + error.message;
+          dashTxnsStatusEl.style.display = "";
+        });
+    }
+
+    function dashTxnCard(txn) {
+      const card = cardsById.get(String(txn.card_id));
+      return card ? card.bank + " · " + cardLabel(card) : txn.bank;
+    }
+
+    function renderDashTxns(body) {
+      dashTxns.total = body.total;
+      dashTxnsBodyEl.textContent = "";
+      if (body.total === 0) {
+        dashTxnsTableEl.style.display = "none";
+        dashTxnsPagerEl.style.display = "none";
+        dashTxnsStatusEl.textContent = "No transactions for this drill path in this period.";
+        dashTxnsStatusEl.style.display = "";
+        return;
+      }
+      dashTxnsStatusEl.style.display = "none";
+      for (const txn of body.transactions) {
+        const tr = document.createElement("tr");
+        // Unset labels read as the dashboard names them.
+        const cells = [
+          txn.txn_date,
+          txn.merchant || UNCATEGORIZED,
+          txn.category || UNCATEGORIZED,
+          txn.subcategory || UNCATEGORIZED,
+          dashTxnCard(txn),
+        ];
+        for (const text of cells) {
+          const td = document.createElement("td");
+          td.textContent = text;
+          tr.appendChild(td);
+        }
+        // Signed as the chart nets them: credits (refunds, payments) negative.
+        const signed = txn.txn_type === "credit" ? -txn.amount : txn.amount;
+        const amount = document.createElement("td");
+        amount.className = "num amount" + (signed < 0 ? " negative" : "");
+        amount.textContent = fmtAmount(signed);
+        tr.appendChild(amount);
+        dashTxnsBodyEl.appendChild(tr);
+      }
+      dashTxnsTableEl.style.display = "";
+
+      const first = (body.page - 1) * body.page_size + 1;
+      const last = first + body.transactions.length - 1;
+      dashTxnsRangeEl.textContent =
+        body.transactions.length
+          ? "Showing " + first + "–" + last + " of " + body.total
+          : "Page " + body.page + " is past the end (" + body.total + " in total)";
+      dashTxnsPrevEl.disabled = body.page <= 1;
+      dashTxnsNextEl.disabled = body.page * body.page_size >= body.total;
+      dashTxnsPagerEl.style.display = "";
+    }
+
+    dashTxnsPrevEl.addEventListener("click", () => {
+      if (dashTxns.page > 1) loadDashTxns(dashTxns.filters, dashTxns.period, dashTxns.page - 1);
+    });
+    dashTxnsNextEl.addEventListener("click", () => {
+      loadDashTxns(dashTxns.filters, dashTxns.period, dashTxns.page + 1);
+    });
 
     // --- render ---
     function renderDashboard(data) {

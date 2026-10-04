@@ -3,7 +3,7 @@ from datetime import date
 import os
 import tempfile
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -51,6 +51,7 @@ from storage.upload import (
 from storage.reads import (
     ReviewStatusError,
     get_transactions,
+    get_transactions_page,
     list_card_types,
     list_statement_months,
 )
@@ -114,6 +115,7 @@ def read_transactions(
     subcategory: str | None = None,
     merchant: str | None = None,
     review_status: str | None = None,
+    page: int | None = Query(None, ge=1),
     conn=Depends(get_db),
 ):
     start_date, end_date = _parse_date_range(start, end)
@@ -125,20 +127,26 @@ def read_transactions(
     # no format validation, no 400s, for these three, unlike start/end.
     # review_status (Session 80) is the one filter with a closed value set,
     # so it alone can be invalid: 422, like a bad `dimensions`.
+    # `page` (the dashboard's drill-down list) opts into the paged form:
+    # {transactions, total, page, page_size}, 25 rows a page, same filters
+    # and order. Without it the response is the bare list, unchanged, for
+    # every existing caller. page < 1 is a 422 from the Query bound.
+    filters = dict(
+        card_id=card_id,
+        start_date=start_date,
+        end_date=end_date,
+        statement_month=statement_month,
+        bank=bank,
+        card_type=card_type,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
+        review_status=review_status,
+    )
     try:
-        return get_transactions(
-            conn,
-            card_id=card_id,
-            start_date=start_date,
-            end_date=end_date,
-            statement_month=statement_month,
-            bank=bank,
-            card_type=card_type,
-            category=category,
-            subcategory=subcategory,
-            merchant=merchant,
-            review_status=review_status,
-        )
+        if page is not None:
+            return get_transactions_page(conn, page, **filters)
+        return get_transactions(conn, **filters)
     except ReviewStatusError as e:
         raise HTTPException(status_code=422, detail=str(e))
 

@@ -211,15 +211,76 @@ def get_transactions(
         review_status=review_status,
         always_join=("statements", "cards"),
     )
-    rows = conn.execute(
+    return _select_transactions(conn, joins, where, params)
+
+
+def _select_transactions(conn, joins, where, params, limit=None, offset=0) -> "list[dict]":
+    # The one row query behind get_transactions and get_transactions_page,
+    # so the columns and the order can never drift apart between the two.
+    sql = (
         "SELECT transactions.*, statements.card_id AS card_id, cards.bank AS bank "
         "FROM transactions"
         + joins
         + where
-        + " ORDER BY transactions.txn_date DESC, transactions.id DESC",
-        params,
-    ).fetchall()
-    return [dict(row) for row in rows]
+        + " ORDER BY transactions.txn_date DESC, transactions.id DESC"
+    )
+    if limit is not None:
+        sql += " LIMIT ? OFFSET ?"
+        params = [*params, limit, offset]
+    return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+# Page size for the paged form of GET /transactions (the dashboard's
+# drill-down list). Fixed, not a request parameter.
+TRANSACTIONS_PAGE_SIZE = 25
+
+
+def get_transactions_page(
+    conn: sqlite3.Connection,
+    page: int,
+    card_id: "int | None" = None,
+    start_date=None,
+    end_date=None,
+    statement_month: "str | None" = None,
+    bank: "str | None" = None,
+    card_type: "str | None" = None,
+    category: "str | None" = None,
+    subcategory: "str | None" = None,
+    merchant: "str | None" = None,
+    review_status: "str | None" = None,
+) -> dict:
+    """One page of get_transactions' result, plus the total across all pages.
+
+    Same filters, same row selection (every debit and credit, payments
+    included), same order as get_transactions -- page N is exactly rows
+    (N-1)*25 .. N*25-1 of the unpaged list. `page` is 1-based; a page past
+    the end returns an empty `transactions` with the true `total`.
+
+    Returns {"transactions": [...], "total": n, "page": page,
+    "page_size": TRANSACTIONS_PAGE_SIZE}.
+    """
+    if page < 1:
+        raise ValueError(f"page must be >= 1; got {page}")
+    joins, where, params = filter_sql(
+        "transactions",
+        card_id=card_id,
+        statement_month=statement_month,
+        bank=bank,
+        card_type=card_type,
+        start_date=start_date,
+        end_date=end_date,
+        category=category,
+        subcategory=subcategory,
+        merchant=merchant,
+        review_status=review_status,
+        always_join=("statements", "cards"),
+    )
+    total = conn.execute("SELECT COUNT(*) FROM transactions" + joins + where, params).fetchone()[0]
+    rows = _select_transactions(
+        conn, joins, where, params,
+        limit=TRANSACTIONS_PAGE_SIZE, offset=(page - 1) * TRANSACTIONS_PAGE_SIZE,
+    )
+    return {"transactions": rows, "total": total, "page": page, "page_size": TRANSACTIONS_PAGE_SIZE}
 
 
 def list_statement_months(
