@@ -21,8 +21,8 @@ optional exception).
 
 ## Features
 
-- **Upload & parse** — drop a PDF, enter the password, preview extracted
-  transactions before importing
+- **Upload & parse** — drop a PDF (passwords are read from `.env`), preview
+  extracted transactions before importing
 - **Auto-categorisation** — learns from your manual category assignments and
   applies them to future transactions by merchant match; bulk-accept
   suggestions for selected transactions
@@ -31,7 +31,7 @@ optional exception).
 - **Analytics dashboard** — spend breakdown by category, subcategory, or
   merchant across configurable time periods
 - **AI commentary** — optional natural-language spending summary powered by
-  Gemini (toggle-controlled)
+  Gemini (on demand, via the Generate insight button)
 - **CLI tools** — create cards, import statements, and query transactions
   from the command line
 
